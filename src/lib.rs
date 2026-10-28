@@ -131,6 +131,7 @@ impl PyClient {
 
     // -- Text Search -------------------------------------------------------
 
+    #[pyo3(signature = (body, fields=None))]
     fn text_search(
         &self,
         py: Python<'_>,
@@ -147,6 +148,7 @@ impl PyClient {
         result_to_py(py, result)
     }
 
+    #[pyo3(signature = (body, fields=None))]
     fn text_search_async<'py>(
         &self,
         py: Python<'py>,
@@ -164,6 +166,7 @@ impl PyClient {
 
     // -- Nearby Search -----------------------------------------------------
 
+    #[pyo3(signature = (body, fields=None))]
     fn nearby_search(
         &self,
         py: Python<'_>,
@@ -180,6 +183,7 @@ impl PyClient {
         result_to_py(py, result)
     }
 
+    #[pyo3(signature = (body, fields=None))]
     fn nearby_search_async<'py>(
         &self,
         py: Python<'py>,
