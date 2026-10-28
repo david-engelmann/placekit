@@ -1,6 +1,6 @@
 # Changelog
 
-All notable changes to places-api are recorded here. The format follows Keep a Changelog, and versions follow Semantic Versioning.
+All notable changes to placekit are recorded here. The format follows Keep a Changelog, and versions follow Semantic Versioning.
 
 ## [Unreleased]
 

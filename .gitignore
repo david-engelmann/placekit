@@ -14,5 +14,5 @@ __pycache__/
 venv/
 *.so
 *.pyd
-python/places_api/_places_api*.so
+python/placekit/_placekit*.so
 .DS_Store

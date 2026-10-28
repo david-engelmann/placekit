@@ -1,5 +1,5 @@
 [package]
-name = "places-api"
+name = "placekit"
 version = "0.1.0"
 edition = "2021"
 rust-version = "1.74"
@@ -10,15 +10,15 @@ keywords = ["google-places", "places", "geocoding", "pyo3", "maps"]
 categories = ["api-bindings"]
 
 [lib]
-name = "_places_api"
+name = "_placekit"
 crate-type = ["cdylib"]
 
 [workspace]
-members = ["crates/places-core"]
+members = ["crates/placekit-core"]
 resolver = "2"
 
 [dependencies]
-places-core = { path = "crates/places-core" }
+placekit-core = { path = "crates/placekit-core" }
 serde = "1"
 pyo3 = { version = "0.23", features = ["abi3-py310", "extension-module"] }
 pyo3-async-runtimes = { version = "0.23", features = ["tokio-runtime"] }

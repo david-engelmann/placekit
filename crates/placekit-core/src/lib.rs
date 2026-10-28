@@ -1,9 +1,9 @@
-//! `places-core`: a dependency-light async Rust client for the
+//! `placekit-core`: a dependency-light async Rust client for the
 //! Google Places API (New).
 //!
 //! This crate contains all protocol logic (request building, field masks,
 //! typed errors, response decoding) with no Python dependency, so it can be
-//! tested and reused on its own. The `places-api` Python package is a thin
+//! tested and reused on its own. The `placekit` Python package is a thin
 //! PyO3 binding over it.
 
 pub mod client;

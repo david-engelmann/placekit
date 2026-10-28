@@ -1,11 +1,11 @@
-"""places_api: a modern client for the Google Places API (New).
+"""placekit: a modern client for the Google Places API (New).
 
 The HTTP and protocol layer is a Rust core (reqwest with rustls, typed
 requests, typed errors). This package wraps it in a Python surface with a
 sync ``Client``, an ``AsyncClient`` with the same methods, and dataclass
 response models.
 
->>> from places_api import Client
+>>> from placekit import Client
 >>> client = Client("YOUR_API_KEY")
 >>> cafe = client.text_search("cafe in Sydney").places[0]
 >>> cafe.display_text, cafe.rating
@@ -47,7 +47,7 @@ from .models import (
 try:
     from importlib.metadata import version as _metadata_version
 
-    __version__ = _metadata_version("places-api")
+    __version__ = _metadata_version("placekit")
 except Exception:  # pragma: no cover, only hit in uninstalled source trees
     __version__ = "0.1.0"
 

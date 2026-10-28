@@ -3,7 +3,7 @@ requires = ["maturin>=1.7,<2.0"]
 build-backend = "maturin"
 
 [project]
-name = "places-api"
+name = "placekit"
 dynamic = ["version"]
 description = "Modern Google Places API (New) client for Python, powered by a Rust core"
 readme = "README.md"
@@ -30,7 +30,7 @@ dev = ["pytest>=8"]
 
 [tool.maturin]
 python-source = "python"
-module-name = "places_api._places_api"
+module-name = "placekit._placekit"
 features = ["pyo3/extension-module"]
 
 [tool.pytest.ini_options]

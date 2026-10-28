@@ -1,4 +1,4 @@
-"""Exception hierarchy for places_api.
+"""Exception hierarchy for placekit.
 
 Every error raised by the Rust core is translated into one of these types,
 so callers can catch precisely the failure they care about. All of them
@@ -12,7 +12,7 @@ from typing import Optional
 
 
 class PlacesError(Exception):
-    """Base class for every error raised by places_api."""
+    """Base class for every error raised by placekit."""
 
     kind = "error"
 

@@ -23,7 +23,7 @@ pub const DEFAULT_BASE_URL: &str = "https://places.googleapis.com/v1";
 
 const API_KEY_HEADER: &str = "x-goog-api-key";
 const FIELD_MASK_HEADER: &str = "x-goog-fieldmask";
-const USER_AGENT: &str = concat!("places-api/", env!("CARGO_PKG_VERSION"), " (rust core)");
+const USER_AGENT: &str = concat!("placekit/", env!("CARGO_PKG_VERSION"), " (rust core)");
 
 /// Builder for [`Client`].
 #[derive(Debug, Clone)]

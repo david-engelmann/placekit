@@ -9,7 +9,7 @@
 # possible way to make a wheel.
 #
 # Publishing uses PyPI trusted publishing (OIDC, no stored token):
-# configure this repository as a trusted publisher for the "places-api"
+# configure this repository as a trusted publisher for the "placekit"
 # project on PyPI, with environment name "pypi". The publish job first
 # checks that the tag version matches the manifests and the changelog,
 # and refuses to publish otherwise.
@@ -136,7 +136,7 @@ jobs:
           path: dist
       - name: Install wheel and run the offline test suite
         run: |
-          pip install --find-links dist places-api
+          pip install --find-links dist placekit
           pip install pytest
           python -m pytest tests -q
 

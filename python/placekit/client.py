@@ -3,15 +3,15 @@
 Both clients share one Rust core and one method set. ``Client`` blocks and
 is safe to use from ordinary scripts; ``AsyncClient`` awaits and is the one
 to use inside an event loop. Methods return the typed models in
-``places_api.models`` and raise the exceptions in ``places_api.exceptions``.
+``placekit.models`` and raise the exceptions in ``placekit.exceptions``.
 """
 
 from __future__ import annotations
 
 from typing import Any, Iterable, Optional
 
-from . import _places_api
-from ._places_api import PlacesError as _CorePlacesError
+from . import _placekit
+from ._placekit import PlacesError as _CorePlacesError
 from .exceptions import raise_translated
 from .fields import FieldsLike, normalize_fields
 from .models import (
@@ -51,7 +51,7 @@ class _Base:
     ) -> None:
         if not api_key or not api_key.strip():
             raise ValueError("api_key must not be empty")
-        self._inner = _places_api.Client(api_key, base_url, timeout)
+        self._inner = _placekit.Client(api_key, base_url, timeout)
 
     # Body builders shared by the sync and async method sets.
 

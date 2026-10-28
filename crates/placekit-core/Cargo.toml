@@ -1,10 +1,10 @@
 [package]
-name = "places-core"
+name = "placekit-core"
 version = "0.1.0"
 edition = "2021"
 rust-version = "1.74"
 license = "MIT"
-description = "Rust core for places-api, a Google Places API (New) client"
+description = "Rust core for placekit, a Google Places API (New) client"
 
 [dependencies]
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }

@@ -1,4 +1,4 @@
-"""Typed response models for places_api.
+"""Typed response models for placekit.
 
 Responses arrive as dataclasses with attribute access, never raw dicts.
 Fields this client version does not model yet are preserved verbatim on

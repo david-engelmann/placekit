@@ -2,9 +2,9 @@
 """Fail unless every place the version lives agrees.
 
 The version is carried in the root Cargo.toml (the source maturin reads
-for the Python package), in the places-core crate manifest, in the top
+for the Python package), in the placekit-core crate manifest, in the top
 released entry of CHANGELOG.md, and in the __version__ fallback literal
-in python/places_api/__init__.py. pyproject.toml declares its version
+in python/placekit/__init__.py. pyproject.toml declares its version
 dynamic, so maturin derives it from Cargo.toml and the two cannot drift;
 if a static version ever appears in pyproject.toml it is checked too.
 
@@ -71,21 +71,21 @@ def changelog_version() -> str:
 
 
 def package_fallback_version() -> str:
-    text = (ROOT / "python" / "places_api" / "__init__.py").read_text(encoding="utf-8")
+    text = (ROOT / "python" / "placekit" / "__init__.py").read_text(encoding="utf-8")
     match = re.search(r'^\s*__version__\s*=\s*"([^"]+)"', text, flags=re.MULTILINE)
     if not match:
-        fail("no __version__ fallback literal found in python/places_api/__init__.py")
+        fail("no __version__ fallback literal found in python/placekit/__init__.py")
     return match.group(1)
 
 
 def main() -> None:
     found = {
         "Cargo.toml": cargo_version(ROOT / "Cargo.toml"),
-        "crates/places-core/Cargo.toml": cargo_version(
-            ROOT / "crates" / "places-core" / "Cargo.toml"
+        "crates/placekit-core/Cargo.toml": cargo_version(
+            ROOT / "crates" / "placekit-core" / "Cargo.toml"
         ),
         "CHANGELOG.md": changelog_version(),
-        "python/places_api/__init__.py": package_fallback_version(),
+        "python/placekit/__init__.py": package_fallback_version(),
     }
     static_pyproject = pyproject_version()
     if static_pyproject is not None:

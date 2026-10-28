@@ -1,19 +1,19 @@
-# places-api
+# placekit
 
 A modern client for the Google Places API (New), with a Rust core and a Python surface that feels native.
 
 ```bash
-pip install places-api
+pip install placekit
 ```
 
 Prebuilt wheels cover CPython 3.10 and newer on Linux (x86_64 and aarch64), macOS (Intel and Apple silicon), and Windows. Installing is a single small download with zero runtime dependencies: there is nothing to compile and no Rust toolchain is needed. Only if your platform has no wheel does pip fall back to the source distribution, which builds with maturin and a Rust toolchain.
 
-Most Places libraries in Python are wrappers around the retired legacy API, or thin HTTP helpers that hand you back raw JSON. places-api targets the current Places API (New) end to end, with typed request building, field masks as a first-class feature, dataclass response models, and an exception hierarchy that tells you what actually went wrong.
+Most Places libraries in Python are wrappers around the retired legacy API, or thin HTTP helpers that hand you back raw JSON. placekit targets the current Places API (New) end to end, with typed request building, field masks as a first-class feature, dataclass response models, and an exception hierarchy that tells you what actually went wrong.
 
 ## Quickstart
 
 ```python
-from places_api import Client
+from placekit import Client
 
 client = Client("YOUR_API_KEY")
 
@@ -32,7 +32,7 @@ An `AsyncClient` with the identical method set is included for async code.
 
 ```python
 import asyncio
-from places_api import AsyncClient
+from placekit import AsyncClient
 
 async def main():
     client = AsyncClient("YOUR_API_KEY")
@@ -62,10 +62,10 @@ asyncio.run(main())
 
 ## Field masks
 
-The Places API (New) only returns the fields named in the `X-Goog-FieldMask` header, and billing follows the fields requested. places-api treats the mask as a typed feature instead of a string you assemble by hand.
+The Places API (New) only returns the fields named in the `X-Goog-FieldMask` header, and billing follows the fields requested. placekit treats the mask as a typed feature instead of a string you assemble by hand.
 
 ```python
-from places_api import FieldMask
+from placekit import FieldMask
 
 result = client.text_search(
     "cafes in Sydney",
@@ -90,7 +90,7 @@ Every failure raises a subclass of `PlacesError`, carrying `status_code` and `go
 | `ConfigError` | The client was called incorrectly, detected before any request |
 
 ```python
-from places_api import Client, RateLimitError
+from placekit import Client, RateLimitError
 
 client = Client("YOUR_API_KEY")
 try:
@@ -116,7 +116,7 @@ python -m venv .venv
 .venv/bin/pip install maturin pytest
 .venv/bin/maturin develop
 .venv/bin/python -m pytest
-cargo test -p places-core
+cargo test -p placekit-core
 ```
 
 `maturin develop` compiles the Rust core without optimizations and installs it into the venv; iterate with the targeted commands above. The full gate is one command, and CI runs it word for word:

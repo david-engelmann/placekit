@@ -1,6 +1,6 @@
 """Type stubs for the compiled Rust extension module.
 
-End users do not call this module directly; ``places_api.client`` wraps it.
+End users do not call this module directly; ``placekit.client`` wraps it.
 The request body arguments are the camelCase JSON bodies of the Places API,
 deserialized into typed Rust structs on the other side.
 """

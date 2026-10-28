@@ -6,7 +6,7 @@
 
 use serde::Deserialize;
 
-/// Errors returned by every `places-core` operation.
+/// Errors returned by every `placekit-core` operation.
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     /// The API key was rejected or lacks permission (HTTP 401/403,

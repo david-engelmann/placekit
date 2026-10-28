@@ -1,7 +1,7 @@
-//! PyO3 bindings for `places-core`.
+//! PyO3 bindings for `placekit-core`.
 //!
 //! This module is deliberately thin. All protocol logic lives in the
-//! `places-core` crate; this layer only converts arguments (request bodies
+//! `placekit-core` crate; this layer only converts arguments (request bodies
 //! arrive as dicts and are deserialized into the core's typed request
 //! structs, so validation stays in Rust), runs the core's async futures on a
 //! shared Tokio runtime for both the sync and async Python APIs, and
@@ -11,8 +11,8 @@
 
 use std::sync::Arc;
 
-use places_core::models::{AutocompleteRequest, NearbySearchRequest, TextSearchRequest};
-use places_core::{Client as CoreClient, Error as CoreError, FieldMask};
+use placekit_core::models::{AutocompleteRequest, NearbySearchRequest, TextSearchRequest};
+use placekit_core::{Client as CoreClient, Error as CoreError, FieldMask};
 use pyo3::create_exception;
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
@@ -20,7 +20,7 @@ use pyo3::types::{PyBytes, PyDict, PyTuple};
 use serde_json::Value;
 
 create_exception!(
-    _places_api,
+    _placekit,
     PlacesError,
     pyo3::exceptions::PyException,
     "Base exception raised by the Rust core. Carries `kind`, `status_code` and `google_status` attributes."
@@ -79,7 +79,7 @@ where
 
 fn photo_to_py(
     py: Python<'_>,
-    result: Result<places_core::models::PhotoResponse, CoreError>,
+    result: Result<placekit_core::models::PhotoResponse, CoreError>,
 ) -> PyResult<PyObject> {
     match result {
         Ok(photo) => {
@@ -324,7 +324,7 @@ impl PyClient {
 }
 
 #[pymodule]
-fn _places_api(m: &Bound<'_, PyModule>) -> PyResult<()> {
+fn _placekit(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyClient>()?;
     m.add("PlacesError", m.py().get_type::<PlacesError>())?;
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;

@@ -15,12 +15,12 @@ import pytest
 
 PHOTO_FIXTURE = Path(__file__).parent / "fixtures" / "photo.png"
 
-from places_api import (
+from placekit import (
     AsyncClient,
     Client,
     FieldMask,
 )
-from places_api.exceptions import (
+from placekit.exceptions import (
     AuthenticationError,
     ConfigError,
     InvalidRequestError,
