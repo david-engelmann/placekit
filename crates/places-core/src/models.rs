@@ -331,14 +331,10 @@ pub struct PhotoResponse {
 mod tests {
     use super::*;
 
-    const TEXT_SEARCH_JSON: &str =
-        include_str!("../../../tests/fixtures/text_search.json");
-    const NEARBY_SEARCH_JSON: &str =
-        include_str!("../../../tests/fixtures/nearby_search.json");
-    const PLACE_DETAILS_JSON: &str =
-        include_str!("../../../tests/fixtures/place_details.json");
-    const AUTOCOMPLETE_JSON: &str =
-        include_str!("../../../tests/fixtures/autocomplete.json");
+    const TEXT_SEARCH_JSON: &str = include_str!("../../../tests/fixtures/text_search.json");
+    const NEARBY_SEARCH_JSON: &str = include_str!("../../../tests/fixtures/nearby_search.json");
+    const PLACE_DETAILS_JSON: &str = include_str!("../../../tests/fixtures/place_details.json");
+    const AUTOCOMPLETE_JSON: &str = include_str!("../../../tests/fixtures/autocomplete.json");
 
     #[test]
     fn decodes_text_search_response() {
@@ -347,10 +343,7 @@ mod tests {
         assert_eq!(resp.next_page_token.as_deref(), Some("token-abc-123"));
         let first = &resp.places[0];
         assert_eq!(first.id, "ChIJrTLr-GyuEmsRBfy61i59si0");
-        assert_eq!(
-            first.display_name.as_ref().unwrap().text,
-            "Bianco Latte"
-        );
+        assert_eq!(first.display_name.as_ref().unwrap().text, "Bianco Latte");
         assert_eq!(first.rating, Some(4.6));
         assert_eq!(first.user_rating_count, Some(1284));
         let loc = first.location.unwrap();
@@ -401,10 +394,7 @@ mod tests {
             "Bianco Latte, George Street, Sydney NSW, Australia"
         );
         let structured = pred.structured_format.as_ref().unwrap();
-        assert_eq!(
-            structured.main_text.as_ref().unwrap().text,
-            "Bianco Latte"
-        );
+        assert_eq!(structured.main_text.as_ref().unwrap().text, "Bianco Latte");
         assert_eq!(pred.distance_meters, Some(1250));
     }
 

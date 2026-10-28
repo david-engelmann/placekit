@@ -11,9 +11,7 @@
 
 use std::sync::Arc;
 
-use places_core::models::{
-    AutocompleteRequest, NearbySearchRequest, TextSearchRequest,
-};
+use places_core::models::{AutocompleteRequest, NearbySearchRequest, TextSearchRequest};
 use places_core::{Client as CoreClient, Error as CoreError, FieldMask};
 use pyo3::create_exception;
 use pyo3::exceptions::PyValueError;
@@ -65,8 +63,14 @@ where
 {
     match result {
         Ok(value) => {
-            let json = serde_json::to_value(&value)
-                .map_err(|e| to_pyerr(py, CoreError::Decode { detail: e.to_string() }))?;
+            let json = serde_json::to_value(&value).map_err(|e| {
+                to_pyerr(
+                    py,
+                    CoreError::Decode {
+                        detail: e.to_string(),
+                    },
+                )
+            })?;
             value_to_py(py, &json)
         }
         Err(e) => Err(to_pyerr(py, e)),

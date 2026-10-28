@@ -249,7 +249,8 @@ mod tests {
     fn google_status_wins_over_http_code() {
         // A 400 carrying RESOURCE_EXHAUSTED is a quota problem, not a
         // malformed request.
-        let body = r#"{"error": {"code": 400, "message": "Quota", "status": "RESOURCE_EXHAUSTED"}}"#;
+        let body =
+            r#"{"error": {"code": 400, "message": "Quota", "status": "RESOURCE_EXHAUSTED"}}"#;
         let err = Error::from_response(400, body);
         assert_eq!(err.kind(), "rate_limit");
     }

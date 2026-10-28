@@ -23,9 +23,7 @@ impl FieldMask {
         for path in &paths {
             let trimmed = path.trim();
             if trimmed.is_empty() || trimmed != path || path.contains(',') {
-                return Err(Error::config(format!(
-                    "invalid field mask path: {path:?}"
-                )));
+                return Err(Error::config(format!("invalid field mask path: {path:?}")));
             }
         }
         Ok(Self(paths))
@@ -124,10 +122,7 @@ mod tests {
 
     #[test]
     fn rejects_empty_mask() {
-        assert_eq!(
-            FieldMask::new(vec![]).unwrap_err().kind(),
-            "config"
-        );
+        assert_eq!(FieldMask::new(vec![]).unwrap_err().kind(), "config");
     }
 
     #[test]

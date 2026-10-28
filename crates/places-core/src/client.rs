@@ -101,7 +101,9 @@ impl Client {
             return Err(Error::config("text_query must not be empty"));
         }
         let url = format!("{}/places:searchText", self.base_url);
-        let mask = fields.cloned().unwrap_or_else(FieldMask::text_search_default);
+        let mask = fields
+            .cloned()
+            .unwrap_or_else(FieldMask::text_search_default);
         let builder = self
             .http
             .post(url)
@@ -237,7 +239,10 @@ impl Client {
         headers
     }
 
-    async fn send<T: DeserializeOwned>(&self, builder: reqwest::RequestBuilder) -> Result<T, Error> {
+    async fn send<T: DeserializeOwned>(
+        &self,
+        builder: reqwest::RequestBuilder,
+    ) -> Result<T, Error> {
         let response = builder.send().await.map_err(Error::network)?;
         let status = response.status();
         let body = response.text().await.map_err(Error::network)?;
@@ -251,10 +256,11 @@ impl Client {
 }
 
 fn validate_place_id(place_id: &str) -> Result<(), Error> {
-    if place_id.trim().is_empty() || place_id.contains('/') || place_id.contains(char::is_whitespace) {
-        return Err(Error::config(format!(
-            "invalid place id: {place_id:?}"
-        )));
+    if place_id.trim().is_empty()
+        || place_id.contains('/')
+        || place_id.contains(char::is_whitespace)
+    {
+        return Err(Error::config(format!("invalid place id: {place_id:?}")));
     }
     Ok(())
 }
@@ -283,7 +289,10 @@ fn validate_photo_params(
             "place_photo requires max_width_px or max_height_px",
         ));
     }
-    for (label, value) in [("max_width_px", max_width_px), ("max_height_px", max_height_px)] {
+    for (label, value) in [
+        ("max_width_px", max_width_px),
+        ("max_height_px", max_height_px),
+    ] {
         if let Some(v) = value {
             if v == 0 || v > 4800 {
                 return Err(Error::config(format!(
@@ -370,10 +379,7 @@ mod tests {
             validate_place_id("places/ChIJ").unwrap_err().kind(),
             "config"
         );
-        assert_eq!(
-            validate_place_id("has space").unwrap_err().kind(),
-            "config"
-        );
+        assert_eq!(validate_place_id("has space").unwrap_err().kind(), "config");
     }
 
     #[test]
