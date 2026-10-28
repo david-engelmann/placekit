@@ -1,0 +1,40 @@
+# Runs the repo gate: `make check`, word for word the same command a
+# developer runs locally. CI is a backstop, not a second definition of
+# done.
+
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: make check
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install Rust with rustfmt and clippy
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Create the dev venv
+        run: |
+          python -m venv .venv
+          .venv/bin/pip install maturin pytest
+      - name: Run the gate
+        run: make check
