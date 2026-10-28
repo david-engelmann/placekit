@@ -6,6 +6,8 @@ A modern client for the Google Places API (New), with a Rust core and a Python s
 pip install places-api
 ```
 
+Prebuilt wheels cover CPython 3.10 and newer on Linux (x86_64 and aarch64), macOS (Intel and Apple silicon), and Windows. Installing is a single small download with zero runtime dependencies: there is nothing to compile and no Rust toolchain is needed. Only if your platform has no wheel does pip fall back to the source distribution, which builds with maturin and a Rust toolchain.
+
 Most Places libraries in Python are wrappers around the retired legacy API, or thin HTTP helpers that hand you back raw JSON. places-api targets the current Places API (New) end to end, with typed request building, field masks as a first-class feature, dataclass response models, and an exception hierarchy that tells you what actually went wrong.
 
 ## Quickstart
@@ -107,7 +109,7 @@ client = Client("YOUR_API_KEY", base_url="http://127.0.0.1:8080/v1", timeout=5.0
 
 ## Development
 
-You need a Rust toolchain and Python 3.10 or newer.
+You need a Rust toolchain and Python 3.10 or newer. The dev loop builds in debug mode, so it stays fast:
 
 ```bash
 python -m venv .venv
@@ -117,9 +119,28 @@ python -m venv .venv
 cargo test -p places-core
 ```
 
+`maturin develop` compiles the Rust core without optimizations and installs it into the venv; iterate with the targeted commands above. The full gate is one command, and CI runs it word for word:
+
+```bash
+make check
+```
+
+That runs the rustfmt and clippy checks, the Rust test suite, a version coherence check across the manifests and changelog, an em dash scan, and the Python suite.
+
 The test suites need no Google API key and no network. Python tests run against a local stub server that serves recorded fixtures, and the Rust tests decode the same fixtures.
 
-Wheels for Linux, macOS, and Windows are built by GitHub Actions with maturin, and tagged releases publish to PyPI from the same workflow.
+<details>
+<summary>Build a release wheel from source</summary>
+
+```bash
+pip install maturin
+maturin build --release
+pip install target/wheels/*.whl
+```
+
+You normally never need this: wheels for Linux, macOS, and Windows are built by GitHub Actions inside manylinux containers and on native arm runners, and pushing a version tag publishes them to PyPI through trusted publishing from the same workflow.
+
+</details>
 
 ## License
 

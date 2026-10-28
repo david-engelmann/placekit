@@ -4,6 +4,18 @@ All notable changes to places-api are recorded here. The format follows Keep a C
 
 ## [Unreleased]
 
+### Added
+
+- `make check`, one gate for the whole repo (rustfmt, clippy, Rust tests, version coherence, em dash scan, Python tests), with a CI workflow that runs it word for word.
+- `scripts/check_version.py`, which fails unless the version agrees across the Cargo manifests, the changelog, and the Python package, and doubles as the release tag guard in the publish workflow.
+- `scripts/check_no_emdash.py`, a codepoint scan that keeps em dashes out of tracked text files.
+
+### Changed
+
+- Release wheels now build on native arm runners (ubuntu-24.04-arm, macos-14) instead of cross runners, with Linux wheels pinned to manylinux 2_28, and the publish job checks the tag against the manifests before uploading to PyPI through trusted publishing.
+- The dev profile keeps only line-table debug info, so incremental `maturin develop` builds stay fast; the release profile is unchanged.
+- The README now leads with the prebuilt wheel install story; building from source moved into a collapsed section.
+
 ## [0.1.0] - 2026-10-28
 
 ### Added
