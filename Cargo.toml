@@ -1,0 +1,29 @@
+[package]
+name = "places-api"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.74"
+license = "MIT"
+description = "Modern Google Places API (New) client for Python, powered by a Rust core"
+readme = "README.md"
+keywords = ["google-places", "places", "geocoding", "pyo3", "maps"]
+categories = ["api-bindings"]
+
+[lib]
+name = "_places_api"
+crate-type = ["cdylib"]
+
+[workspace]
+members = ["crates/places-core"]
+resolver = "2"
+
+[dependencies]
+places-core = { path = "crates/places-core" }
+pyo3 = { version = "0.23", features = ["abi3-py310", "extension-module"] }
+pyo3-async-runtimes = { version = "0.23", features = ["tokio-runtime"] }
+pythonize = "0.23"
+serde_json = "1"
+
+[profile.release]
+lto = true
+codegen-units = 1
