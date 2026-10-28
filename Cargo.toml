@@ -19,6 +19,7 @@ resolver = "2"
 
 [dependencies]
 places-core = { path = "crates/places-core" }
+serde = "1"
 pyo3 = { version = "0.23", features = ["abi3-py310", "extension-module"] }
 pyo3-async-runtimes = { version = "0.23", features = ["tokio-runtime"] }
 pythonize = "0.23"

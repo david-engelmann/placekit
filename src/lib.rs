@@ -32,7 +32,7 @@ create_exception!(
 /// the Python layer uses to pick a concrete exception subclass.
 fn to_pyerr(py: Python<'_>, err: CoreError) -> PyErr {
     let pyerr = PyErr::new::<PlacesError, _>(err.to_string());
-    let instance = pyerr.instance(py);
+    let instance = pyerr.value(py);
     let _ = instance.setattr("kind", err.kind());
     let _ = instance.setattr("status_code", err.status_code());
     let _ = instance.setattr("google_status", err.google_status());
@@ -141,7 +141,7 @@ impl PyClient {
         let mask = mask_from(py, fields)?;
         let inner = self.inner.clone();
         let result = py.allow_threads(|| {
-            pyo3_async_runtimes::tokio::get_current_runtime()
+            pyo3_async_runtimes::tokio::get_runtime()
                 .block_on(async move { inner.text_search(&request, mask.as_ref()).await })
         });
         result_to_py(py, result)
@@ -174,7 +174,7 @@ impl PyClient {
         let mask = mask_from(py, fields)?;
         let inner = self.inner.clone();
         let result = py.allow_threads(|| {
-            pyo3_async_runtimes::tokio::get_current_runtime()
+            pyo3_async_runtimes::tokio::get_runtime()
                 .block_on(async move { inner.nearby_search(&request, mask.as_ref()).await })
         });
         result_to_py(py, result)
@@ -210,7 +210,7 @@ impl PyClient {
         let mask = mask_from(py, fields)?;
         let inner = self.inner.clone();
         let result = py.allow_threads(|| {
-            pyo3_async_runtimes::tokio::get_current_runtime().block_on(async move {
+            pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
                 inner
                     .place_details(
                         &place_id,
@@ -257,7 +257,7 @@ impl PyClient {
         let request: AutocompleteRequest = body_to_request(&body)?;
         let inner = self.inner.clone();
         let result = py.allow_threads(|| {
-            pyo3_async_runtimes::tokio::get_current_runtime()
+            pyo3_async_runtimes::tokio::get_runtime()
                 .block_on(async move { inner.autocomplete(&request).await })
         });
         result_to_py(py, result)
@@ -288,7 +288,7 @@ impl PyClient {
     ) -> PyResult<PyObject> {
         let inner = self.inner.clone();
         let result = py.allow_threads(|| {
-            pyo3_async_runtimes::tokio::get_current_runtime().block_on(async move {
+            pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
                 inner
                     .place_photo(&photo_name, max_width_px, max_height_px)
                     .await
