@@ -1,0 +1,23 @@
+from typing import Iterable, Tuple, Union
+
+TEXT_SEARCH_FIELDS: Tuple[str, ...]
+NEARBY_SEARCH_FIELDS: Tuple[str, ...]
+PLACE_DETAILS_FIELDS: Tuple[str, ...]
+
+class FieldMask:
+    paths: Tuple[str, ...]
+    def __init__(self, *paths: str) -> None: ...
+    @property
+    def header_value(self) -> str: ...
+    @classmethod
+    def of(cls, paths: Iterable[str]) -> "FieldMask": ...
+    @classmethod
+    def text_search(cls) -> "FieldMask": ...
+    @classmethod
+    def nearby_search(cls) -> "FieldMask": ...
+    @classmethod
+    def place_details(cls) -> "FieldMask": ...
+
+FieldsLike = Union[FieldMask, Iterable[str], None]
+
+def normalize_fields(fields: FieldsLike) -> list[str] | None: ...

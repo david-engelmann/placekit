@@ -1,0 +1,154 @@
+# Builds abi3 wheels for Linux, macOS and Windows with maturin, plus an
+# sdist. Pull requests only build. Pushing a version tag (v*) also publishes
+# to PyPI.
+#
+# Publishing uses PyPI trusted publishing: configure this repository as a
+# trusted publisher for the "places-api" project on PyPI, with environment
+# name "pypi". To use an API token instead, remove the id-token permission
+# and pass `password: ${{ secrets.PYPI_API_TOKEN }}` to the publish step.
+
+name: Wheels
+
+on:
+  push:
+    tags:
+      - "v*"
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  linux:
+    name: linux ${{ matrix.platform.target }}
+    runs-on: ${{ matrix.platform.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        platform:
+          - runner: ubuntu-22.04
+            target: x86_64
+          - runner: ubuntu-22.04
+            target: aarch64
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build wheels
+        uses: PyO3/maturin-action@v1
+        with:
+          target: ${{ matrix.platform.target }}
+          args: --release --out dist --find-interpreter
+          sccache: "true"
+          manylinux: auto
+      - name: Upload wheels
+        uses: actions/upload-artifact@v4
+        with:
+          name: wheels-linux-${{ matrix.platform.target }}
+          path: dist
+
+  windows:
+    name: windows ${{ matrix.platform.target }}
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        platform:
+          - target: x64
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build wheels
+        uses: PyO3/maturin-action@v1
+        with:
+          target: ${{ matrix.platform.target }}
+          args: --release --out dist --find-interpreter
+          sccache: "true"
+      - name: Upload wheels
+        uses: actions/upload-artifact@v4
+        with:
+          name: wheels-windows-${{ matrix.platform.target }}
+          path: dist
+
+  macos:
+    name: macos ${{ matrix.platform.target }}
+    runs-on: ${{ matrix.platform.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        platform:
+          - runner: macos-13
+            target: x86_64
+          - runner: macos-14
+            target: aarch64
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build wheels
+        uses: PyO3/maturin-action@v1
+        with:
+          target: ${{ matrix.platform.target }}
+          args: --release --out dist --find-interpreter
+          sccache: "true"
+      - name: Upload wheels
+        uses: actions/upload-artifact@v4
+        with:
+          name: wheels-macos-${{ matrix.platform.target }}
+          path: dist
+
+  sdist:
+    name: sdist
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build sdist
+        uses: PyO3/maturin-action@v1
+        with:
+          command: sdist
+          args: --out dist
+      - name: Upload sdist
+        uses: actions/upload-artifact@v4
+        with:
+          name: wheels-sdist
+          path: dist
+
+  test-wheel:
+    name: test wheel (linux x86_64)
+    needs: [linux]
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Download wheels
+        uses: actions/download-artifact@v4
+        with:
+          name: wheels-linux-x86_64
+          path: dist
+      - name: Install wheel and run the offline test suite
+        run: |
+          pip install --find-links dist places-api
+          pip install pytest
+          python -m pytest tests -q
+
+  publish:
+    name: Publish to PyPI
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: [linux, windows, macos, sdist]
+    runs-on: ubuntu-22.04
+    environment: pypi
+    permissions:
+      id-token: write
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: wheels-*
+          path: dist
+          merge-multiple: true
+      - name: Publish
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist
