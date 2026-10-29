@@ -2,8 +2,19 @@
 //!
 //! Requests serialize to the exact JSON bodies the API expects. Responses
 //! deserialize leniently: every field is optional or defaulted, and unknown
-//! fields are preserved in a flattened `extra` map on [`Place`], so new API
-//! fields never break decoding or get silently dropped.
+//! fields are preserved in a flattened `extra` map on the response types,
+//! so new API fields never break decoding or get silently dropped.
+//!
+//! Decoded response values are passed through unclamped and unvalidated
+//! (the posture decided in Round 4, finding R4-27). This client is a
+//! transport: it must not hide what the API returned or break forward
+//! compatibility by rejecting values a future API version considers
+//! valid, so a rating outside 0 to 5 or a count that arrived string
+//! encoded is surfaced as decoded rather than silently corrected. The
+//! leniency stops at representability: a value the typed field cannot
+//! hold at all (a negative or fractional count, for example) is still a
+//! decode error. Request values, which the caller controls, are the
+//! opposite: they are validated in the core before anything is sent.
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
@@ -13,10 +24,27 @@ use serde_json::{Map, Value};
 // ---------------------------------------------------------------------------
 
 /// A latitude/longitude pair.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct LatLng {
+    #[serde(default)]
     pub latitude: f64,
+    #[serde(default)]
     pub longitude: f64,
+    /// Unknown fields inside a decoded coordinate object, preserved like
+    /// on the other response types.
+    #[serde(flatten)]
+    pub extra: Map<String, Value>,
+}
+
+impl LatLng {
+    /// A coordinate with no extra fields, as request code constructs it.
+    pub fn new(latitude: f64, longitude: f64) -> Self {
+        Self {
+            latitude,
+            longitude,
+            extra: Map::new(),
+        }
+    }
 }
 
 /// A text value paired with its language.
@@ -25,15 +53,19 @@ pub struct LatLng {
 pub struct LocalizedText {
     #[serde(default, skip_serializing_if = "is_empty_string")]
     pub text: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "none_or_empty_string")]
     pub language_code: Option<String>,
+    #[serde(flatten)]
+    pub extra: Map<String, Value>,
 }
 
 /// A circular area, used to bias or restrict searches.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Circle {
+    #[serde(default)]
     pub center: LatLng,
     /// Radius in meters, at most 50000.
+    #[serde(default)]
     pub radius: f64,
 }
 
@@ -47,8 +79,12 @@ pub struct LocationRestriction {
 /// corners. Used by location bias and restriction values.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Viewport {
+    #[serde(default)]
     pub low: LatLng,
+    #[serde(default)]
     pub high: LatLng,
+    #[serde(flatten)]
+    pub extra: Map<String, Value>,
 }
 
 /// A `locationBias` value for Text Search: a rectangle or a circle, never
@@ -84,7 +120,7 @@ pub struct AutocompleteLocation {
 pub struct EvOptions {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub minimum_charging_rate_kw: Option<f64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "none_or_empty_vec")]
     pub connector_types: Option<Vec<String>>,
 }
 
@@ -92,7 +128,7 @@ pub struct EvOptions {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Polyline {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "none_or_empty_string")]
     pub encoded_polyline: Option<String>,
 }
 
@@ -121,11 +157,11 @@ pub struct RouteModifiers {
 pub struct RoutingParameters {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub origin: Option<LatLng>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "none_or_empty_string")]
     pub travel_mode: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub route_modifiers: Option<RouteModifiers>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "none_or_empty_string")]
     pub routing_preference: Option<String>,
 }
 
@@ -156,21 +192,21 @@ pub struct TextSearchRequest {
     pub text_query: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_result_count: Option<u32>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "none_or_empty_string")]
     pub page_token: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "none_or_empty_string")]
     pub language_code: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "none_or_empty_string")]
     pub region_code: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rank_preference: Option<TextSearchRankPreference>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub open_now: Option<bool>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "none_or_empty_vec")]
     pub price_levels: Option<Vec<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub strict_type_filtering: Option<bool>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "none_or_empty_string")]
     pub included_type: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub location_bias: Option<TextSearchLocationBias>,
@@ -197,19 +233,19 @@ pub struct TextSearchRequest {
 #[serde(rename_all = "camelCase")]
 pub struct NearbySearchRequest {
     pub location_restriction: LocationRestriction,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "none_or_empty_vec")]
     pub included_types: Option<Vec<String>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "none_or_empty_vec")]
     pub excluded_types: Option<Vec<String>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "none_or_empty_vec")]
     pub included_primary_types: Option<Vec<String>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "none_or_empty_vec")]
     pub excluded_primary_types: Option<Vec<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_result_count: Option<u32>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "none_or_empty_string")]
     pub language_code: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "none_or_empty_string")]
     pub region_code: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rank_preference: Option<NearbySearchRankPreference>,
@@ -226,13 +262,13 @@ pub struct NearbySearchRequest {
 #[serde(rename_all = "camelCase")]
 pub struct AutocompleteRequest {
     pub input: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "none_or_empty_string")]
     pub language_code: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "none_or_empty_string")]
     pub region_code: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "none_or_empty_string")]
     pub session_token: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "none_or_empty_vec")]
     pub included_region_codes: Option<Vec<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub include_query_predictions: Option<bool>,
@@ -244,7 +280,7 @@ pub struct AutocompleteRequest {
     pub origin: Option<LatLng>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub input_offset: Option<i32>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "none_or_empty_vec")]
     pub included_primary_types: Option<Vec<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub include_pure_service_area_businesses: Option<bool>,
@@ -276,6 +312,78 @@ fn is_zero_i32(value: &i32) -> bool {
     *value == 0
 }
 
+// Lenient scalar decoding for count and dimension fields (R4-08). The
+// API is observed to encode integers as strings on some Google surfaces
+// and a fractional float that is exactly integral carries the same
+// value, so all three forms decode; anything the typed field cannot
+// represent (negative, fractional, out of range, non-numeric) is a
+// decode error rather than a silent truncation.
+fn lenient_u64_value(value: &Value) -> Option<u64> {
+    match value {
+        Value::Number(n) => n.as_u64().or_else(|| {
+            let f = n.as_f64()?;
+            if f.fract() == 0.0 && f >= 0.0 && f <= u64::MAX as f64 {
+                Some(f as u64)
+            } else {
+                None
+            }
+        }),
+        Value::String(s) => s.parse::<u64>().ok(),
+        _ => None,
+    }
+}
+
+fn lenient_u32_value(value: &Value) -> Option<u32> {
+    lenient_u64_value(value).and_then(|v| u32::try_from(v).ok())
+}
+
+fn de_lenient_u32<'de, D>(deserializer: D) -> Result<u32, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Value::deserialize(deserializer)?;
+    lenient_u32_value(&value)
+        .ok_or_else(|| serde::de::Error::custom("expected a non-negative integer"))
+}
+
+fn de_lenient_opt_u64<'de, D>(deserializer: D) -> Result<Option<u64>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Option::<Value>::deserialize(deserializer)?;
+    match value {
+        None | Some(Value::Null) => Ok(None),
+        Some(v) => lenient_u64_value(&v)
+            .map(Some)
+            .ok_or_else(|| serde::de::Error::custom("expected a non-negative integer count")),
+    }
+}
+
+fn de_lenient_opt_u32<'de, D>(deserializer: D) -> Result<Option<u32>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Option::<Value>::deserialize(deserializer)?;
+    match value {
+        None | Some(Value::Null) => Ok(None),
+        Some(v) => lenient_u32_value(&v)
+            .map(Some)
+            .ok_or_else(|| serde::de::Error::custom("expected a non-negative integer")),
+    }
+}
+
+// Request serialization guards (R4-17): an optional string or list the
+// caller set to an empty value means "not supplied", exactly like None,
+// and is omitted from the body instead of sent as an empty value whose
+// meaning differs from absence at the API.
+fn none_or_empty_string(value: &Option<String>) -> bool {
+    value.as_ref().map_or(true, |s| s.is_empty())
+}
+
+fn none_or_empty_vec(value: &Option<Vec<String>>) -> bool {
+    value.as_ref().map_or(true, |v| v.is_empty())
+}
+
 /// A photo attached to a place.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -284,9 +392,17 @@ pub struct Photo {
     /// the photo media endpoint.
     #[serde(default, skip_serializing_if = "is_empty_string")]
     pub name: String,
-    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    #[serde(
+        default,
+        deserialize_with = "de_lenient_u32",
+        skip_serializing_if = "is_zero_u32"
+    )]
     pub width_px: u32,
-    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    #[serde(
+        default,
+        deserialize_with = "de_lenient_u32",
+        skip_serializing_if = "is_zero_u32"
+    )]
     pub height_px: u32,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub author_attributions: Vec<AuthorAttribution>,
@@ -310,6 +426,8 @@ pub struct AuthorAttribution {
     pub uri: String,
     #[serde(default, skip_serializing_if = "is_empty_string")]
     pub photo_uri: String,
+    #[serde(flatten)]
+    pub extra: Map<String, Value>,
 }
 
 /// Provider attribution attached to a place (Place Details responses).
@@ -320,6 +438,8 @@ pub struct Attribution {
     pub provider: String,
     #[serde(default, skip_serializing_if = "is_empty_string")]
     pub provider_uri: String,
+    #[serde(flatten)]
+    pub extra: Map<String, Value>,
 }
 
 /// A calendar date, as used by opening hour points. A zero field means
@@ -332,6 +452,8 @@ pub struct Date {
     pub month: i32,
     #[serde(default, skip_serializing_if = "is_zero_i32")]
     pub day: i32,
+    #[serde(flatten)]
+    pub extra: Map<String, Value>,
 }
 
 /// One end of an opening period. `day` is 0 for Sunday through 6 for
@@ -350,6 +472,8 @@ pub struct OpeningPoint {
     pub hour: Option<i32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub minute: Option<i32>,
+    #[serde(flatten)]
+    pub extra: Map<String, Value>,
 }
 
 /// A single open/close span within opening hours.
@@ -360,6 +484,8 @@ pub struct Period {
     pub open: Option<OpeningPoint>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub close: Option<OpeningPoint>,
+    #[serde(flatten)]
+    pub extra: Map<String, Value>,
 }
 
 /// Regular opening hours of a place.
@@ -388,6 +514,8 @@ pub struct AddressComponent {
     pub types: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub language_code: Option<String>,
+    #[serde(flatten)]
+    pub extra: Map<String, Value>,
 }
 
 /// Plus code location reference for a place.
@@ -398,6 +526,8 @@ pub struct PlusCode {
     pub global_code: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub compound_code: Option<String>,
+    #[serde(flatten)]
+    pub extra: Map<String, Value>,
 }
 
 /// A postal address in structured form.
@@ -443,7 +573,11 @@ pub struct Place {
     pub primary_type: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rating: Option<f64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "de_lenient_opt_u64",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub user_rating_count: Option<u64>,
     /// One of `PRICE_LEVEL_FREE`, `PRICE_LEVEL_INEXPENSIVE`,
     /// `PRICE_LEVEL_MODERATE`, `PRICE_LEVEL_EXPENSIVE`,
@@ -503,14 +637,19 @@ pub struct SearchResponse {
     pub extra: Map<String, Value>,
 }
 
-/// A substring match range inside an autocomplete text.
+/// A substring match range inside an autocomplete text. The offsets are
+/// presence based (R4-24): a start offset of 0 is a real value the API
+/// sends, so the fields are optional rather than zero-skipped, and a
+/// decoded 0 survives reserialization instead of vanishing from `raw`.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StringMatch {
-    #[serde(default, skip_serializing_if = "is_zero_u32")]
-    pub start_offset: u32,
-    #[serde(default, skip_serializing_if = "is_zero_u32")]
-    pub end_offset: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub start_offset: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub end_offset: Option<u32>,
+    #[serde(flatten)]
+    pub extra: Map<String, Value>,
 }
 
 /// Text with match ranges, as returned by Autocomplete.
@@ -521,6 +660,8 @@ pub struct FormattedText {
     pub text: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub matches: Vec<StringMatch>,
+    #[serde(flatten)]
+    pub extra: Map<String, Value>,
 }
 
 /// The main/secondary split of a prediction's display text.
@@ -531,6 +672,8 @@ pub struct StructuredFormat {
     pub main_text: Option<FormattedText>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub secondary_text: Option<FormattedText>,
+    #[serde(flatten)]
+    pub extra: Map<String, Value>,
 }
 
 /// A predicted place from Autocomplete.
@@ -549,7 +692,11 @@ pub struct PlacePrediction {
     pub structured_format: Option<StructuredFormat>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub types: Vec<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "de_lenient_opt_u32",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub distance_meters: Option<u32>,
     #[serde(flatten)]
     pub extra: Map<String, Value>,
@@ -596,6 +743,8 @@ pub struct PhotoMediaJson {
     pub name: String,
     #[serde(default, skip_serializing_if = "is_empty_string")]
     pub photo_uri: String,
+    #[serde(flatten)]
+    pub extra: Map<String, Value>,
 }
 
 /// Result of a photo media request: downloaded bytes by default, or the
@@ -639,7 +788,7 @@ mod tests {
         assert_eq!(first.display_name.as_ref().unwrap().text, "Bianco Latte");
         assert_eq!(first.rating, Some(4.6));
         assert_eq!(first.user_rating_count, Some(1284));
-        let loc = first.location.unwrap();
+        let loc = first.location.as_ref().unwrap();
         assert!((loc.latitude - (-33.866_784)).abs() < 1e-9);
         assert_eq!(first.photos.len(), 1);
         assert_eq!(
@@ -789,6 +938,154 @@ mod tests {
     }
 
     #[test]
+    fn partial_nested_objects_decode_with_defaults() {
+        // R4-01: one partial nested object must not fail the whole
+        // response. A location carrying only a latitude, a viewport
+        // carrying only one corner of one point, and a circle carrying
+        // only a center all decode with the missing pieces defaulted.
+        let resp: SearchResponse = serde_json::from_str(
+            r#"{"places":[{"id":"ChIJx","location":{"latitude":-33.86}}]}"#,
+        )
+        .unwrap();
+        let loc = resp.places[0].location.as_ref().unwrap();
+        assert_eq!(loc.latitude, -33.86);
+        assert_eq!(loc.longitude, 0.0);
+        let place: Place =
+            serde_json::from_str(r#"{"id":"ChIJx","viewport":{"low":{"latitude":1.0}}}"#).unwrap();
+        let viewport = place.viewport.as_ref().unwrap();
+        assert_eq!(viewport.low.latitude, 1.0);
+        assert_eq!(viewport.high.longitude, 0.0);
+        let circle: Circle = serde_json::from_str(r#"{"center":{"latitude":1.0}}"#).unwrap();
+        assert_eq!(circle.radius, 0.0);
+        // Serialization of a full value is unchanged by the defaults.
+        let value = serde_json::to_value(LatLng::new(-33.86, 151.2)).unwrap();
+        assert_eq!(
+            value,
+            serde_json::json!({"latitude": -33.86, "longitude": 151.2})
+        );
+    }
+
+    #[test]
+    fn nested_unknown_fields_survive_reserialization() {
+        // R4-12: unknown fields inside nested response types are kept
+        // in their extra maps, not silently dropped on the way to the
+        // Python layer's raw view.
+        let place: Place = serde_json::from_str(
+            r#"{"id":"ChIJx",
+                "location":{"latitude":1.0,"longitude":2.0,"futureCoordField":7},
+                "regularOpeningHours":{"periods":[{"open":{"day":1,"futurePointField":true},"futurePeriodField":"x"}]},
+                "addressComponents":[{"longText":"George Street","futureComponentField":3}],
+                "plusCode":{"globalCode":"4RRH46J5+QJ","futureCodeField":4},
+                "photos":[{"name":"places/ChIJx/photos/p","authorAttributions":[{"displayName":"Jane","futureAttributionField":5}]}]}"#,
+        )
+        .unwrap();
+        let value = serde_json::to_value(&place).unwrap();
+        assert_eq!(value["location"]["futureCoordField"], 7);
+        assert_eq!(
+            value["regularOpeningHours"]["periods"][0]["futurePeriodField"],
+            "x"
+        );
+        assert_eq!(
+            value["regularOpeningHours"]["periods"][0]["open"]["futurePointField"],
+            true
+        );
+        assert_eq!(value["addressComponents"][0]["futureComponentField"], 3);
+        assert_eq!(value["plusCode"]["futureCodeField"], 4);
+        assert_eq!(
+            value["photos"][0]["authorAttributions"][0]["futureAttributionField"],
+            5
+        );
+    }
+
+    #[test]
+    fn lenient_scalar_forms_decode_counts_and_dimensions() {
+        // R4-08: string encoded and exactly integral float counts and
+        // dimensions decode to the same typed values as plain integers.
+        let place: Place =
+            serde_json::from_str(r#"{"id":"ChIJx","userRatingCount":"1284"}"#).unwrap();
+        assert_eq!(place.user_rating_count, Some(1284));
+        let place: Place =
+            serde_json::from_str(r#"{"id":"ChIJx","userRatingCount":1284.0}"#).unwrap();
+        assert_eq!(place.user_rating_count, Some(1284));
+        let place: Place = serde_json::from_str(
+            r#"{"id":"ChIJx","photos":[{"name":"p","widthPx":"800","heightPx":600.0}]}"#,
+        )
+        .unwrap();
+        assert_eq!(place.photos[0].width_px, 800);
+        assert_eq!(place.photos[0].height_px, 600);
+        // Values the typed fields cannot represent are decode errors,
+        // never silent truncations.
+        assert!(
+            serde_json::from_str::<Place>(r#"{"id":"ChIJx","userRatingCount":-3}"#).is_err()
+        );
+        assert!(
+            serde_json::from_str::<Place>(r#"{"id":"ChIJx","userRatingCount":1.5}"#).is_err()
+        );
+        assert!(
+            serde_json::from_str::<Place>(r#"{"id":"ChIJx","userRatingCount":"many"}"#).is_err()
+        );
+    }
+
+    #[test]
+    fn zero_start_offset_survives_reserialization() {
+        // R4-24: a match starting at offset 0 was present on the wire
+        // and stays present in the reserialized value.
+        let resp: AutocompleteResponse = serde_json::from_str(
+            r#"{"suggestions":[{"placePrediction":{"placeId":"ChIJx","text":{"text":"Bianco","matches":[{"startOffset":0,"endOffset":3}]}}}]}"#,
+        )
+        .unwrap();
+        let value = serde_json::to_value(&resp).unwrap();
+        assert_eq!(
+            value["suggestions"][0]["placePrediction"]["text"]["matches"][0]["startOffset"],
+            0
+        );
+        assert_eq!(
+            value["suggestions"][0]["placePrediction"]["text"]["matches"][0]["endOffset"],
+            3
+        );
+    }
+
+    #[test]
+    fn empty_request_collections_and_strings_are_omitted() {
+        // R4-17: an empty optional string or list serializes exactly
+        // like None, as an absent field.
+        let req = TextSearchRequest {
+            text_query: "pizza".to_owned(),
+            page_token: Some(String::new()),
+            language_code: Some(String::new()),
+            price_levels: Some(Vec::new()),
+            ..Default::default()
+        };
+        let value = serde_json::to_value(&req).unwrap();
+        assert!(value.get("pageToken").is_none());
+        assert!(value.get("languageCode").is_none());
+        assert!(value.get("priceLevels").is_none());
+        let req = NearbySearchRequest {
+            location_restriction: LocationRestriction {
+                circle: Circle {
+                    center: LatLng::new(-33.86, 151.20),
+                    radius: 800.0,
+                },
+            },
+            included_types: Some(Vec::new()),
+            excluded_types: None,
+            included_primary_types: None,
+            excluded_primary_types: Some(Vec::new()),
+            max_result_count: None,
+            language_code: Some(String::new()),
+            region_code: None,
+            rank_preference: None,
+            routing_parameters: None,
+            include_future_opening_businesses: None,
+        };
+        let value = serde_json::to_value(&req).unwrap();
+        assert!(value.get("includedTypes").is_none());
+        assert!(value.get("excludedPrimaryTypes").is_none());
+        assert!(value.get("languageCode").is_none());
+        assert!(value.get("locationRestriction").is_some());
+    }
+
+    #[test]
     fn text_search_request_serializes_camel_case_and_omits_none() {
         let req = TextSearchRequest {
             text_query: "pizza".to_owned(),
@@ -815,10 +1112,7 @@ mod tests {
                 connector_types: Some(vec!["EV_CONNECTOR_TYPE_J1772".to_owned()]),
             }),
             routing_parameters: Some(RoutingParameters {
-                origin: Some(LatLng {
-                    latitude: -33.86,
-                    longitude: 151.20,
-                }),
+                origin: Some(LatLng::new(-33.86, 151.20)),
                 travel_mode: Some("DRIVE".to_owned()),
                 route_modifiers: None,
                 routing_preference: None,
@@ -827,10 +1121,7 @@ mod tests {
             location_bias: Some(TextSearchLocationBias {
                 rectangle: None,
                 circle: Some(Circle {
-                    center: LatLng {
-                        latitude: -33.86,
-                        longitude: 151.20,
-                    },
+                    center: LatLng::new(-33.86, 151.20),
                     radius: 1000.0,
                 }),
             }),
@@ -850,10 +1141,7 @@ mod tests {
     fn autocomplete_request_serializes_origin_offset_and_types() {
         let req = AutocompleteRequest {
             input: "Bianco".to_owned(),
-            origin: Some(LatLng {
-                latitude: -33.86,
-                longitude: 151.20,
-            }),
+            origin: Some(LatLng::new(-33.86, 151.20)),
             input_offset: Some(6),
             included_primary_types: Some(vec!["cafe".to_owned()]),
             ..Default::default()
@@ -869,10 +1157,7 @@ mod tests {
         let req = NearbySearchRequest {
             location_restriction: LocationRestriction {
                 circle: Circle {
-                    center: LatLng {
-                        latitude: -33.86,
-                        longitude: 151.20,
-                    },
+                    center: LatLng::new(-33.86, 151.20),
                     radius: 800.0,
                 },
             },

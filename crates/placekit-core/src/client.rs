@@ -1057,10 +1057,7 @@ mod tests {
         let req = NearbySearchRequest {
             location_restriction: crate::models::LocationRestriction {
                 circle: crate::models::Circle {
-                    center: LatLng {
-                        latitude: 0.0,
-                        longitude: 0.0,
-                    },
+                    center: LatLng::new(0.0, 0.0),
                     radius: -5.0,
                 },
             },
