@@ -321,10 +321,12 @@ def test_masked_raw_carries_no_fabricated_keys(client):
     suggestions = client.autocomplete("Bianco")
     prediction = suggestions.place_predictions[0]
     assert "distanceMeters" not in prediction.raw
-    # Place Details on the default mask: typed fields outside the mask
-    # do not appear in raw either.
+    # Place Details on the default mask: since Round 5 the default
+    # mask requests every modelled field (RC-07), so these keys are
+    # present in raw; under an explicit narrow mask they stay absent,
+    # which is the no-fabrication principle this test guards.
     place = client.place_details("ChIJrTLr-GyuEmsRBfy61i59si0")
-    for absent in (
+    for present in (
         "postalAddress",
         "adrFormatAddress",
         "plusCode",
@@ -332,7 +334,11 @@ def test_masked_raw_carries_no_fabricated_keys(client):
         "currentOpeningHours",
         "primaryTypeDisplayName",
     ):
-        assert absent not in place.raw
+        assert present in place.raw
+    narrow = client.place_details(
+        "ChIJrTLr-GyuEmsRBfy61i59si0", fields=["id"]
+    )
+    assert narrow.raw == {"id": "ChIJrTLr-GyuEmsRBfy61i59si0"}
 
 
 def test_min_rating_out_of_range_rejected(client):

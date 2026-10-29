@@ -24,9 +24,9 @@ class Client:
     def __enter__(self) -> "Client": ...
     def __exit__(
         self,
-        exc_type: Optional[type[BaseException]] = ...,
-        exc_value: Optional[BaseException] = ...,
-        traceback: Optional[TracebackType] = ...,
+        exc_type: Optional[type[BaseException]],
+        exc_value: Optional[BaseException],
+        traceback: Optional[TracebackType],
     ) -> None: ...
     def text_search(
         self,
@@ -117,9 +117,9 @@ class AsyncClient:
     async def __aenter__(self) -> "AsyncClient": ...
     async def __aexit__(
         self,
-        exc_type: Optional[type[BaseException]] = ...,
-        exc_value: Optional[BaseException] = ...,
-        traceback: Optional[TracebackType] = ...,
+        exc_type: Optional[type[BaseException]],
+        exc_value: Optional[BaseException],
+        traceback: Optional[TracebackType],
     ) -> None: ...
     async def text_search(
         self,

@@ -2,6 +2,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 class LocalizedText:
+    __match_args__: tuple[str, ...] = ('text', 'language_code')
     text: str
     language_code: Optional[str]
     def __init__(
@@ -11,14 +12,17 @@ class LocalizedText:
     def from_api(cls, data: dict[str, Any]) -> "LocalizedText": ...
 
 class LatLng:
+    __match_args__: tuple[str, ...] = ('latitude', 'longitude')
     latitude: float
     longitude: float
     def __init__(self, latitude: float, longitude: float) -> None: ...
+    def __post_init__(self) -> None: ...
     @classmethod
     def from_api(cls, data: dict[str, Any]) -> "LatLng": ...
     def to_api(self) -> dict[str, float]: ...
 
 class AuthorAttribution:
+    __match_args__: tuple[str, ...] = ('display_name', 'uri', 'photo_uri')
     display_name: str
     uri: str
     photo_uri: str
@@ -29,6 +33,7 @@ class AuthorAttribution:
     def from_api(cls, data: dict[str, Any]) -> "AuthorAttribution": ...
 
 class Attribution:
+    __match_args__: tuple[str, ...] = ('provider', 'provider_uri')
     provider: str
     provider_uri: str
     def __init__(self, provider: str = ..., provider_uri: str = ...) -> None: ...
@@ -36,6 +41,7 @@ class Attribution:
     def from_api(cls, data: dict[str, Any]) -> "Attribution": ...
 
 class Photo:
+    __match_args__: tuple[str, ...] = ('name', 'width_px', 'height_px', 'author_attributions', 'flag_content_uri', 'google_maps_uri')
     name: str
     width_px: int
     height_px: int
@@ -55,6 +61,7 @@ class Photo:
     def from_api(cls, data: dict[str, Any]) -> "Photo": ...
 
 class Date:
+    __match_args__: tuple[str, ...] = ('year', 'month', 'day')
     year: int
     month: int
     day: int
@@ -65,6 +72,7 @@ class Date:
     def from_api(cls, data: dict[str, Any]) -> "Date": ...
 
 class OpeningPoint:
+    __match_args__: tuple[str, ...] = ('date', 'truncated', 'day', 'hour', 'minute')
     date: Optional[Date]
     truncated: Optional[bool]
     day: Optional[int]
@@ -82,6 +90,7 @@ class OpeningPoint:
     def from_api(cls, data: dict[str, Any]) -> "OpeningPoint": ...
 
 class Period:
+    __match_args__: tuple[str, ...] = ('open', 'close')
     open: Optional[OpeningPoint]
     close: Optional[OpeningPoint]
     def __init__(
@@ -93,6 +102,7 @@ class Period:
     def from_api(cls, data: dict[str, Any]) -> "Period": ...
 
 class OpeningHours:
+    __match_args__: tuple[str, ...] = ('open_now', 'periods', 'weekday_descriptions')
     open_now: Optional[bool]
     periods: list[Period]
     weekday_descriptions: list[str]
@@ -106,6 +116,7 @@ class OpeningHours:
     def from_api(cls, data: dict[str, Any]) -> "OpeningHours": ...
 
 class AddressComponent:
+    __match_args__: tuple[str, ...] = ('long_text', 'short_text', 'types', 'language_code')
     long_text: str
     short_text: str
     types: list[str]
@@ -121,6 +132,7 @@ class AddressComponent:
     def from_api(cls, data: dict[str, Any]) -> "AddressComponent": ...
 
 class PlusCode:
+    __match_args__: tuple[str, ...] = ('global_code', 'compound_code')
     global_code: str
     compound_code: Optional[str]
     def __init__(
@@ -130,6 +142,7 @@ class PlusCode:
     def from_api(cls, data: dict[str, Any]) -> "PlusCode": ...
 
 class Viewport:
+    __match_args__: tuple[str, ...] = ('low', 'high')
     low: LatLng
     high: LatLng
     def __init__(self, low: LatLng, high: LatLng) -> None: ...
@@ -137,6 +150,7 @@ class Viewport:
     def from_api(cls, data: dict[str, Any]) -> "Viewport": ...
 
 class PostalAddress:
+    __match_args__: tuple[str, ...] = ('region_code', 'language_code', 'postal_code', 'administrative_area', 'locality', 'address_lines')
     region_code: Optional[str]
     language_code: Optional[str]
     postal_code: Optional[str]
@@ -156,6 +170,7 @@ class PostalAddress:
     def from_api(cls, data: dict[str, Any]) -> "PostalAddress": ...
 
 class Place:
+    __match_args__: tuple[str, ...] = ('id', 'name', 'display_name', 'formatted_address', 'short_formatted_address', 'location', 'types', 'primary_type', 'rating', 'user_rating_count', 'price_level', 'business_status', 'national_phone_number', 'international_phone_number', 'website_uri', 'google_maps_uri', 'opening_hours', 'current_opening_hours', 'address_components', 'plus_code', 'viewport', 'postal_address', 'adr_format_address', 'primary_type_display_name', 'photos', 'attributions', 'raw')
     id: str
     name: str
     display_name: Optional[LocalizedText]
@@ -221,6 +236,7 @@ class Place:
     def from_api(cls, data: dict[str, Any]) -> "Place": ...
 
 class TextSearchResult:
+    __match_args__: tuple[str, ...] = ('places', 'next_page_token', 'search_uri', 'routing_summaries', 'raw')
     places: list[Place]
     next_page_token: Optional[str]
     search_uri: Optional[str]
@@ -238,6 +254,7 @@ class TextSearchResult:
     def from_api(cls, data: dict[str, Any]) -> "TextSearchResult": ...
 
 class NearbySearchResult:
+    __match_args__: tuple[str, ...] = ('places', 'routing_summaries', 'raw')
     places: list[Place]
     routing_summaries: list[dict[str, Any]]
     raw: dict[str, Any]
@@ -251,6 +268,7 @@ class NearbySearchResult:
     def from_api(cls, data: dict[str, Any]) -> "NearbySearchResult": ...
 
 class StringMatch:
+    __match_args__: tuple[str, ...] = ('start_offset', 'end_offset')
     start_offset: int
     end_offset: int
     def __init__(self, start_offset: int = ..., end_offset: int = ...) -> None: ...
@@ -258,6 +276,7 @@ class StringMatch:
     def from_api(cls, data: dict[str, Any]) -> "StringMatch": ...
 
 class FormattedText:
+    __match_args__: tuple[str, ...] = ('text', 'matches')
     text: str
     matches: list[StringMatch]
     def __init__(
@@ -267,6 +286,7 @@ class FormattedText:
     def from_api(cls, data: dict[str, Any]) -> "FormattedText": ...
 
 class PlacePrediction:
+    __match_args__: tuple[str, ...] = ('place_id', 'place', 'text', 'main_text', 'secondary_text', 'types', 'distance_meters', 'raw')
     place_id: str
     place: str
     text: Optional[FormattedText]
@@ -290,6 +310,7 @@ class PlacePrediction:
     def from_api(cls, data: dict[str, Any]) -> "PlacePrediction": ...
 
 class QueryPrediction:
+    __match_args__: tuple[str, ...] = ('text', 'main_text', 'secondary_text', 'raw')
     text: Optional[FormattedText]
     main_text: Optional[FormattedText]
     secondary_text: Optional[FormattedText]
@@ -305,6 +326,7 @@ class QueryPrediction:
     def from_api(cls, data: dict[str, Any]) -> "QueryPrediction": ...
 
 class Suggestion:
+    __match_args__: tuple[str, ...] = ('place_prediction', 'query_prediction', 'raw')
     place_prediction: Optional[PlacePrediction]
     query_prediction: Optional[QueryPrediction]
     raw: dict[str, Any]
@@ -318,6 +340,7 @@ class Suggestion:
     def from_api(cls, data: dict[str, Any]) -> "Suggestion": ...
 
 class AutocompleteResult:
+    __match_args__: tuple[str, ...] = ('suggestions', 'raw')
     suggestions: list[Suggestion]
     raw: dict[str, Any]
     def __init__(
@@ -331,6 +354,7 @@ class AutocompleteResult:
     def from_api(cls, data: dict[str, Any]) -> "AutocompleteResult": ...
 
 class PhotoMedia:
+    __match_args__: tuple[str, ...] = ('content', 'content_type')
     content: bytes
     content_type: Optional[str]
     def __init__(
@@ -339,6 +363,7 @@ class PhotoMedia:
     def save(self, path: str | Path) -> Path: ...
 
 class PhotoUriResult:
+    __match_args__: tuple[str, ...] = ('photo_uri', 'name')
     photo_uri: str
     name: str
     def __init__(self, photo_uri: str, name: str = ...) -> None: ...

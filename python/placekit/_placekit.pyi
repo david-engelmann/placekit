@@ -5,9 +5,10 @@ The request body arguments are the camelCase JSON bodies of the Places API,
 deserialized into typed Rust structs on the other side.
 """
 
-from typing import Any, Awaitable, Optional
+from typing import Any, Awaitable, Optional, final
 
 __version__: str
+__all__ = ["Client", "PlacesError", "__version__"]
 
 class PlacesError(Exception):
     kind: str
@@ -21,13 +22,14 @@ class PlacesError(Exception):
     retryable: bool
     retry_after: Optional[float]
 
+@final
 class Client:
-    def __init__(
-        self,
+    def __new__(
+        cls,
         api_key: str,
         base_url: Optional[str] = ...,
         timeout: Optional[float] = ...,
-    ) -> None: ...
+    ) -> "Client": ...
     def text_search(
         self, body: dict[str, Any], fields: Optional[list[str]] = ...
     ) -> dict[str, Any]: ...
