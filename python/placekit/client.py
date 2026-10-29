@@ -8,11 +8,12 @@ to use inside an event loop. Methods return the typed models in
 
 from __future__ import annotations
 
+import math
 from typing import Any, Iterable, Optional
 
 from . import _placekit
 from ._placekit import PlacesError as _CorePlacesError
-from .exceptions import raise_translated
+from .exceptions import ConfigError, DecodeError, raise_translated
 from .fields import FieldsLike, normalize_fields
 from .models import (
     AutocompleteResult,
@@ -93,6 +94,13 @@ def _photo_result(tagged: tuple) -> PhotoMedia | PhotoUriResult:
     return PhotoMedia(content=first, content_type=second)
 
 
+#: The longest per-request timeout the Python clients accept, in
+#: seconds. Beyond an hour a per-request timeout stops meaning
+#: anything; the value is rejected as a configuration error instead
+#: of being silently treated as no timeout at all.
+_MAX_TIMEOUT_SECONDS = 3600
+
+
 class _Base:
     def __init__(
         self,
@@ -102,8 +110,62 @@ class _Base:
         timeout: Optional[float] = None,
     ) -> None:
         if not api_key or not api_key.strip():
-            raise ValueError("api_key must not be empty")
-        self._inner = _placekit.Client(api_key, base_url, timeout)
+            raise ConfigError("api_key must not be empty")
+        if timeout is not None and (
+            isinstance(timeout, bool)
+            or not isinstance(timeout, (int, float))
+            or not math.isfinite(timeout)
+            or not 0 < timeout <= _MAX_TIMEOUT_SECONDS
+        ):
+            raise ConfigError(
+                "timeout must be a positive, finite number of seconds, "
+                f"at most {_MAX_TIMEOUT_SECONDS}"
+            )
+        try:
+            self._inner = _placekit.Client(api_key, base_url, timeout)
+        except _CorePlacesError as exc:
+            raise_translated(exc, "client construction")
+        except ValueError as exc:
+            # The bindings surface core configuration failures (for
+            # example a key that cannot be sent as a header value) as
+            # plain ValueError; inside this package they are
+            # ConfigError, the one documented type for local misuse.
+            raise ConfigError(str(exc)) from exc
+
+    @staticmethod
+    def _validate_int_range(
+        name: str, value: Optional[int], low: int, high: int
+    ) -> Optional[int]:
+        """Validate an optional integer argument before it reaches the
+        core, where a negative or oversized value would otherwise
+        escape the typed hierarchy as a bare OverflowError or a
+        ValueError carrying one."""
+        if value is None:
+            return None
+        if (
+            isinstance(value, bool)
+            or not isinstance(value, int)
+            or not low <= value <= high
+        ):
+            raise ConfigError(
+                f"{name} must be an integer between {low} and {high}, got {value!r}"
+            )
+        return value
+
+    @staticmethod
+    def _convert(convert, data):
+        """Run a model conversion over a decoded response.
+
+        The model layer is a second decoder; its builtin failures
+        (KeyError, TypeError and friends) are translated into
+        DecodeError so callers only ever see the typed hierarchy.
+        """
+        try:
+            return convert(data)
+        except (KeyError, TypeError, ValueError, AttributeError) as exc:
+            raise DecodeError(
+                f"response failed model conversion: {exc!r}"
+            ) from exc
 
     # Body builders shared by the sync and async method sets.
 
@@ -133,7 +195,9 @@ class _Base:
         return _drop_none(
             {
                 "textQuery": query,
-                "maxResultCount": max_results,
+                "maxResultCount": _Base._validate_int_range(
+                "max_results", max_results, 1, 20
+            ),
                 "pageToken": page_token,
                 "languageCode": language,
                 "regionCode": region,
@@ -187,7 +251,9 @@ class _Base:
                     if excluded_primary_types is not None
                     else None
                 ),
-                "maxResultCount": max_results,
+                "maxResultCount": _Base._validate_int_range(
+                "max_results", max_results, 1, 20
+            ),
                 "languageCode": language,
                 "regionCode": region,
                 "rankPreference": rank_preference,
@@ -252,7 +318,8 @@ class Client(_Base):
 
     ``base_url`` overrides the API root, which is how the test suite points
     the client at a local stub server. ``timeout`` is per request, in
-    seconds.
+    seconds, and may be at most 3600; anything else about it (zero,
+    negative, non-finite, a boolean, a non-number) is a ``ConfigError``.
     """
 
     def text_search(
@@ -316,8 +383,8 @@ class Client(_Base):
         try:
             data = self._inner.text_search(body, normalize_fields(fields))
         except _CorePlacesError as exc:
-            raise_translated(exc)
-        return TextSearchResult.from_api(data)
+            raise_translated(exc, "text_search")
+        return self._convert(TextSearchResult.from_api, data)
 
     def nearby_search(
         self,
@@ -359,8 +426,8 @@ class Client(_Base):
         try:
             data = self._inner.nearby_search(body, normalize_fields(fields))
         except _CorePlacesError as exc:
-            raise_translated(exc)
-        return NearbySearchResult.from_api(data)
+            raise_translated(exc, "nearby_search")
+        return self._convert(NearbySearchResult.from_api, data)
 
     def place_details(
         self,
@@ -381,8 +448,8 @@ class Client(_Base):
                 session_token,
             )
         except _CorePlacesError as exc:
-            raise_translated(exc)
-        return Place.from_api(data)
+            raise_translated(exc, f"place_details place_id={place_id}")
+        return self._convert(Place.from_api, data)
 
     def autocomplete(
         self,
@@ -430,8 +497,8 @@ class Client(_Base):
         try:
             data = self._inner.autocomplete(body, normalize_fields(fields))
         except _CorePlacesError as exc:
-            raise_translated(exc)
-        return AutocompleteResult.from_api(data)
+            raise_translated(exc, "autocomplete")
+        return self._convert(AutocompleteResult.from_api, data)
 
     def place_photo(
         self,
@@ -451,13 +518,15 @@ class Client(_Base):
         ``skip_http_redirect=True`` it returns a ``PhotoUriResult``
         carrying the photo's short lived URI instead.
         """
+        self._validate_int_range("max_width_px", max_width_px, 1, 4800)
+        self._validate_int_range("max_height_px", max_height_px, 1, 4800)
         try:
             tagged = self._inner.place_photo(
                 photo_name, max_width_px, max_height_px, skip_http_redirect
             )
         except _CorePlacesError as exc:
-            raise_translated(exc)
-        return _photo_result(tagged)
+            raise_translated(exc, f"place_photo name={photo_name}")
+        return self._convert(_photo_result, tagged)
 
 
 class AsyncClient(_Base):
@@ -518,8 +587,8 @@ class AsyncClient(_Base):
         try:
             data = await self._inner.text_search_async(body, normalize_fields(fields))
         except _CorePlacesError as exc:
-            raise_translated(exc)
-        return TextSearchResult.from_api(data)
+            raise_translated(exc, "text_search")
+        return self._convert(TextSearchResult.from_api, data)
 
     async def nearby_search(
         self,
@@ -556,8 +625,8 @@ class AsyncClient(_Base):
         try:
             data = await self._inner.nearby_search_async(body, normalize_fields(fields))
         except _CorePlacesError as exc:
-            raise_translated(exc)
-        return NearbySearchResult.from_api(data)
+            raise_translated(exc, "nearby_search")
+        return self._convert(NearbySearchResult.from_api, data)
 
     async def place_details(
         self,
@@ -578,8 +647,8 @@ class AsyncClient(_Base):
                 session_token,
             )
         except _CorePlacesError as exc:
-            raise_translated(exc)
-        return Place.from_api(data)
+            raise_translated(exc, f"place_details place_id={place_id}")
+        return self._convert(Place.from_api, data)
 
     async def autocomplete(
         self,
@@ -622,8 +691,8 @@ class AsyncClient(_Base):
                 body, normalize_fields(fields)
             )
         except _CorePlacesError as exc:
-            raise_translated(exc)
-        return AutocompleteResult.from_api(data)
+            raise_translated(exc, "autocomplete")
+        return self._convert(AutocompleteResult.from_api, data)
 
     async def place_photo(
         self,
@@ -634,10 +703,12 @@ class AsyncClient(_Base):
         skip_http_redirect: bool = False,
     ) -> PhotoMedia | PhotoUriResult:
         """Async version of ``Client.place_photo``."""
+        self._validate_int_range("max_width_px", max_width_px, 1, 4800)
+        self._validate_int_range("max_height_px", max_height_px, 1, 4800)
         try:
             tagged = await self._inner.place_photo_async(
                 photo_name, max_width_px, max_height_px, skip_http_redirect
             )
         except _CorePlacesError as exc:
-            raise_translated(exc)
-        return _photo_result(tagged)
+            raise_translated(exc, f"place_photo name={photo_name}")
+        return self._convert(_photo_result, tagged)

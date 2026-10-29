@@ -9,6 +9,10 @@ class PlacesError(Exception):
     details: list
     field_violations: list
     quota_violations: list
+    status_mismatch: bool
+    retryable: bool
+    retry_after: Optional[float]
+    context: Optional[str]
     def __init__(
         self,
         message: str,
@@ -19,6 +23,10 @@ class PlacesError(Exception):
         details: Optional[list] = ...,
         field_violations: Optional[list] = ...,
         quota_violations: Optional[list] = ...,
+        status_mismatch: bool = ...,
+        retryable: bool = ...,
+        retry_after: Optional[float] = ...,
+        context: Optional[str] = ...,
     ) -> None: ...
 
 class AuthenticationError(PlacesError): ...

@@ -18,6 +18,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Iterable, Tuple, Union
 
+from .exceptions import ConfigError
+
 #: Default paths requested by text_search when no fields are given.
 TEXT_SEARCH_FIELDS: Tuple[str, ...] = (
     "places.id",
@@ -88,10 +90,10 @@ class FieldMask:
 
     def __init__(self, *paths: str) -> None:
         if not paths:
-            raise ValueError("FieldMask requires at least one field path")
+            raise ConfigError("FieldMask requires at least one field path")
         for path in paths:
             if not path or path.strip() != path or "," in path:
-                raise ValueError(f"invalid field mask path: {path!r}")
+                raise ConfigError(f"invalid field mask path: {path!r}")
         object.__setattr__(self, "paths", tuple(paths))
 
     @property

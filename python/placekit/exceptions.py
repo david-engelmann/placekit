@@ -26,6 +26,10 @@ class PlacesError(Exception):
         details: Optional[list] = None,
         field_violations: Optional[list] = None,
         quota_violations: Optional[list] = None,
+        status_mismatch: bool = False,
+        retryable: bool = False,
+        retry_after: Optional[float] = None,
+        context: Optional[str] = None,
     ) -> None:
         super().__init__(message)
         self.message = message
@@ -46,6 +50,23 @@ class PlacesError(Exception):
         self.quota_violations = (
             quota_violations if quota_violations is not None else []
         )
+        #: True when the envelope ``code`` and the HTTP status disagree.
+        #: Classification follows the envelope status first and the HTTP
+        #: code second, so the class and ``status_code`` can come from
+        #: different sources; this flag makes that split visible.
+        self.status_mismatch = status_mismatch
+        #: True when a caller side retry can plausibly succeed (quota
+        #: errors and server side failures). The client never retries
+        #: on its own; this only informs the caller's policy.
+        self.retryable = retryable
+        #: Seconds from the response's ``Retry-After`` header, when the
+        #: failing response carried one in integer form.
+        self.retry_after = retry_after
+        #: Which call failed, as an operation name plus its identifying
+        #: argument where one exists (for example ``place_details
+        #: place_id=...``), set by the client methods. Never a URL, so
+        #: it cannot carry the API key.
+        self.context = context
 
 
 class AuthenticationError(PlacesError):
@@ -117,10 +138,12 @@ _KIND_TO_ERROR = {
 }
 
 
-def raise_translated(exc: BaseException) -> None:
+def raise_translated(exc: BaseException, context: Optional[str] = None) -> None:
     """Translate a Rust-core ``PlacesError`` into the hierarchy above.
 
-    Always raises; never returns.
+    ``context`` names the call that failed; the client methods supply
+    it so multi-request programs can tell which call an exception came
+    from. Always raises; never returns.
     """
     kind = getattr(exc, "kind", "api")
     error_type = _KIND_TO_ERROR.get(kind, ApiError)
@@ -132,4 +155,8 @@ def raise_translated(exc: BaseException) -> None:
         details=getattr(exc, "details", None),
         field_violations=getattr(exc, "field_violations", None),
         quota_violations=getattr(exc, "quota_violations", None),
+        status_mismatch=getattr(exc, "status_mismatch", False),
+        retryable=getattr(exc, "retryable", False),
+        retry_after=getattr(exc, "retry_after", None),
+        context=context,
     ) from exc

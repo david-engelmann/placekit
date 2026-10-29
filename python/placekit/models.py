@@ -298,6 +298,8 @@ class Place:
         postal = data.get("postalAddress")
         type_display = data.get("primaryTypeDisplayName")
         place_id = data.get("id") or str(data.get("name", "")).removeprefix("places/")
+        rating = data.get("rating")
+        user_rating_count = data.get("userRatingCount")
         return cls(
             id=place_id,
             name=data.get("name", ""),
@@ -307,8 +309,10 @@ class Place:
             location=LatLng.from_api(location) if location else None,
             types=list(data.get("types", [])),
             primary_type=data.get("primaryType"),
-            rating=data.get("rating"),
-            user_rating_count=data.get("userRatingCount"),
+            rating=float(rating) if rating is not None else None,
+            user_rating_count=(
+                int(user_rating_count) if user_rating_count is not None else None
+            ),
             price_level=data.get("priceLevel"),
             business_status=data.get("businessStatus"),
             national_phone_number=data.get("nationalPhoneNumber"),
