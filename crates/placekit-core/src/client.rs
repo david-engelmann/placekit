@@ -210,6 +210,7 @@ impl Client {
             return Err(Error::Decode {
                 detail: "place details response carried no id or name".to_owned(),
                 status: Some(status),
+                source: None,
             });
         }
         Ok(place)
@@ -335,6 +336,7 @@ impl Client {
             let media: PhotoMediaJson = serde_json::from_str(&body).map_err(|e| Error::Decode {
                 detail: e.to_string(),
                 status: Some(status.as_u16()),
+                source: Some(Box::new(e)),
             })?;
             return Ok(PhotoMedia::Uri(media));
         }
@@ -359,6 +361,7 @@ impl Client {
                 return Err(Error::Decode {
                     detail: format!("photo endpoint returned a non-image content type: {ct}"),
                     status: Some(status.as_u16()),
+                    source: None,
                 });
             }
         }
@@ -382,6 +385,7 @@ impl Client {
         String::from_utf8(bytes).map_err(|e| Error::Decode {
             detail: format!("response body was not valid UTF-8: {e}"),
             status: Some(status.as_u16()),
+            source: Some(Box::new(e)),
         })
     }
 
@@ -406,6 +410,7 @@ impl Client {
                     self.max_response_bytes
                 ),
                 status: Some(status.as_u16()),
+                source: None,
             }),
             BodyRead::Failed(read_error) => Err(Error::network_detail(format!(
                 "HTTP {} received, body read failed: {read_error}",
@@ -467,6 +472,7 @@ impl Client {
                 return Err(Error::Decode {
                     detail: format!("response body was not valid UTF-8: {e}"),
                     status: Some(status.as_u16()),
+                    source: Some(Box::new(e)),
                 });
             }
         };
@@ -482,6 +488,7 @@ impl Client {
             .map_err(|e| Error::Decode {
                 detail: e.to_string(),
                 status: Some(status.as_u16()),
+                source: Some(Box::new(e)),
             })
     }
 }
@@ -761,6 +768,7 @@ fn validate_photo_magic(
                 claimed.unwrap_or_default()
             ),
             status: Some(status),
+            source: None,
         })
     }
 }

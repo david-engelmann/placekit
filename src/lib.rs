@@ -103,6 +103,7 @@ fn value_to_py(py: Python<'_>, value: &Value) -> PyResult<PyObject> {
                 CoreError::Decode {
                     detail: e.to_string(),
                     status: None,
+                    source: Some(Box::new(e)),
                 },
             )
         })
@@ -120,6 +121,7 @@ where
                     CoreError::Decode {
                         detail: e.to_string(),
                         status: None,
+                        source: Some(Box::new(e)),
                     },
                 )
             })?;

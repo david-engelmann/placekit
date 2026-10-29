@@ -4,8 +4,6 @@
 //! bindings translate these into a matching Python exception hierarchy using
 //! [`Error::kind`].
 
-use serde::Deserialize;
-
 /// Errors returned by every `placekit-core` operation.
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -31,8 +29,7 @@ pub enum Error {
         retry_after: Option<u64>,
     },
     /// The requested resource does not exist (HTTP 404, `NOT_FOUND`).
-    #[error("not found (HTTP {status}): {message}")]
-    NotFound {
+    #[error("not found (HTTP {status}): {message}")]    NotFound {
         status: u16,
         google_status: String,
         message: String,
@@ -40,7 +37,8 @@ pub enum Error {
         details: Vec<serde_json::Value>,
         retry_after: Option<u64>,
     },
-    /// The request itself was malformed (HTTP 400, `INVALID_ARGUMENT`).
+    /// The request itself was malformed (HTTP 400, `INVALID_ARGUMENT`
+    /// or `FAILED_PRECONDITION`).
     #[error("invalid request (HTTP {status}): {message}")]
     InvalidRequest {
         status: u16,
@@ -63,12 +61,27 @@ pub enum Error {
     /// The request never produced an HTTP response (DNS, connect, TLS,
     /// timeout, or a dropped connection).
     #[error("network error: {detail}")]
-    Network { detail: String },
+    Network {
+        detail: String,
+        /// The underlying transport error, kept typed as the source
+        /// instead of being flattened into the message (R4-16). Absent
+        /// when there is no concrete cause or when the cause's own
+        /// rendering would leak a secret (see `network_redacted`).
+        #[source]
+        source: Option<Box<dyn std::error::Error + Send + Sync>>,
+    },
     /// The API returned a success status with a body that did not decode
     /// into the expected shape. `status` carries the HTTP status of that
     /// response when there was one.
     #[error("failed to decode response: {detail}")]
-    Decode { detail: String, status: Option<u16> },
+    Decode {
+        detail: String,
+        status: Option<u16>,
+        /// The underlying decode failure, kept typed as the source
+        /// (R4-16), when a concrete one exists.
+        #[source]
+        source: Option<Box<dyn std::error::Error + Send + Sync>>,
+    },
     /// The client itself was configured or called incorrectly. This is a
     /// programming error, detected before any network traffic.
     #[error("invalid client configuration or call: {detail}")]
@@ -135,23 +148,25 @@ impl Error {
         }
     }
 
-    /// Whether a caller side retry can plausibly succeed: quota errors,
-    /// and server side errors by HTTP status or Google status. No retry
-    /// is attempted by the client itself.
+    /// Whether a caller side retry can plausibly succeed. The rule is
+    /// status based, not variant based (R4-13): any error carrying a
+    /// retryable HTTP status (429, 500, 502, 503, 504) reports true,
+    /// whichever variant carries it; quota errors report true; a plain
+    /// API error whose Google status is a server side one reports true.
+    /// Errors carrying no status keep the conservative default, false.
+    /// No retry is attempted by the client itself.
     pub fn retryable(&self) -> bool {
+        if let Some(status) = self.status_code() {
+            if matches!(status, 429 | 500 | 502 | 503 | 504) {
+                return true;
+            }
+        }
         match self {
             Error::RateLimit { .. } => true,
-            Error::Api {
-                status,
-                google_status,
-                ..
-            } => {
-                matches!(*status, 500 | 502 | 503 | 504)
-                    || matches!(
-                        google_status.as_str(),
-                        "UNAVAILABLE" | "INTERNAL" | "DEADLINE_EXCEEDED"
-                    )
-            }
+            Error::Api { google_status, .. } => matches!(
+                google_status.as_str(),
+                "UNAVAILABLE" | "INTERNAL" | "DEADLINE_EXCEEDED"
+            ),
             _ => false,
         }
     }
@@ -283,10 +298,37 @@ impl Error {
         out
     }
 
-    /// Build an error from a non-success HTTP response. Parses the standard
-    /// Google error envelope (`{"error": {"code", "message", "status",
-    /// "details"}}`) and classifies by the Google status string first,
-    /// then by HTTP code.
+    /// Build an error from a non-success HTTP response. Parses the
+    /// standard Google error envelope (`{"error": {"code", "message",
+    /// "status", "details"}}`) and classifies it. The full rule set, in
+    /// the order applied (R4-26):
+    ///
+    /// 1. The envelope is read field by field (R4-09): a field that is
+    ///    present and rightly typed is used, a mistyped field is
+    ///    skipped, and the rest of the envelope still counts. Only a
+    ///    body with no usable envelope field at all falls back to the
+    ///    bare HTTP classification with the body echoed as the message.
+    /// 2. A Google status string decides the class first:
+    ///    `UNAUTHENTICATED` and `PERMISSION_DENIED` are auth errors,
+    ///    `RESOURCE_EXHAUSTED` is a rate limit, `NOT_FOUND` is not
+    ///    found, `INVALID_ARGUMENT` and `FAILED_PRECONDITION` are
+    ///    invalid requests, and the server side statuses `UNAVAILABLE`,
+    ///    `INTERNAL` and `DEADLINE_EXCEEDED` are plain API errors,
+    ///    which never fall through to the client side HTTP classes.
+    /// 3. With no status string, an envelope numeric `code` classifies
+    ///    the error in place of the HTTP status.
+    /// 4. Otherwise the HTTP status decides (401/403 auth, 429 rate
+    ///    limit, 404 not found, 400 invalid request, anything else a
+    ///    plain API error).
+    ///
+    /// The stored `status_code` is always the HTTP status, whichever
+    /// rule classified the error; the envelope `code` is kept
+    /// separately for cross checking (see `status_mismatch`).
+    ///
+    /// Hybrid bodies: a body carrying both a result shape and an error
+    /// envelope is classified purely as an error (R4-19). An envelope
+    /// is an explicit failure signal from the server; silently
+    /// returning the result half would hide it.
     pub fn from_response(status: u16, body: &str) -> Error {
         Self::from_response_detailed(status, body, None)
     }
@@ -298,17 +340,17 @@ impl Error {
         body: &str,
         content_type: Option<&str>,
     ) -> Error {
-        let parsed = serde_json::from_str::<GoogleErrorEnvelope>(body).ok();
+        let parsed = parse_envelope(body);
         let (google_status, message, code, details, class_status) = match parsed {
-            Some(env) => {
+            Some(parts) => {
                 // Classification follows the envelope status first.
                 // With no status string, an envelope that still carries
                 // a numeric code classifies by that code (an off-spec
                 // but observed shape); otherwise the HTTP status
                 // decides. The stored status stays the HTTP one below
                 // either way.
-                let class_status = if env.error.status.is_none() {
-                    env.error
+                let class_status = if parts.status.is_none() {
+                    parts
                         .code
                         .and_then(|c| u16::try_from(c).ok())
                         .unwrap_or(status)
@@ -316,13 +358,13 @@ impl Error {
                     status
                 };
                 (
-                    env.error.status.unwrap_or_default(),
-                    env.error
+                    parts.status.unwrap_or_default(),
+                    parts
                         .message
                         .map(|m| m.chars().take(500).collect())
                         .unwrap_or_else(|| format!("HTTP {status}")),
-                    env.error.code,
-                    env.error.details.unwrap_or_default(),
+                    parts.code,
+                    parts.details,
                     class_status,
                 )
             }
@@ -443,12 +485,8 @@ impl Error {
     /// a success HTTP status, where they would otherwise decode as an
     /// empty or defaulted success value.
     pub(crate) fn has_error_envelope(body: &str) -> bool {
-        serde_json::from_str::<GoogleErrorEnvelope>(body)
-            .map(|env| {
-                env.error.status.is_some()
-                    || env.error.code.is_some()
-                    || env.error.message.is_some()
-            })
+        parse_envelope(body)
+            .map(|parts| parts.status.is_some() || parts.code.is_some() || parts.message.is_some())
             .unwrap_or(false)
     }
 
@@ -456,24 +494,39 @@ impl Error {
         // Prefix the detail with a stable class token so callers can
         // branch on the transport cause without matching reqwest prose;
         // a timeout in particular must not read as a decode failure.
-        let class = if err.is_timeout() {
-            "timeout"
-        } else if err.is_connect() {
-            "connect"
-        } else if err.is_redirect() {
-            "redirect"
-        } else if err.is_body() || err.is_decode() {
-            "body"
-        } else {
-            "network"
-        };
+        // The reqwest error itself is kept as the typed source (R4-16).
+        let class = transport_class(&err);
         Error::Network {
             detail: format!("{class}: {err}"),
+            source: Some(Box::new(err)),
+        }
+    }
+
+    /// Like [`Error::network`], but for request paths whose URL carries
+    /// a secret (R4-07): the photo media URL carries the API key as a
+    /// query parameter, and a reqwest error's Display embeds the full
+    /// URL, so the transport failure is classified without formatting
+    /// the error, and the cause is dropped rather than kept as a
+    /// source that would render the same URL to anyone printing the
+    /// chain. The class token and the HTTP status, when the failure
+    /// carried one, are the diagnostics that remain.
+    pub(crate) fn network_redacted(err: reqwest::Error) -> Error {
+        let class = transport_class(&err);
+        let detail = match err.status() {
+            Some(status) => format!("{class}: transport error (HTTP {})", status.as_u16()),
+            None => format!("{class}: transport error"),
+        };
+        Error::Network {
+            detail,
+            source: None,
         }
     }
 
     pub(crate) fn network_detail(detail: String) -> Error {
-        Error::Network { detail }
+        Error::Network {
+            detail,
+            source: None,
+        }
     }
 
     pub(crate) fn config(detail: impl Into<String>) -> Error {
@@ -483,6 +536,21 @@ impl Error {
     }
 }
 
+/// The stable class token for a transport failure, shared by the
+/// error mappings so the wording cannot drift between them.
+fn transport_class(err: &reqwest::Error) -> &'static str {
+    if err.is_timeout() {
+        "timeout"
+    } else if err.is_connect() {
+        "connect"
+    } else if err.is_redirect() {
+        "redirect"
+    } else if err.is_body() || err.is_decode() {
+        "body"
+    } else {
+        "network"
+    }
+}
 /// Message for an error response whose body is not a Google envelope.
 /// The body text is the only diagnostic a proxy or load balancer
 /// failure leaves, so it is echoed up to a cap; truncation is marked
@@ -502,17 +570,39 @@ fn non_envelope_message(status: u16, body: &str, content_type: Option<&str>) -> 
     message
 }
 
-#[derive(Debug, Deserialize)]
-struct GoogleErrorEnvelope {
-    error: GoogleErrorBody,
+/// One usable field set read from a Google error envelope. The parse
+/// is field by field on purpose (R4-09): each field is taken when it is
+/// present and rightly typed and skipped when it is not, so one
+/// mistyped field cannot discard the status, message and details the
+/// rest of the envelope carried.
+struct EnvelopeParts {
+    status: Option<String>,
+    message: Option<String>,
+    code: Option<i64>,
+    details: Vec<serde_json::Value>,
 }
 
-#[derive(Debug, Deserialize)]
-struct GoogleErrorBody {
-    code: Option<i64>,
-    message: Option<String>,
-    status: Option<String>,
-    details: Option<Vec<serde_json::Value>>,
+/// Read the envelope fields of a response body, or `None` when the
+/// body carries no `error` object at all.
+fn parse_envelope(body: &str) -> Option<EnvelopeParts> {
+    let value: serde_json::Value = serde_json::from_str(body).ok()?;
+    let error = value.get("error")?.as_object()?;
+    Some(EnvelopeParts {
+        status: error
+            .get("status")
+            .and_then(|v| v.as_str())
+            .map(str::to_owned),
+        message: error
+            .get("message")
+            .and_then(|v| v.as_str())
+            .map(str::to_owned),
+        code: error.get("code").and_then(serde_json::Value::as_i64),
+        details: error
+            .get("details")
+            .and_then(|v| v.as_array())
+            .cloned()
+            .unwrap_or_default(),
+    })
 }
 
 #[cfg(test)]
@@ -743,13 +833,91 @@ mod tests {
         let err = Error::Decode {
             detail: "bad body".to_owned(),
             status: Some(200),
+            source: None,
         };
         assert_eq!(err.status_code(), Some(200));
         assert_eq!(err.google_status(), None);
         let err = Error::Decode {
             detail: "local".to_owned(),
             status: None,
+            source: None,
         };
         assert_eq!(err.status_code(), None);
+    }
+
+    #[test]
+    fn mistyped_envelope_fields_are_skipped_not_fatal() {
+        // R4-09: a string typed code used to discard the whole
+        // envelope. The status, message and details survive; only the
+        // mistyped field is skipped.
+        let body = r#"{"error": {"code": "400", "message": "Missing textQuery", "status": "INVALID_ARGUMENT", "details": [{"@type": "type.googleapis.com/google.rpc.BadRequest", "fieldViolations": [{"field": "textQuery", "description": "bad"}]}]}}"#;
+        let err = Error::from_response(400, body);
+        assert_eq!(err.kind(), "invalid_request");
+        assert_eq!(err.google_status(), Some("INVALID_ARGUMENT"));
+        assert_eq!(err.error_code(), None);
+        assert!(err.to_string().contains("Missing textQuery"));
+        assert_eq!(err.details().len(), 1);
+        // A mistyped status falls back to the code and HTTP rules,
+        // and the message still survives.
+        let body = r#"{"error": {"code": 429, "message": "Quota gone", "status": 7}}"#;
+        let err = Error::from_response(429, body);
+        assert_eq!(err.kind(), "rate_limit");
+        assert_eq!(err.google_status(), None);
+        assert!(err.to_string().contains("Quota gone"));
+        // A mistyped details field drops only the details.
+        let body = r#"{"error": {"code": 404, "message": "gone", "status": "NOT_FOUND", "details": "none"}}"#;
+        let err = Error::from_response(404, body);
+        assert_eq!(err.kind(), "not_found");
+        assert!(err.details().is_empty());
+        assert!(Error::has_error_envelope(
+            r#"{"error": {"code": "x", "status": "NOT_FOUND"}}"#
+        ));
+    }
+
+    #[test]
+    fn retryable_follows_the_status_on_any_variant() {
+        // R4-13: a retryable status reports retryable whichever
+        // variant carries it, not only on the Api variant.
+        let err = Error::Decode {
+            detail: "body".to_owned(),
+            status: Some(503),
+            source: None,
+        };
+        assert!(err.retryable());
+        let err = Error::Decode {
+            detail: "body".to_owned(),
+            status: Some(429),
+            source: None,
+        };
+        assert!(err.retryable());
+        let err = Error::Decode {
+            detail: "body".to_owned(),
+            status: Some(404),
+            source: None,
+        };
+        assert!(!err.retryable());
+        let err = Error::Decode {
+            detail: "local".to_owned(),
+            status: None,
+            source: None,
+        };
+        assert!(!err.retryable());
+    }
+
+    #[test]
+    fn sources_are_kept_typed() {
+        // R4-16: a concrete cause is reachable through the standard
+        // source chain instead of being flattened into the message.
+        use std::error::Error as StdError;
+        let cause = std::io::Error::new(std::io::ErrorKind::InvalidData, "boom");
+        let err = Error::Decode {
+            detail: "bad body".to_owned(),
+            status: Some(200),
+            source: Some(Box::new(cause)),
+        };
+        let source = StdError::source(&err).expect("a source is carried");
+        assert!(source.to_string().contains("boom"));
+        let err = Error::network_detail("plain".to_owned());
+        assert!(StdError::source(&err).is_none());
     }
 }
