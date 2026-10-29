@@ -15,6 +15,8 @@ All notable changes to placekit are recorded here. The format follows Keep a Cha
 - `make check`, one gate for the whole repo (rustfmt, clippy, Rust tests, version coherence, em dash scan, Python tests), with a CI workflow that runs it word for word.
 - `scripts/check_version.py`, which fails unless the version agrees across the Cargo manifests, the changelog, and the Python package, and doubles as the release tag guard in the publish workflow.
 - `scripts/check_no_emdash.py`, a codepoint scan that keeps em dashes out of tracked text files.
+- Core side validation of request coordinates, circle radii and EV charging rates, so non-finite or out-of-range values fail locally with a configuration error instead of serializing as JSON null or passing to the API unchanged.
+- `Retry-After` headers in HTTP date form are read alongside the delta seconds form, with a date in the past meaning retry now.
 
 ### Changed
 
@@ -25,6 +27,12 @@ All notable changes to placekit are recorded here. The format follows Keep a Cha
 - The offline test stub now honours field masks, returns autocomplete distances only for requests with an origin, and serves photos through a redirect, so the suite asserts the behaviour the real API actually has.
 
 - Release wheels now build on native arm runners (ubuntu-24.04-arm, macos-14) instead of cross runners, with Linux wheels pinned to manylinux 2_28, and the publish job checks the tag against the manifests before uploading to PyPI through trusted publishing.
+- Client construction validates the base URL. A base URL carrying a query string or a fragment, or one whose scheme is not http or https, fails at build time instead of silently rerouting every request, while path prefixes keep working and dot segments can no longer escape the configured prefix.
+- The Rust core no longer follows redirects automatically, so the API key header can never be resent to a redirect target. Photo media redirects are followed manually with the API key attached to the first request only.
+- Field masks reject duplicate paths, empty segments, wildcard segments and non-ASCII characters, and are bounded at 100 paths and a 4096 character header value.
+- The native module rejects timeout values above one hour, the same cap the Python clients document, instead of only the Python layer enforcing it.
+- Errors from the Rust core keep their underlying transport or decode cause as a typed source instead of flattening it into message prose.
+- Decoded response values are passed through without clamping or range checks, a deliberate posture now stated in the core documentation. The client is a transport and does not hide what the API returned, and request values the caller controls are validated before sending instead.
 - The dev profile keeps only line-table debug info, so incremental `maturin develop` builds stay fast; the release profile is unchanged.
 - The README now leads with the prebuilt wheel install story; building from source moved into a collapsed section.
 
@@ -38,6 +46,11 @@ All notable changes to placekit are recorded here. The format follows Keep a Cha
 - Envelope error messages are capped at 500 characters, `google_status` is `None` rather than an empty string when no envelope status was parsed, server side canonical statuses such as `DEADLINE_EXCEEDED` classify as `ApiError` instead of falling through to the HTTP classes, and truncated non-envelope bodies say they were truncated.
 - Exceptions now carry `status_mismatch`, `retryable`, `retry_after` and `context` attributes, model conversion failures raise `DecodeError` instead of escaping as bare builtin exceptions, and unknown top level fields on Autocomplete responses survive into `raw` as they already did on search.
 - `page_size` gets the same range validation as the other numeric arguments instead of reaching the API unchecked or leaking an internal conversion error, error envelopes carrying a code or a message but no status string raise the exception their numeric code maps to instead of succeeding silently, and error envelopes on the photo download path raise that mapped exception with its Google status and server message instead of a decode error that dropped both.
+- Partial nested response objects decode with defaults instead of failing the entire response, so a location carrying only a latitude, a viewport carrying only one corner, or a circle carrying only a center no longer poisons every place in the result.
+- Unknown fields inside nested response objects are preserved into the raw view like top level fields, counts and dimensions that arrive string encoded or as exactly integral floats decode normally, a zero start offset in autocomplete matches survives reserialization, and unknown fields carrying integers beyond 64 bits keep every digit.
+- One mistyped field in an error envelope no longer discards the Google status, message and details the rest of the envelope carried, and retryability follows the HTTP status on every error type that carries one instead of only one variant.
+- A failed photo request can no longer leak the API key into the exception message through the photo URL, a photo response with no declared image content type is refused instead of being returned as photo bytes, an empty JSON object in the skip redirect photo form is a decode error instead of a photo result pointing at an empty URI, and a failed body read after a success status carries that status on the error instead of losing it.
+- Empty optional strings and lists are omitted from request bodies and empty Place Details query parameters are omitted, instead of being sent as empty values whose meaning differs from absence at the API, and a zero response size cap is rejected when the client is built instead of failing every call.
 
 ## [0.1.0] - 2026-10-28
 
