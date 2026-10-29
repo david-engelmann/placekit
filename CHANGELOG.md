@@ -37,6 +37,7 @@ All notable changes to placekit are recorded here. The format follows Keep a Cha
 - Non-finite timeout values raise `ConfigError` instead of panicking across the FFI boundary, timeouts are bounded at one hour, and numeric arguments such as result counts and photo dimensions are range validated in Python before they reach the core.
 - Envelope error messages are capped at 500 characters, `google_status` is `None` rather than an empty string when no envelope status was parsed, server side canonical statuses such as `DEADLINE_EXCEEDED` classify as `ApiError` instead of falling through to the HTTP classes, and truncated non-envelope bodies say they were truncated.
 - Exceptions now carry `status_mismatch`, `retryable`, `retry_after` and `context` attributes, model conversion failures raise `DecodeError` instead of escaping as bare builtin exceptions, and unknown top level fields on Autocomplete responses survive into `raw` as they already did on search.
+- `page_size` gets the same range validation as the other numeric arguments instead of reaching the API unchecked or leaking an internal conversion error, error envelopes carrying a code or a message but no status string raise the exception their numeric code maps to instead of succeeding silently, and error envelopes on the photo download path raise that mapped exception with its Google status and server message instead of a decode error that dropped both.
 
 ## [0.1.0] - 2026-10-28
 

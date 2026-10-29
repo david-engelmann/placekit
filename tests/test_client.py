@@ -555,8 +555,37 @@ def test_error_envelope_on_200_details_and_autocomplete_raise(client, raw_respon
     assert excinfo.value.status_code == 200
     with pytest.raises(AuthenticationError):
         client.autocomplete("Bianco")
-    with pytest.raises(AuthenticationError):
+
+
+def test_error_envelope_on_200_nearby_search_raises(client, raw_response):
+    raw_response(200, fixture_bytes("error_denied.json"))
+    with pytest.raises(AuthenticationError) as excinfo:
         client.nearby_search((-33.8668, 151.2071), 800.0)
+    assert excinfo.value.status_code == 200
+    assert excinfo.value.google_status == "PERMISSION_DENIED"
+    assert "has not been used" in excinfo.value.message
+
+
+def test_error_envelope_on_200_without_status_maps_by_code(
+    client, raw_response
+):
+    # The red team's exact case: an envelope carrying a code and a
+    # message but no status field used to decode as a successful
+    # empty result. It raises now, classified by the numeric code.
+    raw_response(
+        200, b'{"error": {"code": 403, "message": "denied but no status field"}}'
+    )
+    with pytest.raises(AuthenticationError) as excinfo:
+        client.text_search("cafes")
+    assert excinfo.value.status_code == 200
+    assert excinfo.value.google_status is None
+    assert excinfo.value.error_code == 403
+    assert "denied but no status field" in excinfo.value.message
+    with pytest.raises(AuthenticationError) as excinfo:
+        client.place_details("ChIJrTLr-GyuEmsRBfy61i59si0")
+    assert excinfo.value.status_code == 200
+    assert excinfo.value.google_status is None
+    assert "denied but no status field" in excinfo.value.message
 
 
 def test_error_envelope_on_200_photo_raises(client, raw_response):
@@ -570,6 +599,24 @@ def test_error_envelope_on_200_photo_raises(client, raw_response):
         )
     assert excinfo.value.status_code == 200
     assert excinfo.value.google_status == "PERMISSION_DENIED"
+
+
+def test_error_envelope_on_200_photo_json_content_type_raises(
+    client, raw_response
+):
+    # Real Google errors carry application/json. On the photo bytes
+    # path that content type used to short-circuit into a DecodeError
+    # about a non-image body, dropping the envelope's status and
+    # message; the envelope now maps like on every other endpoint.
+    raw_response(200, fixture_bytes("error_denied.json"))
+    with pytest.raises(AuthenticationError) as excinfo:
+        client.place_photo(
+            "places/ChIJrTLr-GyuEmsRBfy61i59si0/photos/ATJ83zh8vExample",
+            max_width_px=400,
+        )
+    assert excinfo.value.status_code == 200
+    assert excinfo.value.google_status == "PERMISSION_DENIED"
+    assert "has not been used" in excinfo.value.message
 
 
 def test_error_envelope_on_200_photo_skip_redirect_raises(client, raw_response):
@@ -774,6 +821,27 @@ def test_max_results_range_validated(client, bad):
         client.text_search("cafes", max_results=bad)
     with pytest.raises(ConfigError):
         client.nearby_search((-33.8668, 151.2071), 800.0, max_results=bad)
+
+
+@pytest.mark.parametrize("bad", [-1, 0, 21, 999999, 2**32, True])
+def test_page_size_range_validated(client, stub_server, bad):
+    # page_size bypassed the shared numeric validation: 0, 21 and
+    # 999999 went to the API verbatim, and negative or huge values
+    # leaked an OverflowError message inside the ConfigError. Every
+    # rejected value must fail before anything reaches the stub.
+    stub_server.last_request = None
+    with pytest.raises(ConfigError) as excinfo:
+        client.text_search("cafes", page_size=bad)
+    assert "page_size" in str(excinfo.value)
+    assert "OverflowError" not in str(excinfo.value)
+    assert stub_server.last_request is None
+
+
+def test_page_size_boundaries_reach_the_wire(client, stub_server):
+    for size in (1, 20):
+        client.text_search("cafes", page_size=size)
+        body = json.loads(stub_server.last_request["body"])
+        assert body["pageSize"] == size
 
 
 @pytest.mark.parametrize("bad", [-1, 0, 4801, 2**32])

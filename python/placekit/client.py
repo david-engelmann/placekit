@@ -196,8 +196,8 @@ class _Base:
             {
                 "textQuery": query,
                 "maxResultCount": _Base._validate_int_range(
-                "max_results", max_results, 1, 20
-            ),
+                    "max_results", max_results, 1, 20
+                ),
                 "pageToken": page_token,
                 "languageCode": language,
                 "regionCode": region,
@@ -208,7 +208,9 @@ class _Base:
                 "includedType": included_type,
                 "locationBias": _location_body(location_bias),
                 "locationRestriction": _location_body(location_restriction),
-                "pageSize": page_size,
+                "pageSize": _Base._validate_int_range(
+                    "page_size", page_size, 1, 20
+                ),
                 "minRating": min_rating,
                 "evOptions": ev_options,
                 "searchAlongRouteParameters": search_along_route,
@@ -252,8 +254,8 @@ class _Base:
                     else None
                 ),
                 "maxResultCount": _Base._validate_int_range(
-                "max_results", max_results, 1, 20
-            ),
+                    "max_results", max_results, 1, 20
+                ),
                 "languageCode": language,
                 "regionCode": region,
                 "rankPreference": rank_preference,
