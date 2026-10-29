@@ -8,8 +8,10 @@ to use inside an event loop. Methods return the typed models in
 
 from __future__ import annotations
 
+import asyncio
 import math
-from typing import Any, Iterable, Optional
+from collections.abc import Mapping
+from typing import Any, Callable, Iterable, Optional
 
 from . import _placekit
 from ._placekit import PlacesError as _CorePlacesError
@@ -30,17 +32,124 @@ def _drop_none(body: dict[str, Any]) -> dict[str, Any]:
     return {key: value for key, value in body.items() if value is not None}
 
 
-def _point(value: LatLng | tuple[float, float]) -> dict[str, float]:
+def _string_list(
+    name: str, value: Optional[Iterable[str]]
+) -> Optional[list[str]]:
+    """Materialize an iterable-of-strings parameter exactly once.
+
+    A bare string or bytes value is the classic slip for these slots:
+    it is rejected with a ConfigError naming the parameter instead of
+    being shredded into one-character items and sent. Every item must
+    be a string. An empty result means the parameter is omitted,
+    uniformly for every slot.
+    """
+    if value is None:
+        return None
+    if isinstance(value, (str, bytes)):
+        raise ConfigError(
+            f"{name} must be an iterable of strings, not a single "
+            f"string: {value!r}"
+        )
+    try:
+        items = list(value)
+    except TypeError as exc:
+        raise ConfigError(
+            f"{name} must be an iterable of strings, got {value!r}"
+        ) from exc
+    for item in items:
+        if not isinstance(item, str):
+            raise ConfigError(
+                f"{name} items must be strings, got {item!r}"
+            )
+    return items or None
+
+
+def _validate_bool(name: str, value: Optional[bool]) -> Optional[bool]:
+    """Accept only a real bool for a boolean body field.
+
+    Anything else (the string "false", 0/1, a list) used to be coerced
+    by truthiness in the conversion layer, silently inverting intent
+    on the wire.
+    """
+    if value is None or isinstance(value, bool):
+        return value
+    raise ConfigError(f"{name} must be a bool, got {value!r}")
+
+
+def _validate_coordinate(name: str, value: Any, low: float, high: float) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ConfigError(f"{name} must be a real number, got {value!r}")
+    result = float(value)
+    if not math.isfinite(result) or not low <= result <= high:
+        raise ConfigError(
+            f"{name} must be finite and within {low:g} to {high:g}, "
+            f"got {value!r}"
+        )
+    return result
+
+
+def _validate_lat_lng(
+    value: LatLng | tuple[float, float] | list[float] | dict[str, Any],
+    name: str,
+) -> dict[str, float]:
+    """Validate one coordinate pair and return it in wire shape.
+
+    Only ordered containers are accepted (LatLng, tuple, list, or a
+    wire-shape dict); a set would unpack latitude and longitude in an
+    arbitrary order. Values must be real numbers, bools are not
+    numbers here, NaN and infinity are rejected instead of serializing
+    as JSON null, and the ranges match the core's.
+    """
     if isinstance(value, LatLng):
-        return value.to_api()
-    latitude, longitude = value
-    return {"latitude": float(latitude), "longitude": float(longitude)}
+        latitude: Any = value.latitude
+        longitude: Any = value.longitude
+    elif isinstance(value, Mapping):
+        if "latitude" not in value or "longitude" not in value:
+            raise ConfigError(
+                f"{name} must carry latitude and longitude, got {value!r}"
+            )
+        latitude = value["latitude"]
+        longitude = value["longitude"]
+    elif isinstance(value, (tuple, list)):
+        if len(value) != 2:
+            raise ConfigError(
+                f"{name} must be a (latitude, longitude) pair, got {value!r}"
+            )
+        latitude, longitude = value
+    else:
+        raise ConfigError(
+            f"{name} must be a LatLng, a (latitude, longitude) pair or "
+            f"a latitude/longitude dict, got {value!r}"
+        )
+    return {
+        "latitude": _validate_coordinate(f"{name} latitude", latitude, -90, 90),
+        "longitude": _validate_coordinate(
+            f"{name} longitude", longitude, -180, 180
+        ),
+    }
+
+
+def _point(value: LatLng | tuple[float, float]) -> dict[str, float]:
+    return _validate_lat_lng(value, "location")
 
 
 def _circle_body(
     location: LatLng | tuple[float, float], radius_m: float
 ) -> dict[str, Any]:
-    return {"circle": {"center": _point(location), "radius": float(radius_m)}}
+    if (
+        isinstance(radius_m, bool)
+        or not isinstance(radius_m, (int, float))
+        or not math.isfinite(float(radius_m))
+    ):
+        raise ConfigError(
+            f"radius_m must be a finite number, got {radius_m!r}"
+        )
+    return {
+        "circle": {
+            "center": _validate_lat_lng(location, "location"),
+            "radius": float(radius_m),
+        }
+    }
 
 
 def _location_body(value: Optional[dict[str, Any]]) -> Optional[dict[str, Any]]:
@@ -48,50 +157,72 @@ def _location_body(value: Optional[dict[str, Any]]) -> Optional[dict[str, Any]]:
 
     Callers may describe a circle as ``{"circle": {"center":
     (latitude, longitude), "radius": meters}}`` with the center as a
-    ``LatLng`` or a plain tuple, or pass a rectangle with ``low`` and
-    ``high`` corners in either form. Values already in wire shape pass
-    through. The Rust core validates the result (one shape only, bias
-    circle radius within range, bias and restriction mutually exclusive).
+    ``LatLng``, a tuple, a list or a wire-shape dict, or pass a
+    rectangle with ``low`` and ``high`` corners in any of those forms.
+    Values already in wire shape pass through. Coordinates are range
+    checked here; the Rust core validates the rest (one shape only,
+    bias circle radius within range, bias and restriction mutually
+    exclusive). Non-mapping input is a ConfigError, never coerced
+    through ``dict(...)``.
     """
     if value is None:
         return None
+    if not isinstance(value, Mapping):
+        raise ConfigError(
+            f"location bias or restriction must be a dict, got {value!r}"
+        )
     result = dict(value)
     circle = result.get("circle")
     if isinstance(circle, dict) and "center" in circle:
         circle = dict(circle)
         center = circle["center"]
-        if isinstance(center, LatLng) or isinstance(center, tuple):
-            circle["center"] = _point(center)
+        if isinstance(center, (LatLng, tuple, list, Mapping)):
+            circle["center"] = _validate_lat_lng(center, "circle center")
         result["circle"] = circle
     rectangle = result.get("rectangle")
     if isinstance(rectangle, dict):
         rectangle = dict(rectangle)
         for corner in ("low", "high"):
             point = rectangle.get(corner)
-            if isinstance(point, LatLng) or isinstance(point, tuple):
-                rectangle[corner] = _point(point)
+            if isinstance(point, (LatLng, tuple, list, Mapping)):
+                rectangle[corner] = _validate_lat_lng(
+                    point, f"rectangle {corner} corner"
+                )
         result["rectangle"] = rectangle
     return result
 
 
 def _routing_body(value: Optional[dict[str, Any]]) -> Optional[dict[str, Any]]:
     """Normalize routing parameters, converting an origin given as a
-    ``LatLng`` or a tuple into wire shape."""
+    ``LatLng``, a tuple, a list or a wire-shape dict into wire shape."""
     if value is None:
         return None
+    if not isinstance(value, Mapping):
+        raise ConfigError(f"routing_parameters must be a dict, got {value!r}")
     result = dict(value)
     origin = result.get("origin")
-    if isinstance(origin, LatLng) or isinstance(origin, tuple):
-        result["origin"] = _point(origin)
+    if isinstance(origin, (LatLng, tuple, list, Mapping)):
+        result["origin"] = _validate_lat_lng(origin, "routing origin")
     return result
 
 
-def _photo_result(tagged: tuple) -> PhotoMedia | PhotoUriResult:
+def _mapping_body(name: str, value: Optional[dict[str, Any]]) -> Optional[dict[str, Any]]:
+    """Validate a bare dict escape-hatch parameter's shape."""
+    if value is None:
+        return None
+    if not isinstance(value, Mapping):
+        raise ConfigError(f"{name} must be a dict, got {value!r}")
+    return dict(value)
+
+
+def _photo_result(tagged: tuple[str, Any, Any]) -> PhotoMedia | PhotoUriResult:
     """Turn the core's tagged photo tuple into a public model."""
     tag, first, second = tagged
     if tag == "uri":
         return PhotoUriResult(photo_uri=first, name=second or "")
-    return PhotoMedia(content=first, content_type=second)
+    if tag == "bytes":
+        return PhotoMedia(content=first, content_type=second)
+    raise DecodeError(f"photo result carried an unknown tag: {tag!r}")
 
 
 #: The longest per-request timeout the Python clients accept, in
@@ -109,8 +240,18 @@ class _Base:
         base_url: Optional[str] = None,
         timeout: Optional[float] = None,
     ) -> None:
-        if not api_key or not api_key.strip():
+        if not isinstance(api_key, str):
+            raise ConfigError(f"api_key must be a string, got {api_key!r}")
+        if not api_key.strip():
             raise ConfigError("api_key must not be empty")
+        if api_key != api_key.strip() or not api_key.isascii() or any(
+            char.isspace() for char in api_key
+        ):
+            raise ConfigError(
+                "api_key must not contain whitespace or non-ASCII characters"
+            )
+        if base_url is not None and not isinstance(base_url, str):
+            raise ConfigError(f"base_url must be a string, got {base_url!r}")
         if timeout is not None and (
             isinstance(timeout, bool)
             or not isinstance(timeout, (int, float))
@@ -119,8 +260,9 @@ class _Base:
         ):
             raise ConfigError(
                 "timeout must be a positive, finite number of seconds, "
-                f"at most {_MAX_TIMEOUT_SECONDS}"
+                f"at most {_MAX_TIMEOUT_SECONDS}, got {timeout!r}"
             )
+        self._closed = False
         try:
             self._inner = _placekit.Client(api_key, base_url, timeout)
         except _CorePlacesError as exc:
@@ -131,6 +273,97 @@ class _Base:
             # plain ValueError; inside this package they are
             # ConfigError, the one documented type for local misuse.
             raise ConfigError(str(exc)) from exc
+
+    # -- lifecycle and duplication -------------------------------------
+
+    def close(self) -> None:
+        """Release the underlying native client.
+
+        Idempotent. Any later call on this client raises ConfigError.
+        Both clients are context managers (``with`` for Client,
+        ``async with`` for AsyncClient) that close on exit.
+        """
+        self._inner = None
+        self._closed = True
+
+    def _ensure_open(self, context: str) -> None:
+        if self._closed:
+            raise ConfigError("client is closed", context=context)
+
+    def __reduce__(self):
+        # The native handle is a live resource; the default pickle
+        # error used to name the hidden native class, a phantom
+        # "builtins.Client" users never imported.
+        raise TypeError(
+            "placekit clients hold a live native resource and cannot "
+            "be pickled or copied; create a new client instead"
+        )
+
+    def __copy__(self):
+        return self.__reduce__()
+
+    def __deepcopy__(self, memo):
+        return self.__reduce__()
+
+    @staticmethod
+    def _with_context(exc: ConfigError, context: str) -> ConfigError:
+        """Attach the calling method as context to a locally raised
+        ConfigError that does not carry one yet (RC-03)."""
+        if exc.context is None:
+            return ConfigError(str(exc), context=context)
+        return exc
+
+    @staticmethod
+    def _check_no_running_loop(context: str) -> None:
+        """A sync call inside a running event loop would freeze the
+        whole loop for the request duration; refuse and point at
+        AsyncClient instead (RC-13)."""
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        raise ConfigError(
+            "the sync Client cannot be called from a running event "
+            "loop; use AsyncClient inside async code",
+            context=context,
+        )
+
+    @staticmethod
+    def _require_str(name: str, value: Any, context: str) -> str:
+        if not isinstance(value, str):
+            raise ConfigError(
+                f"{name} must be a string, got {value!r}", context=context
+            )
+        return value
+
+    @staticmethod
+    def _validate_photo_args(
+        photo_name: Any,
+        max_width_px: Optional[int],
+        max_height_px: Optional[int],
+        skip_http_redirect: Any,
+        context: str,
+    ) -> None:
+        """place_photo validation, enforced here before the native
+        call: a string name, each dimension in range, at least one
+        dimension present, and a real bool for the redirect flag."""
+        _Base._require_str("photo_name", photo_name, context)
+        try:
+            _Base._validate_int_range("max_width_px", max_width_px, 1, 4800)
+            _Base._validate_int_range("max_height_px", max_height_px, 1, 4800)
+        except ConfigError as exc:
+            raise _Base._with_context(exc, context) from exc
+        if max_width_px is None and max_height_px is None:
+            raise ConfigError(
+                "place_photo requires at least one of max_width_px "
+                "and max_height_px",
+                context=context,
+            )
+        if not isinstance(skip_http_redirect, bool):
+            raise ConfigError(
+                f"skip_http_redirect must be a bool, got {skip_http_redirect!r}",
+                context=context,
+            )
 
     @staticmethod
     def _validate_int_range(
@@ -153,18 +386,43 @@ class _Base:
         return value
 
     @staticmethod
-    def _convert(convert, data):
+    def _validate_float_range(
+        name: str, value: Optional[float], low: float, high: float
+    ) -> Optional[float]:
+        """Validate an optional real-number argument, bools rejected,
+        NaN and infinity rejected instead of reaching the core."""
+        if value is None:
+            return None
+        if (
+            isinstance(value, bool)
+            or not isinstance(value, (int, float))
+            or not math.isfinite(float(value))
+            or not low <= float(value) <= high
+        ):
+            raise ConfigError(
+                f"{name} must be a number between {low:g} and {high:g}, "
+                f"got {value!r}"
+            )
+        return float(value)
+
+    @staticmethod
+    def _convert(convert: Callable[[Any], Any], data: Any, context: str):
         """Run a model conversion over a decoded response.
 
         The model layer is a second decoder; its builtin failures
         (KeyError, TypeError and friends) are translated into
-        DecodeError so callers only ever see the typed hierarchy.
+        DecodeError so callers only ever see the typed hierarchy. The
+        DecodeError carries the calling method as its context.
         """
         try:
             return convert(data)
+        except DecodeError as exc:
+            if exc.context is None:
+                raise DecodeError(str(exc), context=context) from exc
+            raise
         except (KeyError, TypeError, ValueError, AttributeError) as exc:
             raise DecodeError(
-                f"response failed model conversion: {exc!r}"
+                f"response failed model conversion: {exc!r}", context=context
             ) from exc
 
     # Body builders shared by the sync and async method sets.
@@ -202,23 +460,33 @@ class _Base:
                 "languageCode": language,
                 "regionCode": region,
                 "rankPreference": rank_preference,
-                "openNow": open_now,
-                "priceLevels": list(price_levels) if price_levels is not None else None,
-                "strictTypeFiltering": strict_type_filtering,
+                "openNow": _validate_bool("open_now", open_now),
+                "priceLevels": _string_list("price_levels", price_levels),
+                "strictTypeFiltering": _validate_bool(
+                    "strict_type_filtering", strict_type_filtering
+                ),
                 "includedType": included_type,
                 "locationBias": _location_body(location_bias),
                 "locationRestriction": _location_body(location_restriction),
                 "pageSize": _Base._validate_int_range(
                     "page_size", page_size, 1, 20
                 ),
-                "minRating": min_rating,
-                "evOptions": ev_options,
-                "searchAlongRouteParameters": search_along_route,
-                "routingParameters": _routing_body(routing_parameters),
-                "includePureServiceAreaBusinesses": (
-                    include_pure_service_area_businesses
+                "minRating": _Base._validate_float_range(
+                    "min_rating", min_rating, 0, 5
                 ),
-                "includeFutureOpeningBusinesses": include_future_opening_businesses,
+                "evOptions": _mapping_body("ev_options", ev_options),
+                "searchAlongRouteParameters": _mapping_body(
+                    "search_along_route", search_along_route
+                ),
+                "routingParameters": _routing_body(routing_parameters),
+                "includePureServiceAreaBusinesses": _validate_bool(
+                    "include_pure_service_area_businesses",
+                    include_pure_service_area_businesses,
+                ),
+                "includeFutureOpeningBusinesses": _validate_bool(
+                    "include_future_opening_businesses",
+                    include_future_opening_businesses,
+                ),
             }
         )
 
@@ -241,17 +509,13 @@ class _Base:
         return _drop_none(
             {
                 "locationRestriction": _circle_body(location, radius_m),
-                "includedTypes": list(included_types) if included_types is not None else None,
-                "excludedTypes": list(excluded_types) if excluded_types is not None else None,
-                "includedPrimaryTypes": (
-                    list(included_primary_types)
-                    if included_primary_types is not None
-                    else None
+                "includedTypes": _string_list("included_types", included_types),
+                "excludedTypes": _string_list("excluded_types", excluded_types),
+                "includedPrimaryTypes": _string_list(
+                    "included_primary_types", included_primary_types
                 ),
-                "excludedPrimaryTypes": (
-                    list(excluded_primary_types)
-                    if excluded_primary_types is not None
-                    else None
+                "excludedPrimaryTypes": _string_list(
+                    "excluded_primary_types", excluded_primary_types
                 ),
                 "maxResultCount": _Base._validate_int_range(
                     "max_results", max_results, 1, 20
@@ -260,7 +524,10 @@ class _Base:
                 "regionCode": region,
                 "rankPreference": rank_preference,
                 "routingParameters": _routing_body(routing_parameters),
-                "includeFutureOpeningBusinesses": include_future_opening_businesses,
+                "includeFutureOpeningBusinesses": _validate_bool(
+                    "include_future_opening_businesses",
+                    include_future_opening_businesses,
+                ),
             }
         )
 
@@ -287,25 +554,33 @@ class _Base:
                 "languageCode": language,
                 "regionCode": region,
                 "sessionToken": session_token,
-                "includedRegionCodes": (
-                    list(included_region_codes)
-                    if included_region_codes is not None
-                    else None
+                "includedRegionCodes": _string_list(
+                    "included_region_codes", included_region_codes
                 ),
-                "includeQueryPredictions": include_query_predictions,
+                "includeQueryPredictions": _validate_bool(
+                    "include_query_predictions", include_query_predictions
+                ),
                 "locationBias": _location_body(location_bias),
                 "locationRestriction": _location_body(location_restriction),
-                "origin": _point(origin) if origin is not None else None,
-                "inputOffset": input_offset,
-                "includedPrimaryTypes": (
-                    list(included_primary_types)
-                    if included_primary_types is not None
+                "origin": (
+                    _validate_lat_lng(origin, "origin")
+                    if origin is not None
                     else None
                 ),
-                "includePureServiceAreaBusinesses": (
-                    include_pure_service_area_businesses
+                "inputOffset": _Base._validate_int_range(
+                    "input_offset", input_offset, 0, 2**31 - 1
                 ),
-                "includeFutureOpeningBusinesses": include_future_opening_businesses,
+                "includedPrimaryTypes": _string_list(
+                    "included_primary_types", included_primary_types
+                ),
+                "includePureServiceAreaBusinesses": _validate_bool(
+                    "include_pure_service_area_businesses",
+                    include_pure_service_area_businesses,
+                ),
+                "includeFutureOpeningBusinesses": _validate_bool(
+                    "include_future_opening_businesses",
+                    include_future_opening_businesses,
+                ),
             }
         )
 
@@ -359,34 +634,41 @@ class Client(_Base):
         ``routing_parameters`` takes a dict whose ``origin`` may be a
         ``LatLng`` or a ``(latitude, longitude)`` tuple.
         """
-        body = self._text_search_body(
-            query,
-            max_results=max_results,
-            page_token=page_token,
-            language=language,
-            region=region,
-            rank_preference=rank_preference,
-            open_now=open_now,
-            price_levels=price_levels,
-            strict_type_filtering=strict_type_filtering,
-            included_type=included_type,
-            location_bias=location_bias,
-            location_restriction=location_restriction,
-            page_size=page_size,
-            min_rating=min_rating,
-            ev_options=ev_options,
-            search_along_route=search_along_route,
-            routing_parameters=routing_parameters,
-            include_pure_service_area_businesses=(
-                include_pure_service_area_businesses
-            ),
-            include_future_opening_businesses=include_future_opening_businesses,
-        )
+        self._ensure_open("text_search")
+        self._check_no_running_loop("text_search")
+        self._require_str("query", query, "text_search")
         try:
-            data = self._inner.text_search(body, normalize_fields(fields))
+            body = self._text_search_body(
+                query,
+                max_results=max_results,
+                page_token=page_token,
+                language=language,
+                region=region,
+                rank_preference=rank_preference,
+                open_now=open_now,
+                price_levels=price_levels,
+                strict_type_filtering=strict_type_filtering,
+                included_type=included_type,
+                location_bias=location_bias,
+                location_restriction=location_restriction,
+                page_size=page_size,
+                min_rating=min_rating,
+                ev_options=ev_options,
+                search_along_route=search_along_route,
+                routing_parameters=routing_parameters,
+                include_pure_service_area_businesses=(
+                    include_pure_service_area_businesses
+                ),
+                include_future_opening_businesses=include_future_opening_businesses,
+            )
+            fields_list = normalize_fields(fields)
+        except ConfigError as exc:
+            raise self._with_context(exc, "text_search") from exc
+        try:
+            data = self._inner.text_search(body, fields_list)
         except _CorePlacesError as exc:
             raise_translated(exc, "text_search")
-        return self._convert(TextSearchResult.from_api, data)
+        return self._convert(TextSearchResult.from_api, data, "text_search")
 
     def nearby_search(
         self,
@@ -411,25 +693,31 @@ class Client(_Base):
         The primary type filters take up to 50 place types each, and a
         type listed in both is an error at the API.
         """
-        body = self._nearby_search_body(
-            location,
-            radius_m,
-            included_types=included_types,
-            excluded_types=excluded_types,
-            max_results=max_results,
-            language=language,
-            region=region,
-            rank_preference=rank_preference,
-            included_primary_types=included_primary_types,
-            excluded_primary_types=excluded_primary_types,
-            routing_parameters=routing_parameters,
-            include_future_opening_businesses=include_future_opening_businesses,
-        )
+        self._ensure_open("nearby_search")
+        self._check_no_running_loop("nearby_search")
         try:
-            data = self._inner.nearby_search(body, normalize_fields(fields))
+            body = self._nearby_search_body(
+                location,
+                radius_m,
+                included_types=included_types,
+                excluded_types=excluded_types,
+                max_results=max_results,
+                language=language,
+                region=region,
+                rank_preference=rank_preference,
+                included_primary_types=included_primary_types,
+                excluded_primary_types=excluded_primary_types,
+                routing_parameters=routing_parameters,
+                include_future_opening_businesses=include_future_opening_businesses,
+            )
+            fields_list = normalize_fields(fields)
+        except ConfigError as exc:
+            raise self._with_context(exc, "nearby_search") from exc
+        try:
+            data = self._inner.nearby_search(body, fields_list)
         except _CorePlacesError as exc:
             raise_translated(exc, "nearby_search")
-        return self._convert(NearbySearchResult.from_api, data)
+        return self._convert(NearbySearchResult.from_api, data, "nearby_search")
 
     def place_details(
         self,
@@ -441,17 +729,25 @@ class Client(_Base):
         session_token: Optional[str] = None,
     ) -> Place:
         """Fetch full details for one place id."""
+        self._ensure_open("place_details")
+        self._check_no_running_loop("place_details")
+        self._require_str("place_id", place_id, "place_details")
+        context = f"place_details place_id={place_id}"
+        try:
+            fields_list = normalize_fields(fields)
+        except ConfigError as exc:
+            raise self._with_context(exc, context) from exc
         try:
             data = self._inner.place_details(
                 place_id,
-                normalize_fields(fields),
+                fields_list,
                 language,
                 region,
                 session_token,
             )
         except _CorePlacesError as exc:
-            raise_translated(exc, f"place_details place_id={place_id}")
-        return self._convert(Place.from_api, data)
+            raise_translated(exc, context)
+        return self._convert(Place.from_api, data, context)
 
     def autocomplete(
         self,
@@ -479,28 +775,35 @@ class Client(_Base):
         takes up to 5 place types, or the single collection ``(cities)``
         or ``(regions)``. A ``fields`` mask is optional on this endpoint.
         """
-        body = self._autocomplete_body(
-            input_text,
-            language=language,
-            region=region,
-            session_token=session_token,
-            included_region_codes=included_region_codes,
-            include_query_predictions=include_query_predictions,
-            location_bias=location_bias,
-            location_restriction=location_restriction,
-            origin=origin,
-            input_offset=input_offset,
-            included_primary_types=included_primary_types,
-            include_pure_service_area_businesses=(
-                include_pure_service_area_businesses
-            ),
-            include_future_opening_businesses=include_future_opening_businesses,
-        )
+        self._ensure_open("autocomplete")
+        self._check_no_running_loop("autocomplete")
+        self._require_str("input_text", input_text, "autocomplete")
         try:
-            data = self._inner.autocomplete(body, normalize_fields(fields))
+            body = self._autocomplete_body(
+                input_text,
+                language=language,
+                region=region,
+                session_token=session_token,
+                included_region_codes=included_region_codes,
+                include_query_predictions=include_query_predictions,
+                location_bias=location_bias,
+                location_restriction=location_restriction,
+                origin=origin,
+                input_offset=input_offset,
+                included_primary_types=included_primary_types,
+                include_pure_service_area_businesses=(
+                    include_pure_service_area_businesses
+                ),
+                include_future_opening_businesses=include_future_opening_businesses,
+            )
+            fields_list = normalize_fields(fields)
+        except ConfigError as exc:
+            raise self._with_context(exc, "autocomplete") from exc
+        try:
+            data = self._inner.autocomplete(body, fields_list)
         except _CorePlacesError as exc:
             raise_translated(exc, "autocomplete")
-        return self._convert(AutocompleteResult.from_api, data)
+        return self._convert(AutocompleteResult.from_api, data, "autocomplete")
 
     def place_photo(
         self,
@@ -520,15 +823,25 @@ class Client(_Base):
         ``skip_http_redirect=True`` it returns a ``PhotoUriResult``
         carrying the photo's short lived URI instead.
         """
-        self._validate_int_range("max_width_px", max_width_px, 1, 4800)
-        self._validate_int_range("max_height_px", max_height_px, 1, 4800)
+        context = f"place_photo name={photo_name}"
+        self._ensure_open("place_photo")
+        self._check_no_running_loop("place_photo")
+        self._validate_photo_args(
+            photo_name, max_width_px, max_height_px, skip_http_redirect, context
+        )
         try:
             tagged = self._inner.place_photo(
                 photo_name, max_width_px, max_height_px, skip_http_redirect
             )
         except _CorePlacesError as exc:
-            raise_translated(exc, f"place_photo name={photo_name}")
-        return self._convert(_photo_result, tagged)
+            raise_translated(exc, context)
+        return self._convert(_photo_result, tagged, context)
+
+    def __enter__(self) -> "Client":
+        return self
+
+    def __exit__(self, *exc_info: object) -> None:
+        self.close()
 
 
 class AsyncClient(_Base):
@@ -563,34 +876,40 @@ class AsyncClient(_Base):
         include_future_opening_businesses: Optional[bool] = None,
     ) -> TextSearchResult:
         """Async version of ``Client.text_search``."""
-        body = self._text_search_body(
-            query,
-            max_results=max_results,
-            page_token=page_token,
-            language=language,
-            region=region,
-            rank_preference=rank_preference,
-            open_now=open_now,
-            price_levels=price_levels,
-            strict_type_filtering=strict_type_filtering,
-            included_type=included_type,
-            location_bias=location_bias,
-            location_restriction=location_restriction,
-            page_size=page_size,
-            min_rating=min_rating,
-            ev_options=ev_options,
-            search_along_route=search_along_route,
-            routing_parameters=routing_parameters,
-            include_pure_service_area_businesses=(
-                include_pure_service_area_businesses
-            ),
-            include_future_opening_businesses=include_future_opening_businesses,
-        )
+        self._ensure_open("text_search")
+        self._require_str("query", query, "text_search")
         try:
-            data = await self._inner.text_search_async(body, normalize_fields(fields))
+            body = self._text_search_body(
+                query,
+                max_results=max_results,
+                page_token=page_token,
+                language=language,
+                region=region,
+                rank_preference=rank_preference,
+                open_now=open_now,
+                price_levels=price_levels,
+                strict_type_filtering=strict_type_filtering,
+                included_type=included_type,
+                location_bias=location_bias,
+                location_restriction=location_restriction,
+                page_size=page_size,
+                min_rating=min_rating,
+                ev_options=ev_options,
+                search_along_route=search_along_route,
+                routing_parameters=routing_parameters,
+                include_pure_service_area_businesses=(
+                    include_pure_service_area_businesses
+                ),
+                include_future_opening_businesses=include_future_opening_businesses,
+            )
+            fields_list = normalize_fields(fields)
+        except ConfigError as exc:
+            raise self._with_context(exc, "text_search") from exc
+        try:
+            data = await self._inner.text_search_async(body, fields_list)
         except _CorePlacesError as exc:
             raise_translated(exc, "text_search")
-        return self._convert(TextSearchResult.from_api, data)
+        return self._convert(TextSearchResult.from_api, data, "text_search")
 
     async def nearby_search(
         self,
@@ -610,25 +929,30 @@ class AsyncClient(_Base):
         include_future_opening_businesses: Optional[bool] = None,
     ) -> NearbySearchResult:
         """Async version of ``Client.nearby_search``."""
-        body = self._nearby_search_body(
-            location,
-            radius_m,
-            included_types=included_types,
-            excluded_types=excluded_types,
-            max_results=max_results,
-            language=language,
-            region=region,
-            rank_preference=rank_preference,
-            included_primary_types=included_primary_types,
-            excluded_primary_types=excluded_primary_types,
-            routing_parameters=routing_parameters,
-            include_future_opening_businesses=include_future_opening_businesses,
-        )
+        self._ensure_open("nearby_search")
         try:
-            data = await self._inner.nearby_search_async(body, normalize_fields(fields))
+            body = self._nearby_search_body(
+                location,
+                radius_m,
+                included_types=included_types,
+                excluded_types=excluded_types,
+                max_results=max_results,
+                language=language,
+                region=region,
+                rank_preference=rank_preference,
+                included_primary_types=included_primary_types,
+                excluded_primary_types=excluded_primary_types,
+                routing_parameters=routing_parameters,
+                include_future_opening_businesses=include_future_opening_businesses,
+            )
+            fields_list = normalize_fields(fields)
+        except ConfigError as exc:
+            raise self._with_context(exc, "nearby_search") from exc
+        try:
+            data = await self._inner.nearby_search_async(body, fields_list)
         except _CorePlacesError as exc:
             raise_translated(exc, "nearby_search")
-        return self._convert(NearbySearchResult.from_api, data)
+        return self._convert(NearbySearchResult.from_api, data, "nearby_search")
 
     async def place_details(
         self,
@@ -640,17 +964,24 @@ class AsyncClient(_Base):
         session_token: Optional[str] = None,
     ) -> Place:
         """Async version of ``Client.place_details``."""
+        self._ensure_open("place_details")
+        self._require_str("place_id", place_id, "place_details")
+        context = f"place_details place_id={place_id}"
+        try:
+            fields_list = normalize_fields(fields)
+        except ConfigError as exc:
+            raise self._with_context(exc, context) from exc
         try:
             data = await self._inner.place_details_async(
                 place_id,
-                normalize_fields(fields),
+                fields_list,
                 language,
                 region,
                 session_token,
             )
         except _CorePlacesError as exc:
-            raise_translated(exc, f"place_details place_id={place_id}")
-        return self._convert(Place.from_api, data)
+            raise_translated(exc, context)
+        return self._convert(Place.from_api, data, context)
 
     async def autocomplete(
         self,
@@ -671,30 +1002,36 @@ class AsyncClient(_Base):
         include_future_opening_businesses: Optional[bool] = None,
     ) -> AutocompleteResult:
         """Async version of ``Client.autocomplete``."""
-        body = self._autocomplete_body(
-            input_text,
-            language=language,
-            region=region,
-            session_token=session_token,
-            included_region_codes=included_region_codes,
-            include_query_predictions=include_query_predictions,
-            location_bias=location_bias,
-            location_restriction=location_restriction,
-            origin=origin,
-            input_offset=input_offset,
-            included_primary_types=included_primary_types,
-            include_pure_service_area_businesses=(
-                include_pure_service_area_businesses
-            ),
-            include_future_opening_businesses=include_future_opening_businesses,
-        )
+        self._ensure_open("autocomplete")
+        self._require_str("input_text", input_text, "autocomplete")
+        try:
+            body = self._autocomplete_body(
+                input_text,
+                language=language,
+                region=region,
+                session_token=session_token,
+                included_region_codes=included_region_codes,
+                include_query_predictions=include_query_predictions,
+                location_bias=location_bias,
+                location_restriction=location_restriction,
+                origin=origin,
+                input_offset=input_offset,
+                included_primary_types=included_primary_types,
+                include_pure_service_area_businesses=(
+                    include_pure_service_area_businesses
+                ),
+                include_future_opening_businesses=include_future_opening_businesses,
+            )
+            fields_list = normalize_fields(fields)
+        except ConfigError as exc:
+            raise self._with_context(exc, "autocomplete") from exc
         try:
             data = await self._inner.autocomplete_async(
-                body, normalize_fields(fields)
+                body, fields_list
             )
         except _CorePlacesError as exc:
             raise_translated(exc, "autocomplete")
-        return self._convert(AutocompleteResult.from_api, data)
+        return self._convert(AutocompleteResult.from_api, data, "autocomplete")
 
     async def place_photo(
         self,
@@ -705,12 +1042,21 @@ class AsyncClient(_Base):
         skip_http_redirect: bool = False,
     ) -> PhotoMedia | PhotoUriResult:
         """Async version of ``Client.place_photo``."""
-        self._validate_int_range("max_width_px", max_width_px, 1, 4800)
-        self._validate_int_range("max_height_px", max_height_px, 1, 4800)
+        context = f"place_photo name={photo_name}"
+        self._ensure_open("place_photo")
+        self._validate_photo_args(
+            photo_name, max_width_px, max_height_px, skip_http_redirect, context
+        )
         try:
             tagged = await self._inner.place_photo_async(
                 photo_name, max_width_px, max_height_px, skip_http_redirect
             )
         except _CorePlacesError as exc:
-            raise_translated(exc, f"place_photo name={photo_name}")
-        return self._convert(_photo_result, tagged)
+            raise_translated(exc, context)
+        return self._convert(_photo_result, tagged, context)
+
+    async def __aenter__(self) -> "AsyncClient":
+        return self
+
+    async def __aexit__(self, *exc_info: object) -> None:
+        self.close()

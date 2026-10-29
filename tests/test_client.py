@@ -1068,3 +1068,279 @@ def test_place_details_default_mask_covers_modelled_fields(client):
     assert place.postal_address is not None
     assert place.current_opening_hours is not None
     assert place.primary_type_display_name is not None
+
+
+# ---------------------------------------------------------------------------
+# Round 5 (T3) regressions: boundary validation, lifecycle, pickle
+# ---------------------------------------------------------------------------
+
+
+def test_bare_string_list_parameters_rejected_before_any_request(
+    client, stub_server
+):
+    # RC-01: every iterable-of-strings slot rejects a bare string, and
+    # the stub sees no request for any of them.
+    calls = (
+        lambda: client.text_search("cafes", price_levels="PRICE_LEVEL_FREE"),
+        lambda: client.nearby_search(
+            (40.0, -70.0), 100.0, included_types="cafe"
+        ),
+        lambda: client.autocomplete("par", included_region_codes="AU"),
+        lambda: client.autocomplete("par", included_primary_types="cafe"),
+    )
+    for call in calls:
+        stub_server.last_request = None
+        with pytest.raises(ConfigError):
+            call()
+        assert stub_server.last_request is None
+
+
+def test_non_string_items_in_list_parameters_rejected(client, stub_server):
+    stub_server.last_request = None
+    with pytest.raises(ConfigError):
+        client.text_search("cafes", price_levels=["PRICE_LEVEL_FREE", 3])
+    assert stub_server.last_request is None
+
+
+def test_generator_list_parameter_materialized_once(client, stub_server):
+    # RC-06: a generator works for the filter slots exactly as it does
+    # for fields, consumed once, its items on the wire.
+    result = client.nearby_search(
+        (40.0, -70.0), 100.0, included_types=(t for t in ["cafe", "bakery"])
+    )
+    body = json.loads(stub_server.last_request["body"])
+    assert body["includedTypes"] == ["cafe", "bakery"]
+    assert len(result.places) == 1
+
+
+def test_boolean_body_fields_reject_non_bool_before_any_request(
+    client, stub_server
+):
+    # RC-04: the string "false" used to reach the wire as true. Every
+    # boolean slot now rejects non-bools locally.
+    calls = (
+        lambda: client.text_search("cafes", open_now="false"),
+        lambda: client.text_search("cafes", open_now=1),
+        lambda: client.text_search("cafes", strict_type_filtering="false"),
+        lambda: client.autocomplete("par", include_query_predictions="false"),
+        lambda: client.place_photo(
+            "places/x/photos/y", max_width_px=10, skip_http_redirect="false"
+        ),
+    )
+    for call in calls:
+        stub_server.last_request = None
+        with pytest.raises(ConfigError):
+            call()
+        assert stub_server.last_request is None
+
+
+def test_boolean_body_fields_send_real_bools(client, stub_server):
+    # RC-04 wire assertion: a real False is sent as JSON false.
+    client.text_search("cafes", open_now=False)
+    body = json.loads(stub_server.last_request["body"])
+    assert body["openNow"] is False
+
+
+def test_coordinates_validated_in_python(client, stub_server):
+    # RC-05: out-of-range, non-finite, bool and string coordinates all
+    # raise ConfigError and nothing reaches the stub.
+    bad_locations = (
+        (91.0, 0.0),
+        (0.0, 181.0),
+        (float("nan"), 0.0),
+        (float("inf"), 0.0),
+        (True, 0.0),
+        ("40.0", -70.0),
+        (40.0,),
+        (40.0, -70.0, 0.0),
+    )
+    for location in bad_locations:
+        stub_server.last_request = None
+        with pytest.raises(ConfigError):
+            client.nearby_search(location, 100.0)
+        assert stub_server.last_request is None
+
+
+def test_coordinate_sets_rejected_and_lists_accepted_everywhere(
+    client, stub_server
+):
+    # RC-05: a set would unpack latitude and longitude in arbitrary
+    # order, so it is rejected in every coordinate slot; a list is
+    # accepted in every slot, uniformly (A9).
+    with pytest.raises(ConfigError):
+        client.nearby_search({40.0, -70.0}, 100.0)
+    with pytest.raises(ConfigError):
+        client.autocomplete("par", origin={40.0, -70.0})
+    with pytest.raises(ConfigError):
+        client.text_search(
+            "cafes",
+            location_bias={"circle": {"center": {40.0, -70.0}, "radius": 10}},
+        )
+    result = client.nearby_search([40.0, -70.0], 100.0)
+    assert len(result.places) == 1
+    client.autocomplete("par", origin=[40.0, -70.0])
+    body = json.loads(stub_server.last_request["body"])
+    assert body["origin"] == {"latitude": 40.0, "longitude": -70.0}
+    client.text_search(
+        "cafes",
+        location_bias={"circle": {"center": [40.0, -70.0], "radius": 10}},
+    )
+    body = json.loads(stub_server.last_request["body"])
+    assert body["locationBias"]["circle"]["center"] == {
+        "latitude": 40.0,
+        "longitude": -70.0,
+    }
+
+
+def test_dict_body_coordinates_validated(client, stub_server):
+    # RC-05: wire-shape dict coordinates and rectangle corners get the
+    # same range checks as tuple inputs.
+    stub_server.last_request = None
+    with pytest.raises(ConfigError):
+        client.text_search(
+            "cafes",
+            location_bias={
+                "circle": {
+                    "center": {"latitude": 999.0, "longitude": 0.0},
+                    "radius": 10,
+                }
+            },
+        )
+    assert stub_server.last_request is None
+    with pytest.raises(ConfigError):
+        client.text_search(
+            "cafes",
+            location_restriction={
+                "rectangle": {
+                    "low": (40.0, -70.0),
+                    "high": (1000.0, 0.0),
+                }
+            },
+        )
+    assert stub_server.last_request is None
+
+
+def test_location_body_requires_a_mapping(client):
+    # RC-27 (A10): a list used to be silently coerced through dict(...).
+    with pytest.raises(ConfigError):
+        client.text_search("cafes", location_bias=[("circle", {})])
+    with pytest.raises(ConfigError):
+        client.text_search("cafes", location_bias="circle")
+
+
+def test_radius_must_be_a_finite_number(client):
+    # RC-11 (A8): radius True used to become a one metre search.
+    with pytest.raises(ConfigError):
+        client.nearby_search((40.0, -70.0), True)
+    with pytest.raises(ConfigError):
+        client.nearby_search((40.0, -70.0), "800")
+
+
+def test_sibling_numeric_parameters_validated(client, stub_server):
+    # RC-11: input_offset and min_rating go through the same guards as
+    # max_results and page_size.
+    stub_server.last_request = None
+    for call in (
+        lambda: client.autocomplete("par", input_offset=-1),
+        lambda: client.autocomplete("par", input_offset=True),
+        lambda: client.autocomplete("par", input_offset=1.5),
+        lambda: client.text_search("cafes", min_rating=99),
+        lambda: client.text_search("cafes", min_rating=float("nan")),
+        lambda: client.text_search("cafes", min_rating=True),
+    ):
+        with pytest.raises(ConfigError):
+            call()
+    assert stub_server.last_request is None
+
+
+def test_client_construction_type_checks(base_url):
+    # RC-02: non-string keys and base URLs used to escape as bare
+    # AttributeError; padded or non-ASCII keys were sent verbatim (R14).
+    with pytest.raises(ConfigError):
+        Client(123, base_url=base_url)
+    with pytest.raises(ConfigError):
+        Client("test-key", base_url=123)
+    with pytest.raises(ConfigError):
+        Client(" padded-key ", base_url=base_url)
+    with pytest.raises(ConfigError):
+        Client("key with spaces", base_url=base_url)
+    with pytest.raises(ConfigError):
+        Client("kéy", base_url=base_url)
+
+
+def test_place_id_must_be_a_string(client):
+    # RC-02: an int place id used to escape as a bare PyO3 TypeError.
+    with pytest.raises(ConfigError):
+        client.place_details(123)
+
+
+def test_local_errors_carry_the_method_as_context(client):
+    # RC-03: locally raised errors name the call that failed, the way
+    # translated API errors already did.
+    with pytest.raises(ConfigError) as excinfo:
+        client.text_search("cafes", open_now="false")
+    assert excinfo.value.context == "text_search"
+    with pytest.raises(ConfigError) as excinfo:
+        client.place_details(123)
+    assert excinfo.value.context == "place_details"
+
+
+def test_place_photo_requires_a_dimension_in_python(client, stub_server):
+    # RC-23: the at-least-one-dimension rule is enforced before the
+    # native call, not discovered from it.
+    stub_server.last_request = None
+    with pytest.raises(ConfigError):
+        client.place_photo("places/x/photos/y")
+    assert stub_server.last_request is None
+
+
+def test_sync_client_refuses_a_running_event_loop(client):
+    # RC-13: a sync call inside a loop used to freeze it for the whole
+    # request; it now fails fast pointing at AsyncClient.
+    async def run():
+        with pytest.raises(ConfigError):
+            client.text_search("cafes")
+
+    asyncio.run(run())
+
+
+def test_client_close_and_context_manager(api_key, base_url):
+    # RC-14: close is idempotent, later calls raise ConfigError, and
+    # the with statement closes on exit.
+    closing = Client(api_key, base_url=base_url)
+    closing.close()
+    closing.close()
+    with pytest.raises(ConfigError):
+        closing.text_search("cafes")
+    with Client(api_key, base_url=base_url) as managed:
+        assert len(managed.text_search("cafes").places) == 2
+    with pytest.raises(ConfigError):
+        managed.text_search("cafes")
+
+
+def test_async_client_close_and_context_manager(api_key, base_url):
+    # RC-14, async side.
+    async def run():
+        async with AsyncClient(api_key, base_url=base_url) as managed:
+            assert len((await managed.text_search("cafes")).places) == 2
+        with pytest.raises(ConfigError):
+            await managed.text_search("cafes")
+
+    asyncio.run(run())
+
+
+def test_client_pickle_and_copy_name_placekit(client):
+    # RC-26: the error names placekit and the real reason, never the
+    # phantom builtins.Client, and shallow copy no longer silently
+    # shares the live native client.
+    import copy
+    import pickle
+
+    with pytest.raises(TypeError) as excinfo:
+        pickle.dumps(client)
+    assert "placekit" in str(excinfo.value)
+    assert "builtins" not in str(excinfo.value)
+    with pytest.raises(TypeError):
+        copy.copy(client)
+    with pytest.raises(TypeError):
+        copy.deepcopy(client)
