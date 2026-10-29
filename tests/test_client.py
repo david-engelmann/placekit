@@ -1517,3 +1517,23 @@ def test_error_list_attributes_are_copied():
     err = PlacesError("boom", details=details)
     details.append({"b": 2})
     assert err.details == [{"a": 1}]
+
+
+def test_routing_parameter_bools_rejected_in_conversion_layer(
+    client, stub_server
+):
+    # RC-04, conversion layer: routing_parameters is a dict the Python
+    # layer passes through, so its booleans are guarded where the body
+    # is converted. The string "false" must never reach the wire as
+    # true, and no request may be sent.
+    stub_server.last_request = None
+    with pytest.raises(ConfigError):
+        client.text_search(
+            "cafes",
+            routing_parameters={"avoidTolls": "false", "travelMode": "DRIVE"},
+        )
+    assert stub_server.last_request is None
+    client.text_search(
+        "cafes", routing_parameters={"travelMode": "DRIVE"}
+    )
+    assert stub_server.last_request is not None

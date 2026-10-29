@@ -16,7 +16,7 @@ use placekit_core::{Client as CoreClient, Error as CoreError, FieldMask};
 use pyo3::create_exception;
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
-use pyo3::types::{PyBytes, PyDict, PyTuple};
+use pyo3::types::{PyBool, PyBytes, PyDict, PyList, PyTuple};
 use serde_json::Value;
 
 create_exception!(
@@ -134,10 +134,54 @@ fn mask_from(py: Python<'_>, fields: Option<Vec<String>>) -> PyResult<Option<Fie
     }
 }
 
+/// Body fields the typed requests declare as booleans, by wire name.
+/// The generic converter below applies Python truthiness to these,
+/// so the string "false" used to reach the API as true (R5-R2). The
+/// conversion layer now accepts only a real bool (or None) for them,
+/// at any nesting depth, which also covers dict-shaped parameters
+/// such as routing parameters that the Python layer passes through.
+const BOOL_BODY_FIELDS: &[&str] = &[
+    "openNow",
+    "strictTypeFiltering",
+    "includeQueryPredictions",
+    "includePureServiceAreaBusinesses",
+    "includeFutureOpeningBusinesses",
+    "avoidTolls",
+    "avoidHighways",
+    "avoidFerries",
+];
+
+fn check_body_bools(value: &Bound<'_, PyAny>) -> Result<(), String> {
+    if let Ok(map) = value.downcast::<PyDict>() {
+        for (key, item) in map.iter() {
+            if let Ok(name) = key.extract::<String>() {
+                if BOOL_BODY_FIELDS.contains(&name.as_str())
+                    && !item.is_none()
+                    && !item.is_instance_of::<PyBool>()
+                {
+                    return Err(format!(
+                        "{name} must be a bool, got {}",
+                        item.get_type()
+                    ));
+                }
+            }
+            check_body_bools(&item)?;
+        }
+    } else if let Ok(list) = value.downcast::<PyList>() {
+        for item in list.iter() {
+            check_body_bools(&item)?;
+        }
+    }
+    Ok(())
+}
+
 fn body_to_request<T>(body: &Bound<'_, PyDict>) -> PyResult<T>
 where
     T: serde::de::DeserializeOwned,
 {
+    if let Err(detail) = check_body_bools(body.as_any()) {
+        return Err(to_pyerr(body.py(), CoreError::Config { detail }));
+    }
     // A body that does not fit the typed request shape is a local call
     // error (for example a circle in a Text Search location restriction,
     // which is rectangle only), so it raises the config error like the
