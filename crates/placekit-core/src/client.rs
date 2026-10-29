@@ -1266,32 +1266,34 @@ mod tests {
     }
 
     #[test]
-    fn text_search_request_building() {
-        let client = test_client();
+    fn text_search_sends_the_built_request_to_the_wire() {
+        // Drives Client::text_search itself against the recording
+        // stub (R4-28). The previous version rebuilt the request by
+        // hand from the client's internals and asserted on its own
+        // construction, so a change to the endpoint path, a dropped
+        // mask header or a broken body serialization inside
+        // text_search would have failed nothing.
+        let stub = Stub::start(|_| stub_json(200, r#"{"places":[]}"#));
+        let client = stub.client("test-key");
         let req = TextSearchRequest {
             text_query: "pizza in Sydney".to_owned(),
             ..Default::default()
         };
+        let result = block_on(client.text_search(&req, None)).unwrap();
+        assert!(result.places.is_empty());
+        let requests = stub.requests();
+        assert_eq!(requests.len(), 1);
+        let sent = &requests[0];
+        assert_eq!(sent.method, "POST");
+        assert_eq!(sent.path, "/v1/places:searchText");
+        assert_eq!(sent.header("x-goog-api-key"), Some("test-key"));
         let mask = FieldMask::text_search_default();
-        let request = client
-            .http
-            .post(format!("{}/places:searchText", client.base_url))
-            .headers(client.headers(Some(&mask)).unwrap())
-            .json(&req)
-            .build()
-            .unwrap();
-        assert_eq!(request.method(), reqwest::Method::POST);
         assert_eq!(
-            request.url().as_str(),
-            "http://127.0.0.1:9/v1/places:searchText"
+            sent.header("x-goog-fieldmask"),
+            Some(mask.header_value().as_str())
         );
-        assert_eq!(
-            request.headers().get("x-goog-fieldmask").unwrap(),
-            mask.header_value().as_str()
-        );
-        let body = String::from_utf8(request.body().unwrap().as_bytes().unwrap().to_vec()).unwrap();
-        let value: serde_json::Value = serde_json::from_str(&body).unwrap();
-        assert_eq!(value["textQuery"], "pizza in Sydney");
+        let body: serde_json::Value = serde_json::from_slice(&sent.body).unwrap();
+        assert_eq!(body["textQuery"], "pizza in Sydney");
     }
 
     #[test]
@@ -1457,7 +1459,15 @@ mod tests {
     }
 
     #[test]
-    fn nearby_request_requires_valid_circle() {
+    fn nearby_search_rejects_an_invalid_circle_before_any_request() {
+        // Drives Client::nearby_search itself (R4-28). The previous
+        // version called the free radius validator directly, so
+        // deleting the validation call from nearby_search would have
+        // failed nothing. Validation resolves before any request is
+        // attempted, so the call must complete with the config error
+        // under a single poll; if validation is dropped, the future
+        // proceeds to the network and the poll stays pending.
+        let client = test_client();
         let req = NearbySearchRequest {
             location_restriction: crate::models::LocationRestriction {
                 circle: crate::models::Circle {
@@ -1476,12 +1486,10 @@ mod tests {
             routing_parameters: None,
             include_future_opening_businesses: None,
         };
-        assert_eq!(
-            validate_circle_radius(req.location_restriction.circle.radius)
-                .unwrap_err()
-                .kind(),
-            "config"
-        );
+        let err = poll_once(client.nearby_search(&req, None))
+            .expect("validation must resolve immediately")
+            .unwrap_err();
+        assert_eq!(err.kind(), "config");
     }
 
     #[test]
