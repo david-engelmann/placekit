@@ -75,6 +75,8 @@ result = client.text_search(
 
 Any iterable of path strings works too. Omit `fields` and each endpoint uses a curated default, available as `FieldMask.text_search()`, `FieldMask.nearby_search()`, and `FieldMask.place_details()`.
 
+One billing note on the defaults. They include fields from the Enterprise billing tier, among them rating, user rating counts, price level and, on Place Details, the phone numbers, website URI and opening hours, so a call with a default mask is billed at the Enterprise tier. A higher Enterprise plus Atmosphere tier exists above it and the defaults do not reach it. Pass a narrower `fields` set when you want a lower tier.
+
 ## Errors
 
 Every failure raises a subclass of `PlacesError`, carrying `status_code` and `google_status` when the error came from the API.
