@@ -40,26 +40,120 @@ class Photo:
     width_px: int
     height_px: int
     author_attributions: list[AuthorAttribution]
+    flag_content_uri: Optional[str]
+    google_maps_uri: Optional[str]
     def __init__(
         self,
         name: str,
         width_px: int = ...,
         height_px: int = ...,
         author_attributions: list[AuthorAttribution] = ...,
+        flag_content_uri: Optional[str] = ...,
+        google_maps_uri: Optional[str] = ...,
     ) -> None: ...
     @classmethod
     def from_api(cls, data: dict[str, Any]) -> "Photo": ...
 
+class Date:
+    year: int
+    month: int
+    day: int
+    def __init__(
+        self, year: int = ..., month: int = ..., day: int = ...
+    ) -> None: ...
+    @classmethod
+    def from_api(cls, data: dict[str, Any]) -> "Date": ...
+
+class OpeningPoint:
+    date: Optional[Date]
+    truncated: Optional[bool]
+    day: Optional[int]
+    hour: Optional[int]
+    minute: Optional[int]
+    def __init__(
+        self,
+        date: Optional[Date] = ...,
+        truncated: Optional[bool] = ...,
+        day: Optional[int] = ...,
+        hour: Optional[int] = ...,
+        minute: Optional[int] = ...,
+    ) -> None: ...
+    @classmethod
+    def from_api(cls, data: dict[str, Any]) -> "OpeningPoint": ...
+
+class Period:
+    open: Optional[OpeningPoint]
+    close: Optional[OpeningPoint]
+    def __init__(
+        self,
+        open: Optional[OpeningPoint] = ...,
+        close: Optional[OpeningPoint] = ...,
+    ) -> None: ...
+    @classmethod
+    def from_api(cls, data: dict[str, Any]) -> "Period": ...
+
 class OpeningHours:
     open_now: Optional[bool]
+    periods: list[Period]
     weekday_descriptions: list[str]
     def __init__(
         self,
         open_now: Optional[bool] = ...,
+        periods: list[Period] = ...,
         weekday_descriptions: list[str] = ...,
     ) -> None: ...
     @classmethod
     def from_api(cls, data: dict[str, Any]) -> "OpeningHours": ...
+
+class AddressComponent:
+    long_text: str
+    short_text: str
+    types: list[str]
+    language_code: Optional[str]
+    def __init__(
+        self,
+        long_text: str = ...,
+        short_text: str = ...,
+        types: list[str] = ...,
+        language_code: Optional[str] = ...,
+    ) -> None: ...
+    @classmethod
+    def from_api(cls, data: dict[str, Any]) -> "AddressComponent": ...
+
+class PlusCode:
+    global_code: str
+    compound_code: Optional[str]
+    def __init__(
+        self, global_code: str = ..., compound_code: Optional[str] = ...
+    ) -> None: ...
+    @classmethod
+    def from_api(cls, data: dict[str, Any]) -> "PlusCode": ...
+
+class Viewport:
+    low: LatLng
+    high: LatLng
+    def __init__(self, low: LatLng, high: LatLng) -> None: ...
+    @classmethod
+    def from_api(cls, data: dict[str, Any]) -> "Viewport": ...
+
+class PostalAddress:
+    region_code: Optional[str]
+    language_code: Optional[str]
+    postal_code: Optional[str]
+    administrative_area: Optional[str]
+    locality: Optional[str]
+    address_lines: list[str]
+    def __init__(
+        self,
+        region_code: Optional[str] = ...,
+        language_code: Optional[str] = ...,
+        postal_code: Optional[str] = ...,
+        administrative_area: Optional[str] = ...,
+        locality: Optional[str] = ...,
+        address_lines: list[str] = ...,
+    ) -> None: ...
+    @classmethod
+    def from_api(cls, data: dict[str, Any]) -> "PostalAddress": ...
 
 class Place:
     id: str
@@ -79,6 +173,13 @@ class Place:
     website_uri: Optional[str]
     google_maps_uri: Optional[str]
     opening_hours: Optional[OpeningHours]
+    current_opening_hours: Optional[OpeningHours]
+    address_components: list[AddressComponent]
+    plus_code: Optional[PlusCode]
+    viewport: Optional[Viewport]
+    postal_address: Optional[PostalAddress]
+    adr_format_address: Optional[str]
+    primary_type_display_name: Optional[LocalizedText]
     photos: list[Photo]
     attributions: list[Attribution]
     raw: dict[str, Any]
@@ -90,11 +191,15 @@ class Place:
 class TextSearchResult:
     places: list[Place]
     next_page_token: Optional[str]
+    search_uri: Optional[str]
+    routing_summaries: list[dict[str, Any]]
     raw: dict[str, Any]
     def __init__(
         self,
         places: list[Place],
         next_page_token: Optional[str] = ...,
+        search_uri: Optional[str] = ...,
+        routing_summaries: list[dict[str, Any]] = ...,
         raw: dict[str, Any] = ...,
     ) -> None: ...
     @classmethod
@@ -102,9 +207,13 @@ class TextSearchResult:
 
 class NearbySearchResult:
     places: list[Place]
+    routing_summaries: list[dict[str, Any]]
     raw: dict[str, Any]
     def __init__(
-        self, places: list[Place], raw: dict[str, Any] = ...
+        self,
+        places: list[Place],
+        routing_summaries: list[dict[str, Any]] = ...,
+        raw: dict[str, Any] = ...,
     ) -> None: ...
     @classmethod
     def from_api(cls, data: dict[str, Any]) -> "NearbySearchResult": ...
@@ -127,6 +236,7 @@ class FormattedText:
 
 class PlacePrediction:
     place_id: str
+    place: str
     text: Optional[FormattedText]
     main_text: Optional[FormattedText]
     secondary_text: Optional[FormattedText]
@@ -165,3 +275,8 @@ class PhotoMedia:
         self, content: bytes, content_type: Optional[str] = ...
     ) -> None: ...
     def save(self, path: str | Path) -> Path: ...
+
+class PhotoUriResult:
+    photo_uri: str
+    name: str
+    def __init__(self, photo_uri: str, name: str = ...) -> None: ...

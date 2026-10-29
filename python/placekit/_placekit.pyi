@@ -13,6 +13,10 @@ class PlacesError(Exception):
     kind: str
     status_code: Optional[int]
     google_status: Optional[str]
+    error_code: Optional[int]
+    details: list[Any]
+    field_violations: list[dict[str, Any]]
+    quota_violations: list[dict[str, Any]]
 
 class Client:
     def __init__(
@@ -49,17 +53,23 @@ class Client:
         region_code: Optional[str] = ...,
         session_token: Optional[str] = ...,
     ) -> Any: ...
-    def autocomplete(self, body: dict[str, Any]) -> dict[str, Any]: ...
-    def autocomplete_async(self, body: dict[str, Any]) -> Any: ...
+    def autocomplete(
+        self, body: dict[str, Any], fields: Optional[list[str]]
+    ) -> dict[str, Any]: ...
+    def autocomplete_async(
+        self, body: dict[str, Any], fields: Optional[list[str]]
+    ) -> Any: ...
     def place_photo(
         self,
         photo_name: str,
         max_width_px: Optional[int] = ...,
         max_height_px: Optional[int] = ...,
-    ) -> tuple[bytes, Optional[str]]: ...
+        skip_http_redirect: bool = ...,
+    ) -> tuple[str, Any, Any]: ...
     def place_photo_async(
         self,
         photo_name: str,
         max_width_px: Optional[int] = ...,
         max_height_px: Optional[int] = ...,
+        skip_http_redirect: bool = ...,
     ) -> Any: ...

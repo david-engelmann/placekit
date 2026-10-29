@@ -4,6 +4,13 @@ Every response field must be requested through the ``X-Goog-FieldMask``
 header, and billing follows the fields you ask for. Pass a ``FieldMask`` (or
 any iterable of path strings) as the ``fields`` argument of search and
 details calls. When ``fields`` is omitted, curated defaults are used.
+
+Billing note: the curated defaults include fields from the Enterprise
+billing tier (among them rating, userRatingCount, priceLevel and, on
+Place Details, the phone numbers, websiteUri and regularOpeningHours),
+so a default call is billed at that tier. A higher Enterprise plus
+Atmosphere tier exists above it, and the defaults do not reach it. Pass
+a narrower ``fields`` set to control billing.
 """
 
 from __future__ import annotations
@@ -14,6 +21,7 @@ from typing import Iterable, Tuple, Union
 #: Default paths requested by text_search when no fields are given.
 TEXT_SEARCH_FIELDS: Tuple[str, ...] = (
     "places.id",
+    "places.name",
     "places.displayName",
     "places.formattedAddress",
     "places.location",
@@ -30,6 +38,7 @@ TEXT_SEARCH_FIELDS: Tuple[str, ...] = (
 #: Default paths requested by nearby_search when no fields are given.
 NEARBY_SEARCH_FIELDS: Tuple[str, ...] = (
     "places.id",
+    "places.name",
     "places.displayName",
     "places.formattedAddress",
     "places.location",
@@ -45,6 +54,7 @@ NEARBY_SEARCH_FIELDS: Tuple[str, ...] = (
 #: Default paths requested by place_details when no fields are given.
 PLACE_DETAILS_FIELDS: Tuple[str, ...] = (
     "id",
+    "name",
     "displayName",
     "formattedAddress",
     "shortFormattedAddress",

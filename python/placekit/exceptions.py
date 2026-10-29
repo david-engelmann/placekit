@@ -22,11 +22,30 @@ class PlacesError(Exception):
         *,
         status_code: Optional[int] = None,
         google_status: Optional[str] = None,
+        error_code: Optional[int] = None,
+        details: Optional[list] = None,
+        field_violations: Optional[list] = None,
+        quota_violations: Optional[list] = None,
     ) -> None:
         super().__init__(message)
         self.message = message
         self.status_code = status_code
         self.google_status = google_status
+        #: The ``code`` field of the Google error envelope, when present.
+        self.error_code = error_code
+        #: The parsed ``details`` array of the envelope (google.rpc detail
+        #: objects as dicts), empty when the response carried none.
+        self.details = details if details is not None else []
+        #: Field violations from a BadRequest detail, as dicts with
+        #: ``field`` (the wire name, for example ``textQuery``) and
+        #: ``description`` keys.
+        self.field_violations = (
+            field_violations if field_violations is not None else []
+        )
+        #: Violation dicts from a QuotaFailure detail.
+        self.quota_violations = (
+            quota_violations if quota_violations is not None else []
+        )
 
 
 class AuthenticationError(PlacesError):
@@ -109,4 +128,8 @@ def raise_translated(exc: BaseException) -> None:
         str(exc),
         status_code=getattr(exc, "status_code", None),
         google_status=getattr(exc, "google_status", None),
+        error_code=getattr(exc, "error_code", None),
+        details=getattr(exc, "details", None),
+        field_violations=getattr(exc, "field_violations", None),
+        quota_violations=getattr(exc, "quota_violations", None),
     ) from exc

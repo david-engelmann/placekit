@@ -79,6 +79,10 @@ class Photo:
     width_px: int = 0
     height_px: int = 0
     author_attributions: list[AuthorAttribution] = field(default_factory=list)
+    #: Link where users can flag a problem with this photo.
+    flag_content_uri: Optional[str] = None
+    #: Link to view this photo on Google Maps.
+    google_maps_uri: Optional[str] = None
 
     @classmethod
     def from_api(cls, data: dict[str, Any]) -> "Photo":
@@ -89,6 +93,69 @@ class Photo:
             author_attributions=[
                 AuthorAttribution.from_api(a) for a in data.get("authorAttributions", [])
             ],
+            flag_content_uri=data.get("flagContentUri"),
+            google_maps_uri=data.get("googleMapsUri"),
+        )
+
+
+@dataclass(slots=True)
+class Date:
+    """A calendar date. A zero component means it was unset."""
+
+    year: int = 0
+    month: int = 0
+    day: int = 0
+
+    @classmethod
+    def from_api(cls, data: dict[str, Any]) -> "Date":
+        return cls(
+            year=int(data.get("year", 0)),
+            month=int(data.get("month", 0)),
+            day=int(data.get("day", 0)),
+        )
+
+
+@dataclass(slots=True)
+class OpeningPoint:
+    """One end of an opening period.
+
+    ``day`` is 0 for Sunday through 6 for Saturday. The first period in a
+    list does not start on any fixed day, and period order is independent
+    of the weekday description order.
+    """
+
+    date: Optional[Date] = None
+    truncated: Optional[bool] = None
+    day: Optional[int] = None
+    hour: Optional[int] = None
+    minute: Optional[int] = None
+
+    @classmethod
+    def from_api(cls, data: dict[str, Any]) -> "OpeningPoint":
+        date = data.get("date")
+        return cls(
+            date=Date.from_api(date) if date else None,
+            truncated=data.get("truncated"),
+            day=data.get("day"),
+            hour=data.get("hour"),
+            minute=data.get("minute"),
+        )
+
+
+@dataclass(slots=True)
+class Period:
+    """A single open/close span within opening hours."""
+
+    open: Optional[OpeningPoint] = None
+    close: Optional[OpeningPoint] = None
+
+    @classmethod
+    def from_api(cls, data: dict[str, Any]) -> "Period":
+        open_point = data.get("open")
+        close_point = data.get("close")
+        return cls(
+            open=OpeningPoint.from_api(open_point) if open_point else None,
+            close=OpeningPoint.from_api(close_point) if close_point else None,
         )
 
 
@@ -97,13 +164,87 @@ class OpeningHours:
     """Regular opening hours of a place."""
 
     open_now: Optional[bool] = None
+    periods: list[Period] = field(default_factory=list)
     weekday_descriptions: list[str] = field(default_factory=list)
 
     @classmethod
     def from_api(cls, data: dict[str, Any]) -> "OpeningHours":
         return cls(
             open_now=data.get("openNow"),
+            periods=[Period.from_api(p) for p in data.get("periods", [])],
             weekday_descriptions=list(data.get("weekdayDescriptions", [])),
+        )
+
+
+@dataclass(slots=True)
+class AddressComponent:
+    """One component of a structured address."""
+
+    long_text: str = ""
+    short_text: str = ""
+    types: list[str] = field(default_factory=list)
+    language_code: Optional[str] = None
+
+    @classmethod
+    def from_api(cls, data: dict[str, Any]) -> "AddressComponent":
+        return cls(
+            long_text=data.get("longText", ""),
+            short_text=data.get("shortText", ""),
+            types=list(data.get("types", [])),
+            language_code=data.get("languageCode"),
+        )
+
+
+@dataclass(slots=True)
+class PlusCode:
+    """Plus code location reference for a place."""
+
+    global_code: str = ""
+    compound_code: Optional[str] = None
+
+    @classmethod
+    def from_api(cls, data: dict[str, Any]) -> "PlusCode":
+        return cls(
+            global_code=data.get("globalCode", ""),
+            compound_code=data.get("compoundCode"),
+        )
+
+
+@dataclass(slots=True)
+class Viewport:
+    """A rectangular area bounded by its low and high corners."""
+
+    low: LatLng
+    high: LatLng
+
+    @classmethod
+    def from_api(cls, data: dict[str, Any]) -> "Viewport":
+        return cls(
+            low=LatLng.from_api(data.get("low", {})),
+            high=LatLng.from_api(data.get("high", {})),
+        )
+
+
+@dataclass(slots=True)
+class PostalAddress:
+    """A postal address in structured form."""
+
+    region_code: Optional[str] = None
+    language_code: Optional[str] = None
+    postal_code: Optional[str] = None
+    administrative_area: Optional[str] = None
+    locality: Optional[str] = None
+    address_lines: list[str] = field(default_factory=list)
+
+    @classmethod
+    def from_api(cls, data: dict[str, Any]) -> "PostalAddress":
+        return cls(
+            region_code=data.get("regionCode"),
+            language_code=data.get("languageCode"),
+            postal_code=data.get("postalCode"),
+            administrative_area=data.get("administrativeArea"),
+            locality=data.get("locality"),
+            address_lines=list(data.get("addressLines", [])),
         )
 
 
@@ -128,6 +269,13 @@ class Place:
     website_uri: Optional[str] = None
     google_maps_uri: Optional[str] = None
     opening_hours: Optional[OpeningHours] = None
+    current_opening_hours: Optional[OpeningHours] = None
+    address_components: list[AddressComponent] = field(default_factory=list)
+    plus_code: Optional[PlusCode] = None
+    viewport: Optional[Viewport] = None
+    postal_address: Optional[PostalAddress] = None
+    adr_format_address: Optional[str] = None
+    primary_type_display_name: Optional[LocalizedText] = None
     photos: list[Photo] = field(default_factory=list)
     attributions: list[Attribution] = field(default_factory=list)
     #: The full response payload for this place, including any fields this
@@ -144,6 +292,11 @@ class Place:
         display = data.get("displayName")
         location = data.get("location")
         hours = data.get("regularOpeningHours")
+        current_hours = data.get("currentOpeningHours")
+        plus_code = data.get("plusCode")
+        viewport = data.get("viewport")
+        postal = data.get("postalAddress")
+        type_display = data.get("primaryTypeDisplayName")
         place_id = data.get("id") or str(data.get("name", "")).removeprefix("places/")
         return cls(
             id=place_id,
@@ -163,6 +316,20 @@ class Place:
             website_uri=data.get("websiteUri"),
             google_maps_uri=data.get("googleMapsUri"),
             opening_hours=OpeningHours.from_api(hours) if hours else None,
+            current_opening_hours=(
+                OpeningHours.from_api(current_hours) if current_hours else None
+            ),
+            address_components=[
+                AddressComponent.from_api(c)
+                for c in data.get("addressComponents", [])
+            ],
+            plus_code=PlusCode.from_api(plus_code) if plus_code else None,
+            viewport=Viewport.from_api(viewport) if viewport else None,
+            postal_address=PostalAddress.from_api(postal) if postal else None,
+            adr_format_address=data.get("adrFormatAddress"),
+            primary_type_display_name=(
+                LocalizedText.from_api(type_display) if type_display else None
+            ),
             photos=[Photo.from_api(p) for p in data.get("photos", [])],
             attributions=[Attribution.from_api(a) for a in data.get("attributions", [])],
             raw=data,
@@ -176,6 +343,13 @@ class TextSearchResult:
     places: list[Place]
     #: Pass back as ``page_token`` to fetch the next page, when present.
     next_page_token: Optional[str] = None
+    #: Link to run the same query on Google Maps. Present only when the
+    #: ``searchUri`` field was requested through the field mask.
+    search_uri: Optional[str] = None
+    #: Routing summaries, one per place, when requested through the field
+    #: mask and routing parameters were supplied. Unmodeled entries are
+    #: preserved as dicts.
+    routing_summaries: list[dict[str, Any]] = field(default_factory=list)
     raw: dict[str, Any] = field(default_factory=dict)
 
     @classmethod
@@ -183,6 +357,8 @@ class TextSearchResult:
         return cls(
             places=[Place.from_api(p) for p in data.get("places", [])],
             next_page_token=data.get("nextPageToken"),
+            search_uri=data.get("searchUri"),
+            routing_summaries=list(data.get("routingSummaries", [])),
             raw=data,
         )
 
@@ -192,11 +368,18 @@ class NearbySearchResult:
     """Nearby Search results (the API returns at most one page)."""
 
     places: list[Place]
+    #: Routing summaries, one per place, when requested through the field
+    #: mask and routing parameters were supplied.
+    routing_summaries: list[dict[str, Any]] = field(default_factory=list)
     raw: dict[str, Any] = field(default_factory=dict)
 
     @classmethod
     def from_api(cls, data: dict[str, Any]) -> "NearbySearchResult":
-        return cls(places=[Place.from_api(p) for p in data.get("places", [])], raw=data)
+        return cls(
+            places=[Place.from_api(p) for p in data.get("places", [])],
+            routing_summaries=list(data.get("routingSummaries", [])),
+            raw=data,
+        )
 
 
 @dataclass(slots=True)
@@ -234,6 +417,9 @@ class PlacePrediction:
     """A predicted place from Autocomplete."""
 
     place_id: str
+    #: Resource name of the suggested place, for example
+    #: ``places/ChIJrTLr-GyuEmsRBfy61i59si0``.
+    place: str = ""
     text: Optional[FormattedText] = None
     main_text: Optional[FormattedText] = None
     secondary_text: Optional[FormattedText] = None
@@ -249,6 +435,7 @@ class PlacePrediction:
         secondary = structured.get("secondaryText")
         return cls(
             place_id=data.get("placeId", ""),
+            place=data.get("place", ""),
             text=FormattedText.from_api(text) if text else None,
             main_text=FormattedText.from_api(main) if main else None,
             secondary_text=FormattedText.from_api(secondary) if secondary else None,
@@ -310,3 +497,16 @@ class PhotoMedia:
         target = Path(path)
         target.write_bytes(self.content)
         return target
+
+
+@dataclass(slots=True)
+class PhotoUriResult:
+    """The photo media endpoint's JSON form, returned on request instead
+    of following its redirect.
+
+    Returned by ``place_photo`` when ``skip_http_redirect`` is set.
+    ``photo_uri`` is short lived; render or fetch it promptly.
+    """
+
+    photo_uri: str
+    name: str = ""

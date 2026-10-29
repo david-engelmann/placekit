@@ -6,6 +6,7 @@ from .models import (
     LatLng,
     NearbySearchResult,
     PhotoMedia,
+    PhotoUriResult,
     Place,
     TextSearchResult,
 )
@@ -34,6 +35,13 @@ class Client:
         included_type: Optional[str] = ...,
         location_bias: Optional[dict[str, Any]] = ...,
         location_restriction: Optional[dict[str, Any]] = ...,
+        page_size: Optional[int] = ...,
+        min_rating: Optional[float] = ...,
+        ev_options: Optional[dict[str, Any]] = ...,
+        search_along_route: Optional[dict[str, Any]] = ...,
+        routing_parameters: Optional[dict[str, Any]] = ...,
+        include_pure_service_area_businesses: Optional[bool] = ...,
+        include_future_opening_businesses: Optional[bool] = ...,
     ) -> TextSearchResult: ...
     def nearby_search(
         self,
@@ -47,6 +55,10 @@ class Client:
         language: Optional[str] = ...,
         region: Optional[str] = ...,
         rank_preference: Optional[str] = ...,
+        included_primary_types: Optional[Iterable[str]] = ...,
+        excluded_primary_types: Optional[Iterable[str]] = ...,
+        routing_parameters: Optional[dict[str, Any]] = ...,
+        include_future_opening_businesses: Optional[bool] = ...,
     ) -> NearbySearchResult: ...
     def place_details(
         self,
@@ -61,6 +73,7 @@ class Client:
         self,
         input_text: str,
         *,
+        fields: FieldsLike = ...,
         language: Optional[str] = ...,
         region: Optional[str] = ...,
         session_token: Optional[str] = ...,
@@ -68,6 +81,11 @@ class Client:
         include_query_predictions: Optional[bool] = ...,
         location_bias: Optional[dict[str, Any]] = ...,
         location_restriction: Optional[dict[str, Any]] = ...,
+        origin: Optional[LatLng | tuple[float, float]] = ...,
+        input_offset: Optional[int] = ...,
+        included_primary_types: Optional[Iterable[str]] = ...,
+        include_pure_service_area_businesses: Optional[bool] = ...,
+        include_future_opening_businesses: Optional[bool] = ...,
     ) -> AutocompleteResult: ...
     def place_photo(
         self,
@@ -75,7 +93,8 @@ class Client:
         *,
         max_width_px: Optional[int] = ...,
         max_height_px: Optional[int] = ...,
-    ) -> PhotoMedia: ...
+        skip_http_redirect: bool = ...,
+    ) -> PhotoMedia | PhotoUriResult: ...
 
 class AsyncClient:
     def __init__(
@@ -101,6 +120,13 @@ class AsyncClient:
         included_type: Optional[str] = ...,
         location_bias: Optional[dict[str, Any]] = ...,
         location_restriction: Optional[dict[str, Any]] = ...,
+        page_size: Optional[int] = ...,
+        min_rating: Optional[float] = ...,
+        ev_options: Optional[dict[str, Any]] = ...,
+        search_along_route: Optional[dict[str, Any]] = ...,
+        routing_parameters: Optional[dict[str, Any]] = ...,
+        include_pure_service_area_businesses: Optional[bool] = ...,
+        include_future_opening_businesses: Optional[bool] = ...,
     ) -> TextSearchResult: ...
     async def nearby_search(
         self,
@@ -114,6 +140,10 @@ class AsyncClient:
         language: Optional[str] = ...,
         region: Optional[str] = ...,
         rank_preference: Optional[str] = ...,
+        included_primary_types: Optional[Iterable[str]] = ...,
+        excluded_primary_types: Optional[Iterable[str]] = ...,
+        routing_parameters: Optional[dict[str, Any]] = ...,
+        include_future_opening_businesses: Optional[bool] = ...,
     ) -> NearbySearchResult: ...
     async def place_details(
         self,
@@ -128,6 +158,7 @@ class AsyncClient:
         self,
         input_text: str,
         *,
+        fields: FieldsLike = ...,
         language: Optional[str] = ...,
         region: Optional[str] = ...,
         session_token: Optional[str] = ...,
@@ -135,6 +166,11 @@ class AsyncClient:
         include_query_predictions: Optional[bool] = ...,
         location_bias: Optional[dict[str, Any]] = ...,
         location_restriction: Optional[dict[str, Any]] = ...,
+        origin: Optional[LatLng | tuple[float, float]] = ...,
+        input_offset: Optional[int] = ...,
+        included_primary_types: Optional[Iterable[str]] = ...,
+        include_pure_service_area_businesses: Optional[bool] = ...,
+        include_future_opening_businesses: Optional[bool] = ...,
     ) -> AutocompleteResult: ...
     async def place_photo(
         self,
@@ -142,4 +178,5 @@ class AsyncClient:
         *,
         max_width_px: Optional[int] = ...,
         max_height_px: Optional[int] = ...,
-    ) -> PhotoMedia: ...
+        skip_http_redirect: bool = ...,
+    ) -> PhotoMedia | PhotoUriResult: ...

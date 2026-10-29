@@ -19,6 +19,7 @@ from .models import (
     LatLng,
     NearbySearchResult,
     PhotoMedia,
+    PhotoUriResult,
     Place,
     TextSearchResult,
 )
@@ -39,6 +40,57 @@ def _circle_body(
     location: LatLng | tuple[float, float], radius_m: float
 ) -> dict[str, Any]:
     return {"circle": {"center": _point(location), "radius": float(radius_m)}}
+
+
+def _location_body(value: Optional[dict[str, Any]]) -> Optional[dict[str, Any]]:
+    """Normalize a location bias or restriction dict into wire shape.
+
+    Callers may describe a circle as ``{"circle": {"center":
+    (latitude, longitude), "radius": meters}}`` with the center as a
+    ``LatLng`` or a plain tuple, or pass a rectangle with ``low`` and
+    ``high`` corners in either form. Values already in wire shape pass
+    through. The Rust core validates the result (one shape only, bias
+    circle radius within range, bias and restriction mutually exclusive).
+    """
+    if value is None:
+        return None
+    result = dict(value)
+    circle = result.get("circle")
+    if isinstance(circle, dict) and "center" in circle:
+        circle = dict(circle)
+        center = circle["center"]
+        if isinstance(center, LatLng) or isinstance(center, tuple):
+            circle["center"] = _point(center)
+        result["circle"] = circle
+    rectangle = result.get("rectangle")
+    if isinstance(rectangle, dict):
+        rectangle = dict(rectangle)
+        for corner in ("low", "high"):
+            point = rectangle.get(corner)
+            if isinstance(point, LatLng) or isinstance(point, tuple):
+                rectangle[corner] = _point(point)
+        result["rectangle"] = rectangle
+    return result
+
+
+def _routing_body(value: Optional[dict[str, Any]]) -> Optional[dict[str, Any]]:
+    """Normalize routing parameters, converting an origin given as a
+    ``LatLng`` or a tuple into wire shape."""
+    if value is None:
+        return None
+    result = dict(value)
+    origin = result.get("origin")
+    if isinstance(origin, LatLng) or isinstance(origin, tuple):
+        result["origin"] = _point(origin)
+    return result
+
+
+def _photo_result(tagged: tuple) -> PhotoMedia | PhotoUriResult:
+    """Turn the core's tagged photo tuple into a public model."""
+    tag, first, second = tagged
+    if tag == "uri":
+        return PhotoUriResult(photo_uri=first, name=second or "")
+    return PhotoMedia(content=first, content_type=second)
 
 
 class _Base:
@@ -70,6 +122,13 @@ class _Base:
         included_type: Optional[str],
         location_bias: Optional[dict[str, Any]],
         location_restriction: Optional[dict[str, Any]],
+        page_size: Optional[int] = None,
+        min_rating: Optional[float] = None,
+        ev_options: Optional[dict[str, Any]] = None,
+        search_along_route: Optional[dict[str, Any]] = None,
+        routing_parameters: Optional[dict[str, Any]] = None,
+        include_pure_service_area_businesses: Optional[bool] = None,
+        include_future_opening_businesses: Optional[bool] = None,
     ) -> dict[str, Any]:
         return _drop_none(
             {
@@ -83,8 +142,17 @@ class _Base:
                 "priceLevels": list(price_levels) if price_levels is not None else None,
                 "strictTypeFiltering": strict_type_filtering,
                 "includedType": included_type,
-                "locationBias": location_bias,
-                "locationRestriction": location_restriction,
+                "locationBias": _location_body(location_bias),
+                "locationRestriction": _location_body(location_restriction),
+                "pageSize": page_size,
+                "minRating": min_rating,
+                "evOptions": ev_options,
+                "searchAlongRouteParameters": search_along_route,
+                "routingParameters": _routing_body(routing_parameters),
+                "includePureServiceAreaBusinesses": (
+                    include_pure_service_area_businesses
+                ),
+                "includeFutureOpeningBusinesses": include_future_opening_businesses,
             }
         )
 
@@ -99,16 +167,32 @@ class _Base:
         language: Optional[str],
         region: Optional[str],
         rank_preference: Optional[str],
+        included_primary_types: Optional[Iterable[str]] = None,
+        excluded_primary_types: Optional[Iterable[str]] = None,
+        routing_parameters: Optional[dict[str, Any]] = None,
+        include_future_opening_businesses: Optional[bool] = None,
     ) -> dict[str, Any]:
         return _drop_none(
             {
                 "locationRestriction": _circle_body(location, radius_m),
                 "includedTypes": list(included_types) if included_types is not None else None,
                 "excludedTypes": list(excluded_types) if excluded_types is not None else None,
+                "includedPrimaryTypes": (
+                    list(included_primary_types)
+                    if included_primary_types is not None
+                    else None
+                ),
+                "excludedPrimaryTypes": (
+                    list(excluded_primary_types)
+                    if excluded_primary_types is not None
+                    else None
+                ),
                 "maxResultCount": max_results,
                 "languageCode": language,
                 "regionCode": region,
                 "rankPreference": rank_preference,
+                "routingParameters": _routing_body(routing_parameters),
+                "includeFutureOpeningBusinesses": include_future_opening_businesses,
             }
         )
 
@@ -123,6 +207,11 @@ class _Base:
         include_query_predictions: Optional[bool],
         location_bias: Optional[dict[str, Any]],
         location_restriction: Optional[dict[str, Any]],
+        origin: Optional[LatLng | tuple[float, float]] = None,
+        input_offset: Optional[int] = None,
+        included_primary_types: Optional[Iterable[str]] = None,
+        include_pure_service_area_businesses: Optional[bool] = None,
+        include_future_opening_businesses: Optional[bool] = None,
     ) -> dict[str, Any]:
         return _drop_none(
             {
@@ -136,8 +225,19 @@ class _Base:
                     else None
                 ),
                 "includeQueryPredictions": include_query_predictions,
-                "locationBias": location_bias,
-                "locationRestriction": location_restriction,
+                "locationBias": _location_body(location_bias),
+                "locationRestriction": _location_body(location_restriction),
+                "origin": _point(origin) if origin is not None else None,
+                "inputOffset": input_offset,
+                "includedPrimaryTypes": (
+                    list(included_primary_types)
+                    if included_primary_types is not None
+                    else None
+                ),
+                "includePureServiceAreaBusinesses": (
+                    include_pure_service_area_businesses
+                ),
+                "includeFutureOpeningBusinesses": include_future_opening_businesses,
             }
         )
 
@@ -171,11 +271,24 @@ class Client(_Base):
         included_type: Optional[str] = None,
         location_bias: Optional[dict[str, Any]] = None,
         location_restriction: Optional[dict[str, Any]] = None,
+        page_size: Optional[int] = None,
+        min_rating: Optional[float] = None,
+        ev_options: Optional[dict[str, Any]] = None,
+        search_along_route: Optional[dict[str, Any]] = None,
+        routing_parameters: Optional[dict[str, Any]] = None,
+        include_pure_service_area_businesses: Optional[bool] = None,
+        include_future_opening_businesses: Optional[bool] = None,
     ) -> TextSearchResult:
         """Search for places matching a free-form query.
 
         ``rank_preference`` is ``"RELEVANCE"`` or ``"DISTANCE"``.
         ``price_levels`` takes API values such as ``"PRICE_LEVEL_MODERATE"``.
+        ``page_size`` is the current spelling of the page size limit and
+        supersedes ``max_results`` when both are given. ``min_rating``
+        filters out places rated below it (0 to 5). ``ev_options`` and
+        ``search_along_route`` take the API's camelCase dict shapes.
+        ``routing_parameters`` takes a dict whose ``origin`` may be a
+        ``LatLng`` or a ``(latitude, longitude)`` tuple.
         """
         body = self._text_search_body(
             query,
@@ -190,6 +303,15 @@ class Client(_Base):
             included_type=included_type,
             location_bias=location_bias,
             location_restriction=location_restriction,
+            page_size=page_size,
+            min_rating=min_rating,
+            ev_options=ev_options,
+            search_along_route=search_along_route,
+            routing_parameters=routing_parameters,
+            include_pure_service_area_businesses=(
+                include_pure_service_area_businesses
+            ),
+            include_future_opening_businesses=include_future_opening_businesses,
         )
         try:
             data = self._inner.text_search(body, normalize_fields(fields))
@@ -209,10 +331,16 @@ class Client(_Base):
         language: Optional[str] = None,
         region: Optional[str] = None,
         rank_preference: Optional[str] = None,
+        included_primary_types: Optional[Iterable[str]] = None,
+        excluded_primary_types: Optional[Iterable[str]] = None,
+        routing_parameters: Optional[dict[str, Any]] = None,
+        include_future_opening_businesses: Optional[bool] = None,
     ) -> NearbySearchResult:
         """Search for places around ``location`` within ``radius_m`` meters.
 
         ``rank_preference`` is ``"DISTANCE"`` or ``"POPULARITY"``.
+        The primary type filters take up to 50 place types each, and a
+        type listed in both is an error at the API.
         """
         body = self._nearby_search_body(
             location,
@@ -223,6 +351,10 @@ class Client(_Base):
             language=language,
             region=region,
             rank_preference=rank_preference,
+            included_primary_types=included_primary_types,
+            excluded_primary_types=excluded_primary_types,
+            routing_parameters=routing_parameters,
+            include_future_opening_businesses=include_future_opening_businesses,
         )
         try:
             data = self._inner.nearby_search(body, normalize_fields(fields))
@@ -256,6 +388,7 @@ class Client(_Base):
         self,
         input_text: str,
         *,
+        fields: FieldsLike = None,
         language: Optional[str] = None,
         region: Optional[str] = None,
         session_token: Optional[str] = None,
@@ -263,8 +396,20 @@ class Client(_Base):
         include_query_predictions: Optional[bool] = None,
         location_bias: Optional[dict[str, Any]] = None,
         location_restriction: Optional[dict[str, Any]] = None,
+        origin: Optional[LatLng | tuple[float, float]] = None,
+        input_offset: Optional[int] = None,
+        included_primary_types: Optional[Iterable[str]] = None,
+        include_pure_service_area_businesses: Optional[bool] = None,
+        include_future_opening_businesses: Optional[bool] = None,
     ) -> AutocompleteResult:
-        """Get place predictions for partial input text."""
+        """Get place predictions for partial input text.
+
+        Pass ``origin`` (a ``LatLng`` or a ``(latitude, longitude)``
+        tuple) to get ``distance_meters`` on predictions; without an
+        origin the API returns no distances. ``included_primary_types``
+        takes up to 5 place types, or the single collection ``(cities)``
+        or ``(regions)``. A ``fields`` mask is optional on this endpoint.
+        """
         body = self._autocomplete_body(
             input_text,
             language=language,
@@ -274,9 +419,16 @@ class Client(_Base):
             include_query_predictions=include_query_predictions,
             location_bias=location_bias,
             location_restriction=location_restriction,
+            origin=origin,
+            input_offset=input_offset,
+            included_primary_types=included_primary_types,
+            include_pure_service_area_businesses=(
+                include_pure_service_area_businesses
+            ),
+            include_future_opening_businesses=include_future_opening_businesses,
         )
         try:
-            data = self._inner.autocomplete(body)
+            data = self._inner.autocomplete(body, normalize_fields(fields))
         except _CorePlacesError as exc:
             raise_translated(exc)
         return AutocompleteResult.from_api(data)
@@ -287,19 +439,25 @@ class Client(_Base):
         *,
         max_width_px: Optional[int] = None,
         max_height_px: Optional[int] = None,
-    ) -> PhotoMedia:
+        skip_http_redirect: bool = False,
+    ) -> PhotoMedia | PhotoUriResult:
         """Download a photo by its resource name.
 
         ``photo_name`` comes from ``Place.photos[i].name``. At least one of
         ``max_width_px`` and ``max_height_px`` is required (each 1 to 4800).
+
+        By default this follows the endpoint's redirect and returns a
+        ``PhotoMedia`` with the image bytes. With
+        ``skip_http_redirect=True`` it returns a ``PhotoUriResult``
+        carrying the photo's short lived URI instead.
         """
         try:
-            content, content_type = self._inner.place_photo(
-                photo_name, max_width_px, max_height_px
+            tagged = self._inner.place_photo(
+                photo_name, max_width_px, max_height_px, skip_http_redirect
             )
         except _CorePlacesError as exc:
             raise_translated(exc)
-        return PhotoMedia(content=content, content_type=content_type)
+        return _photo_result(tagged)
 
 
 class AsyncClient(_Base):
@@ -325,6 +483,13 @@ class AsyncClient(_Base):
         included_type: Optional[str] = None,
         location_bias: Optional[dict[str, Any]] = None,
         location_restriction: Optional[dict[str, Any]] = None,
+        page_size: Optional[int] = None,
+        min_rating: Optional[float] = None,
+        ev_options: Optional[dict[str, Any]] = None,
+        search_along_route: Optional[dict[str, Any]] = None,
+        routing_parameters: Optional[dict[str, Any]] = None,
+        include_pure_service_area_businesses: Optional[bool] = None,
+        include_future_opening_businesses: Optional[bool] = None,
     ) -> TextSearchResult:
         """Async version of ``Client.text_search``."""
         body = self._text_search_body(
@@ -340,6 +505,15 @@ class AsyncClient(_Base):
             included_type=included_type,
             location_bias=location_bias,
             location_restriction=location_restriction,
+            page_size=page_size,
+            min_rating=min_rating,
+            ev_options=ev_options,
+            search_along_route=search_along_route,
+            routing_parameters=routing_parameters,
+            include_pure_service_area_businesses=(
+                include_pure_service_area_businesses
+            ),
+            include_future_opening_businesses=include_future_opening_businesses,
         )
         try:
             data = await self._inner.text_search_async(body, normalize_fields(fields))
@@ -359,6 +533,10 @@ class AsyncClient(_Base):
         language: Optional[str] = None,
         region: Optional[str] = None,
         rank_preference: Optional[str] = None,
+        included_primary_types: Optional[Iterable[str]] = None,
+        excluded_primary_types: Optional[Iterable[str]] = None,
+        routing_parameters: Optional[dict[str, Any]] = None,
+        include_future_opening_businesses: Optional[bool] = None,
     ) -> NearbySearchResult:
         """Async version of ``Client.nearby_search``."""
         body = self._nearby_search_body(
@@ -370,6 +548,10 @@ class AsyncClient(_Base):
             language=language,
             region=region,
             rank_preference=rank_preference,
+            included_primary_types=included_primary_types,
+            excluded_primary_types=excluded_primary_types,
+            routing_parameters=routing_parameters,
+            include_future_opening_businesses=include_future_opening_businesses,
         )
         try:
             data = await self._inner.nearby_search_async(body, normalize_fields(fields))
@@ -403,6 +585,7 @@ class AsyncClient(_Base):
         self,
         input_text: str,
         *,
+        fields: FieldsLike = None,
         language: Optional[str] = None,
         region: Optional[str] = None,
         session_token: Optional[str] = None,
@@ -410,6 +593,11 @@ class AsyncClient(_Base):
         include_query_predictions: Optional[bool] = None,
         location_bias: Optional[dict[str, Any]] = None,
         location_restriction: Optional[dict[str, Any]] = None,
+        origin: Optional[LatLng | tuple[float, float]] = None,
+        input_offset: Optional[int] = None,
+        included_primary_types: Optional[Iterable[str]] = None,
+        include_pure_service_area_businesses: Optional[bool] = None,
+        include_future_opening_businesses: Optional[bool] = None,
     ) -> AutocompleteResult:
         """Async version of ``Client.autocomplete``."""
         body = self._autocomplete_body(
@@ -421,9 +609,18 @@ class AsyncClient(_Base):
             include_query_predictions=include_query_predictions,
             location_bias=location_bias,
             location_restriction=location_restriction,
+            origin=origin,
+            input_offset=input_offset,
+            included_primary_types=included_primary_types,
+            include_pure_service_area_businesses=(
+                include_pure_service_area_businesses
+            ),
+            include_future_opening_businesses=include_future_opening_businesses,
         )
         try:
-            data = await self._inner.autocomplete_async(body)
+            data = await self._inner.autocomplete_async(
+                body, normalize_fields(fields)
+            )
         except _CorePlacesError as exc:
             raise_translated(exc)
         return AutocompleteResult.from_api(data)
@@ -434,12 +631,13 @@ class AsyncClient(_Base):
         *,
         max_width_px: Optional[int] = None,
         max_height_px: Optional[int] = None,
-    ) -> PhotoMedia:
+        skip_http_redirect: bool = False,
+    ) -> PhotoMedia | PhotoUriResult:
         """Async version of ``Client.place_photo``."""
         try:
-            content, content_type = await self._inner.place_photo_async(
-                photo_name, max_width_px, max_height_px
+            tagged = await self._inner.place_photo_async(
+                photo_name, max_width_px, max_height_px, skip_http_redirect
             )
         except _CorePlacesError as exc:
             raise_translated(exc)
-        return PhotoMedia(content=content, content_type=content_type)
+        return _photo_result(tagged)
