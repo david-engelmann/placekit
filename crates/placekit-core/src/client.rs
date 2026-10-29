@@ -21,6 +21,15 @@ use crate::models::{
 /// Default endpoint root for the Places API (New).
 pub const DEFAULT_BASE_URL: &str = "https://places.googleapis.com/v1";
 
+/// Default cap on a single response body, 32 MiB. Legitimate Places
+/// responses are orders of magnitude smaller; the cap exists so a
+/// broken or hostile endpoint cannot grow memory without bound.
+pub const DEFAULT_MAX_RESPONSE_BYTES: usize = 32 * 1024 * 1024;
+
+/// Cap on error response bodies. Error bodies are read only to build
+/// the error message, which is itself capped, so they stop early.
+const ERROR_BODY_CAP: usize = 256 * 1024;
+
 const API_KEY_HEADER: &str = "x-goog-api-key";
 const FIELD_MASK_HEADER: &str = "x-goog-fieldmask";
 const USER_AGENT: &str = concat!("placekit/", env!("CARGO_PKG_VERSION"), " (rust core)");
@@ -31,6 +40,7 @@ pub struct ClientBuilder {
     api_key: String,
     base_url: String,
     timeout: Duration,
+    max_response_bytes: usize,
 }
 
 impl ClientBuilder {
@@ -43,6 +53,14 @@ impl ClientBuilder {
     /// Per-request timeout (default 10 seconds).
     pub fn timeout(mut self, timeout: Duration) -> Self {
         self.timeout = timeout;
+        self
+    }
+
+    /// Maximum response body size in bytes (default 32 MiB). A body
+    /// that grows past the cap aborts the request with a decode error
+    /// naming the cap instead of being buffered whole.
+    pub fn max_response_bytes(mut self, max_response_bytes: usize) -> Self {
+        self.max_response_bytes = max_response_bytes;
         self
     }
 
@@ -73,6 +91,7 @@ impl ClientBuilder {
             api_key: self.api_key,
             base_url: self.base_url.trim_end_matches('/').to_owned(),
             http,
+            max_response_bytes: self.max_response_bytes,
         })
     }
 }
@@ -83,6 +102,7 @@ pub struct Client {
     api_key: String,
     base_url: String,
     http: reqwest::Client,
+    max_response_bytes: usize,
 }
 
 impl Client {
@@ -97,6 +117,7 @@ impl Client {
             api_key: api_key.into(),
             base_url: DEFAULT_BASE_URL.to_owned(),
             timeout: Duration::from_secs(10),
+            max_response_bytes: DEFAULT_MAX_RESPONSE_BYTES,
         }
     }
 
@@ -110,6 +131,7 @@ impl Client {
             return Err(Error::config("text_query must not be empty"));
         }
         validate_min_rating(request.min_rating)?;
+        validate_max_result_count(request.max_result_count)?;
         validate_text_search_locations(request)?;
         let url = format!("{}/places:searchText", self.base_url);
         let mask = fields
@@ -177,7 +199,19 @@ impl Client {
         if !query.is_empty() {
             builder = builder.query(&query);
         }
-        self.send(builder).await
+        let (place, status): (Place, u16) = self.send_with_status(builder).await?;
+        // Place Details with any sane field mask always returns an
+        // identity. A success body carrying neither an id nor a
+        // resource name is the wrong shape entirely, not a real place;
+        // search and autocomplete empty objects stay legitimate there,
+        // which is why this check lives on this endpoint only.
+        if place.id.is_empty() && place.name.is_empty() {
+            return Err(Error::Decode {
+                detail: "place details response carried no id or name".to_owned(),
+                status: Some(status),
+            });
+        }
+        Ok(place)
     }
 
     /// Autocomplete: place and query predictions for partial input.
@@ -237,10 +271,13 @@ impl Client {
         skip_http_redirect: bool,
     ) -> Result<PhotoMedia, Error> {
         validate_photo_params(photo_name, max_width_px, max_height_px)?;
-        // The photo name is structural (places/{id}/photos/{ref}); only
-        // never encode it whole. Its segments are validated to be free of
-        // slashes beyond the structure, so it is interpolated as is (F16).
-        let url = format!("{}/{}/media", self.base_url, photo_name);
+        // The photo name is structural (places/{id}/photos/{ref}). Its
+        // segments are validated strictly, and each segment is percent
+        // encoded as it is interpolated, so no segment can reshape the
+        // path or smuggle in query parameters. This endpoint carries
+        // the API key as a query parameter, which is why path escapes
+        // here are credential relevant.
+        let url = format!("{}/{}/media", self.base_url, encode_photo_name(photo_name));
         let mut query: Vec<(&str, String)> = vec![("key", self.api_key.clone())];
         if let Some(w) = max_width_px {
             query.push(("maxWidthPx", w.to_string()));
@@ -259,28 +296,125 @@ impl Client {
             .await
             .map_err(Error::network)?;
         let status = response.status();
-        let content_type = response
-            .headers()
-            .get(reqwest::header::CONTENT_TYPE)
-            .and_then(|v| v.to_str().ok())
-            .map(str::to_owned);
+        let content_type = content_type_of(&response);
+        let retry_after = retry_after_of(&response);
+        // The host that finally answered, after any redirects. When it
+        // is not the API host, failures belong to the image host.
+        let final_host = response.url().host_str().map(str::to_owned);
         if !status.is_success() {
-            let body = response.text().await.unwrap_or_default();
-            return Err(Error::from_response(status.as_u16(), &body));
+            let mut err =
+                read_error_body(response, status.as_u16(), content_type.as_deref())
+                    .await
+                    .with_retry_after(retry_after);
+            let mut notes: Vec<String> = Vec::new();
+            let base_host = reqwest::Url::parse(&self.base_url)
+                .ok()
+                .and_then(|u| u.host_str().map(str::to_owned));
+            if let (Some(final_host), Some(base_host)) = (&final_host, &base_host) {
+                if final_host != base_host {
+                    notes.push(format!(
+                        "the failure came from the image host {final_host} after a redirect, not from the Places API"
+                    ));
+                }
+            }
+            if let Some(ct) = &content_type {
+                notes.push(format!("content type {ct}"));
+            }
+            if !notes.is_empty() {
+                err = err.with_note(&notes.join("; "));
+            }
+            return Err(err);
         }
         if skip_http_redirect {
-            let body = response.text().await.map_err(Error::network)?;
-            let media: PhotoMediaJson = serde_json::from_str(&body).map_err(|e| Error::Decode {
-                detail: e.to_string(),
-                status: Some(status.as_u16()),
-            })?;
+            let body = self.read_success_text(response, status).await?;
+            if Error::has_error_envelope(&body) {
+                return Err(Error::from_response_detailed(
+                    status.as_u16(),
+                    &body,
+                    content_type.as_deref(),
+                )
+                .with_retry_after(retry_after));
+            }
+            let media: PhotoMediaJson =
+                serde_json::from_str(&body).map_err(|e| Error::Decode {
+                    detail: e.to_string(),
+                    status: Some(status.as_u16()),
+                })?;
             return Ok(PhotoMedia::Uri(media));
         }
-        let bytes = response.bytes().await.map_err(Error::network)?;
+        // A success body only becomes a photo when it plausibly is
+        // one. The declared type is checked first, then the envelope
+        // check catches JSON errors regardless of the declared type,
+        // then the magic bytes check the body against the claim.
+        if let Some(ct) = &content_type {
+            if !ct.starts_with("image/") {
+                return Err(Error::Decode {
+                    detail: format!(
+                        "photo endpoint returned a non-image content type: {ct}"
+                    ),
+                    status: Some(status.as_u16()),
+                });
+            }
+        }
+        let bytes = match read_body_capped(response, self.max_response_bytes).await {
+            BodyRead::Complete(bytes) => bytes,
+            BodyRead::TooLarge => {
+                return Err(Error::Decode {
+                    detail: format!(
+                        "photo body exceeded the maximum of {} bytes",
+                        self.max_response_bytes
+                    ),
+                    status: Some(status.as_u16()),
+                });
+            }
+            BodyRead::Failed(read_error) => {
+                return Err(Error::network_detail(format!(
+                    "HTTP {} received, body read failed: {read_error}",
+                    status.as_u16()
+                )));
+            }
+        };
+        if let Ok(text) = std::str::from_utf8(&bytes) {
+            if Error::has_error_envelope(text) {
+                return Err(Error::from_response_detailed(
+                    status.as_u16(),
+                    text,
+                    content_type.as_deref(),
+                )
+                .with_retry_after(retry_after));
+            }
+        }
+        validate_photo_magic(&bytes, content_type.as_deref(), status.as_u16())?;
         Ok(PhotoMedia::Bytes(PhotoResponse {
-            bytes: bytes.to_vec(),
+            bytes,
             content_type,
         }))
+    }
+
+    /// Read a success response body as text under the size cap, for the
+    /// JSON form of the photo endpoint. Failures keep the HTTP status.
+    async fn read_success_text(
+        &self,
+        response: reqwest::Response,
+        status: reqwest::StatusCode,
+    ) -> Result<String, Error> {
+        match read_body_capped(response, self.max_response_bytes).await {
+            BodyRead::Complete(bytes) => String::from_utf8(bytes).map_err(|e| Error::Decode {
+                detail: format!("response body was not valid UTF-8: {e}"),
+                status: Some(status.as_u16()),
+            }),
+            BodyRead::TooLarge => Err(Error::Decode {
+                detail: format!(
+                    "response body exceeded the maximum of {} bytes",
+                    self.max_response_bytes
+                ),
+                status: Some(status.as_u16()),
+            }),
+            BodyRead::Failed(read_error) => Err(Error::network_detail(format!(
+                "HTTP {} received, body read failed: {read_error}",
+                status.as_u16()
+            ))),
+        }
     }
 
     /// Headers shared by every request: the API key, and the field mask
@@ -304,23 +438,163 @@ impl Client {
         &self,
         builder: reqwest::RequestBuilder,
     ) -> Result<T, Error> {
+        Ok(self.send_with_status(builder).await?.0)
+    }
+
+    /// Send a JSON request and decode the success body, keeping the
+    /// HTTP status alongside the value for callers that validate the
+    /// decoded shape themselves. Every failure keeps both facts it
+    /// knows: the HTTP status and, for body read failures, the read
+    /// error itself; neither is silently dropped.
+    async fn send_with_status<T: DeserializeOwned>(
+        &self,
+        builder: reqwest::RequestBuilder,
+    ) -> Result<(T, u16), Error> {
         let response = builder.send().await.map_err(Error::network)?;
         let status = response.status();
-        let body = response.text().await.map_err(Error::network)?;
+        let retry_after = retry_after_of(&response);
+        let content_type = content_type_of(&response);
         if !status.is_success() {
-            return Err(Error::from_response(status.as_u16(), &body));
+            return Err(
+                read_error_body(response, status.as_u16(), content_type.as_deref())
+                    .await
+                    .with_retry_after(retry_after),
+            );
         }
-        serde_json::from_str::<T>(&body).map_err(|e| Error::Decode {
-            detail: e.to_string(),
-            status: Some(status.as_u16()),
-        })
+        let body = match read_body_capped(response, self.max_response_bytes).await {
+            BodyRead::Complete(bytes) => match String::from_utf8(bytes) {
+                Ok(text) => text,
+                Err(e) => {
+                    return Err(Error::Decode {
+                        detail: format!("response body was not valid UTF-8: {e}"),
+                        status: Some(status.as_u16()),
+                    });
+                }
+            },
+            BodyRead::TooLarge => {
+                return Err(Error::Decode {
+                    detail: format!(
+                        "response body exceeded the maximum of {} bytes",
+                        self.max_response_bytes
+                    ),
+                    status: Some(status.as_u16()),
+                });
+            }
+            BodyRead::Failed(read_error) => {
+                return Err(Error::network_detail(format!(
+                    "HTTP {} received, body read failed: {read_error}",
+                    status.as_u16()
+                )));
+            }
+        };
+        // An error envelope on a success status is an error, exactly
+        // as if it had arrived on its own HTTP code.
+        if Error::has_error_envelope(&body) {
+            return Err(Error::from_response_detailed(
+                status.as_u16(),
+                &body,
+                content_type.as_deref(),
+            )
+            .with_retry_after(retry_after));
+        }
+        serde_json::from_str::<T>(&body)
+            .map(|value| (value, status.as_u16()))
+            .map_err(|e| Error::Decode {
+                detail: e.to_string(),
+                status: Some(status.as_u16()),
+            })
     }
+}
+
+/// Outcome of reading a response body under a size cap.
+enum BodyRead {
+    Complete(Vec<u8>),
+    TooLarge,
+    Failed(String),
+}
+
+/// Read a body as a stream, aborting as soon as it grows past `cap`
+/// instead of buffering it whole.
+async fn read_body_capped(response: reqwest::Response, cap: usize) -> BodyRead {
+    use futures_util::StreamExt;
+    let mut stream = response.bytes_stream();
+    let mut buf = Vec::new();
+    while let Some(chunk) = stream.next().await {
+        match chunk {
+            Ok(chunk) => {
+                if buf.len() + chunk.len() > cap {
+                    return BodyRead::TooLarge;
+                }
+                buf.extend_from_slice(&chunk);
+            }
+            Err(e) => return BodyRead::Failed(e.to_string()),
+        }
+    }
+    BodyRead::Complete(buf)
+}
+
+/// Read an error response body and build the error from it. The read
+/// is capped and truncation is harmless (messages are capped again
+/// downstream). A read failure with nothing read at all keeps the
+/// HTTP fallback class and records the failure in the message, so
+/// neither the status nor the read error is lost.
+async fn read_error_body(
+    response: reqwest::Response,
+    status: u16,
+    content_type: Option<&str>,
+) -> Error {
+    use futures_util::StreamExt;
+    let mut stream = response.bytes_stream();
+    let mut buf = Vec::new();
+    let mut failure: Option<String> = None;
+    while buf.len() < ERROR_BODY_CAP {
+        match stream.next().await {
+            Some(Ok(chunk)) => {
+                let take = (ERROR_BODY_CAP - buf.len()).min(chunk.len());
+                buf.extend_from_slice(&chunk[..take]);
+            }
+            Some(Err(e)) => {
+                failure = Some(e.to_string());
+                break;
+            }
+            None => break,
+        }
+    }
+    if let Some(read_error) = failure {
+        if buf.is_empty() {
+            return Error::from_unreadable_body(status, &read_error, content_type);
+        }
+    }
+    Error::from_response_detailed(status, &String::from_utf8_lossy(&buf), content_type)
+}
+
+/// The `Retry-After` header as whole seconds, when present and in the
+/// integer form. The HTTP date form is left unread.
+fn retry_after_of(response: &reqwest::Response) -> Option<u64> {
+    response
+        .headers()
+        .get(reqwest::header::RETRY_AFTER)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| s.trim().parse::<u64>().ok())
+}
+
+fn content_type_of(response: &reqwest::Response) -> Option<String> {
+    response
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .map(str::to_owned)
 }
 
 fn validate_place_id(place_id: &str) -> Result<(), Error> {
     if place_id.trim().is_empty()
         || place_id.contains('/')
         || place_id.contains(char::is_whitespace)
+        || place_id == "."
+        || place_id == ".."
+        || place_id
+            .chars()
+            .any(|c| matches!(c, '?' | '#' | '%' | '\\') || c.is_control())
     {
         return Err(Error::config(format!("invalid place id: {place_id:?}")));
     }
@@ -436,14 +710,84 @@ fn encode_path_segment(segment: &str) -> String {
     out
 }
 
+/// Percent encode a photo resource name segment by segment, keeping
+/// the structural slashes. Segments are validated before this runs;
+/// encoding is the second line of defense, so a future validator gap
+/// still cannot change the request path.
+fn encode_photo_name(photo_name: &str) -> String {
+    photo_name
+        .split('/')
+        .map(encode_path_segment)
+        .collect::<Vec<_>>()
+        .join("/")
+}
+
+/// Check a downloaded photo body against the format its content type
+/// claims, for the formats with a fixed signature. A body shorter
+/// than the signature or not matching it is a decode failure, not an
+/// image; unlisted image types pass unchecked.
+fn validate_photo_magic(
+    bytes: &[u8],
+    content_type: Option<&str>,
+    status: u16,
+) -> Result<(), Error> {
+    let claimed = content_type.map(|ct| {
+        ct.split(';')
+            .next()
+            .unwrap_or("")
+            .trim()
+            .to_ascii_lowercase()
+    });
+    let matches_claim = match claimed.as_deref() {
+        Some("image/jpeg") => bytes.starts_with(&[0xFF, 0xD8, 0xFF]),
+        Some("image/png") => bytes.starts_with(&[0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]),
+        Some("image/gif") => bytes.starts_with(b"GIF8"),
+        Some("image/webp") => {
+            bytes.len() >= 12 && &bytes[..4] == b"RIFF" && &bytes[8..12] == b"WEBP"
+        }
+        _ => return Ok(()),
+    };
+    if matches_claim {
+        Ok(())
+    } else {
+        Err(Error::Decode {
+            detail: format!(
+                "photo body does not match its declared content type {}",
+                claimed.unwrap_or_default()
+            ),
+            status: Some(status),
+        })
+    }
+}
+
 fn validate_photo_params(
     photo_name: &str,
     max_width_px: Option<u32>,
     max_height_px: Option<u32>,
 ) -> Result<(), Error> {
-    if !photo_name.starts_with("places/") || !photo_name.contains("/photos/") {
+    // The documented shape is exactly places/{id}/photos/{ref}: four
+    // segments, no more path separators than the structure carries,
+    // and neither id nor reference empty.
+    let segments: Vec<&str> = photo_name.split('/').collect();
+    let shape_ok = segments.len() == 4
+        && segments[0] == "places"
+        && segments[2] == "photos"
+        && !segments[1].is_empty()
+        && !segments[3].is_empty();
+    if !shape_ok {
         return Err(Error::config(format!(
             "invalid photo resource name: {photo_name:?} (expected places/{{id}}/photos/{{ref}})"
+        )));
+    }
+    // Nothing in a valid name can reshape the URL or the query string,
+    // and no segment may be a dot segment that collapses the path.
+    if photo_name
+        .chars()
+        .any(|c| matches!(c, '?' | '#' | '%' | '\\') || c.is_control())
+        || segments.iter().any(|seg| *seg == ".." || *seg == ".")
+    {
+        return Err(Error::config(format!(
+            "invalid photo resource name: {photo_name:?} (unexpected characters or path segments)"
         )));
     }
     if max_width_px.is_none() && max_height_px.is_none() {
@@ -553,6 +897,28 @@ mod tests {
     }
 
     #[test]
+    fn place_id_validation_rejects_url_hostile_ids() {
+        // Each of these reshaped the request URL when it was only
+        // interpolated: query injection, fragment truncation, path
+        // collapse, and pre-encoded traversal.
+        for hostile in [
+            "ChIJ?sessionToken=evil",
+            "ChIJ#fragment",
+            ".",
+            "..",
+            "ChIJ%2e%2e",
+            "back\\slash",
+            "tab\tchar",
+        ] {
+            assert_eq!(
+                validate_place_id(hostile).unwrap_err().kind(),
+                "config",
+                "{hostile}"
+            );
+        }
+    }
+
+    #[test]
     fn circle_radius_validation() {
         assert!(validate_circle_radius(1.0).is_ok());
         assert!(validate_circle_radius(50_000.0).is_ok());
@@ -576,6 +942,102 @@ mod tests {
         // Malformed resource names.
         assert!(validate_photo_params("ChIJ", Some(1), None).is_err());
         assert!(validate_photo_params("places/ChIJ", Some(1), None).is_err());
+    }
+
+    #[test]
+    fn photo_name_validation_rejects_traversal_and_forgery() {
+        // The traversal form escaped the media path entirely (with the
+        // API key query attached); the forged form smuggled a second
+        // key parameter; the rest break the documented shape.
+        for hostile in [
+            "places/ChIJ/photos/../../../../etc/passwd",
+            "places/../photos/x",
+            "places/ChIJ/photos/ref?key=forged",
+            "places/ChIJ/photos/ref#frag",
+            "places/ChIJ/photos/re%2f",
+            "places/ChIJ/photos/ref/extra",
+            "places//photos/ref",
+            "places/ChIJ/photos/",
+            "places/ChIJ/images/ref",
+        ] {
+            assert_eq!(
+                validate_photo_params(hostile, Some(1), None)
+                    .unwrap_err()
+                    .kind(),
+                "config",
+                "{hostile}"
+            );
+        }
+    }
+
+    #[test]
+    fn photo_magic_must_match_the_declared_type() {
+        let png = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 1, 2];
+        assert!(validate_photo_magic(&png, Some("image/png"), 200).is_ok());
+        assert!(
+            validate_photo_magic(&png, Some("image/png; charset=binary"), 200).is_ok()
+        );
+        // A one byte body claims PNG and matches nothing.
+        assert_eq!(
+            validate_photo_magic(&[0x89], Some("image/png"), 200)
+                .unwrap_err()
+                .kind(),
+            "decode"
+        );
+        // JPEG bytes under a PNG claim fail; under their own claim pass.
+        let jpeg = [0xFF, 0xD8, 0xFF, 0xE0, 9, 9];
+        assert!(validate_photo_magic(&jpeg, Some("image/png"), 200).is_err());
+        assert!(validate_photo_magic(&jpeg, Some("image/jpeg"), 200).is_ok());
+        // Unlisted types and missing types stay permissive.
+        assert!(validate_photo_magic(&[1, 2, 3], Some("image/avif"), 200).is_ok());
+        assert!(validate_photo_magic(&[1, 2, 3], None, 200).is_ok());
+    }
+
+    /// Poll a future once with a no-op waker. Validation failures
+    /// return before the first await point, so public method entry
+    /// points can be tested without a runtime or a server.
+    fn poll_once<F: std::future::Future>(fut: F) -> Option<F::Output> {
+        use std::sync::Arc;
+        use std::task::{Context, Poll, Wake};
+        struct Noop;
+        impl Wake for Noop {
+            fn wake(self: Arc<Self>) {}
+        }
+        let waker = std::task::Waker::from(Arc::new(Noop));
+        let mut cx = Context::from_waker(&waker);
+        let mut fut = Box::pin(fut);
+        match fut.as_mut().poll(&mut cx) {
+            Poll::Ready(value) => Some(value),
+            Poll::Pending => None,
+        }
+    }
+
+    #[test]
+    fn public_methods_validate_before_any_request() {
+        // These go through the public methods, not the free helpers,
+        // so a dropped validation call inside a method fails here.
+        let client = test_client();
+        let err = poll_once(client.place_details("ChIJ?sessionToken=evil", None, None, None, None))
+            .expect("validation must resolve immediately")
+            .unwrap_err();
+        assert_eq!(err.kind(), "config");
+        let err = poll_once(client.place_photo(
+            "places/ChIJ/photos/../../../../etc/passwd",
+            Some(100),
+            None,
+            false,
+        ))
+        .expect("validation must resolve immediately")
+        .unwrap_err();
+        assert_eq!(err.kind(), "config");
+        let req = TextSearchRequest {
+            text_query: "   ".to_owned(),
+            ..Default::default()
+        };
+        let err = poll_once(client.text_search(&req, None))
+            .expect("validation must resolve immediately")
+            .unwrap_err();
+        assert_eq!(err.kind(), "config");
     }
 
     #[test]
