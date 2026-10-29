@@ -132,6 +132,7 @@ impl Client {
         }
         validate_min_rating(request.min_rating)?;
         validate_max_result_count(request.max_result_count)?;
+        validate_page_size(request.page_size)?;
         validate_text_search_locations(request)?;
         let url = format!("{}/places:searchText", self.base_url);
         let mask = fields
@@ -326,13 +327,10 @@ impl Client {
         }
         if skip_http_redirect {
             let body = self.read_success_text(response, status).await?;
-            if Error::has_error_envelope(&body) {
-                return Err(Error::from_response_detailed(
-                    status.as_u16(),
-                    &body,
-                    content_type.as_deref(),
-                )
-                .with_retry_after(retry_after));
+            if let Some(err) =
+                envelope_error(status.as_u16(), &body, content_type.as_deref(), retry_after)
+            {
+                return Err(err);
             }
             let media: PhotoMediaJson = serde_json::from_str(&body).map_err(|e| Error::Decode {
                 detail: e.to_string(),
@@ -340,44 +338,28 @@ impl Client {
             })?;
             return Ok(PhotoMedia::Uri(media));
         }
-        // A success body only becomes a photo when it plausibly is
-        // one. The declared type is checked first, then the envelope
-        // check catches JSON errors regardless of the declared type,
-        // then the magic bytes check the body against the claim.
+        // The body is read and checked for an error envelope before
+        // any content type reasoning. Real error responses carry
+        // application/json, so gating on the declared type first
+        // would throw the envelope's status and message away; only a
+        // body that is not an envelope goes on to the declared type
+        // gate and the magic bytes check that judge an image claim.
+        let bytes = self
+            .read_capped_body(response, status, "photo body")
+            .await?;
+        if let Ok(text) = std::str::from_utf8(&bytes) {
+            if let Some(err) =
+                envelope_error(status.as_u16(), text, content_type.as_deref(), retry_after)
+            {
+                return Err(err);
+            }
+        }
         if let Some(ct) = &content_type {
             if !ct.starts_with("image/") {
                 return Err(Error::Decode {
                     detail: format!("photo endpoint returned a non-image content type: {ct}"),
                     status: Some(status.as_u16()),
                 });
-            }
-        }
-        let bytes = match read_body_capped(response, self.max_response_bytes).await {
-            BodyRead::Complete(bytes) => bytes,
-            BodyRead::TooLarge => {
-                return Err(Error::Decode {
-                    detail: format!(
-                        "photo body exceeded the maximum of {} bytes",
-                        self.max_response_bytes
-                    ),
-                    status: Some(status.as_u16()),
-                });
-            }
-            BodyRead::Failed(read_error) => {
-                return Err(Error::network_detail(format!(
-                    "HTTP {} received, body read failed: {read_error}",
-                    status.as_u16()
-                )));
-            }
-        };
-        if let Ok(text) = std::str::from_utf8(&bytes) {
-            if Error::has_error_envelope(text) {
-                return Err(Error::from_response_detailed(
-                    status.as_u16(),
-                    text,
-                    content_type.as_deref(),
-                )
-                .with_retry_after(retry_after));
             }
         }
         validate_photo_magic(&bytes, content_type.as_deref(), status.as_u16())?;
@@ -394,14 +376,33 @@ impl Client {
         response: reqwest::Response,
         status: reqwest::StatusCode,
     ) -> Result<String, Error> {
+        let bytes = self
+            .read_capped_body(response, status, "response body")
+            .await?;
+        String::from_utf8(bytes).map_err(|e| Error::Decode {
+            detail: format!("response body was not valid UTF-8: {e}"),
+            status: Some(status.as_u16()),
+        })
+    }
+
+    /// Read a success response body under the size cap, mapping the
+    /// outcome onto the errors every endpoint shares. Over the cap is
+    /// a decode error naming the cap; a failed read is a network error
+    /// that keeps both the HTTP status and the read failure. `label`
+    /// names the body in the cap message: "response body" on the JSON
+    /// paths, "photo body" on the photo bytes path, whose wording
+    /// predates this shared helper.
+    async fn read_capped_body(
+        &self,
+        response: reqwest::Response,
+        status: reqwest::StatusCode,
+        label: &str,
+    ) -> Result<Vec<u8>, Error> {
         match read_body_capped(response, self.max_response_bytes).await {
-            BodyRead::Complete(bytes) => String::from_utf8(bytes).map_err(|e| Error::Decode {
-                detail: format!("response body was not valid UTF-8: {e}"),
-                status: Some(status.as_u16()),
-            }),
+            BodyRead::Complete(bytes) => Ok(bytes),
             BodyRead::TooLarge => Err(Error::Decode {
                 detail: format!(
-                    "response body exceeded the maximum of {} bytes",
+                    "{label} exceeded the maximum of {} bytes",
                     self.max_response_bytes
                 ),
                 status: Some(status.as_u16()),
@@ -457,41 +458,24 @@ impl Client {
                     .with_retry_after(retry_after),
             );
         }
-        let body = match read_body_capped(response, self.max_response_bytes).await {
-            BodyRead::Complete(bytes) => match String::from_utf8(bytes) {
-                Ok(text) => text,
-                Err(e) => {
-                    return Err(Error::Decode {
-                        detail: format!("response body was not valid UTF-8: {e}"),
-                        status: Some(status.as_u16()),
-                    });
-                }
-            },
-            BodyRead::TooLarge => {
+        let bytes = self
+            .read_capped_body(response, status, "response body")
+            .await?;
+        let body = match String::from_utf8(bytes) {
+            Ok(text) => text,
+            Err(e) => {
                 return Err(Error::Decode {
-                    detail: format!(
-                        "response body exceeded the maximum of {} bytes",
-                        self.max_response_bytes
-                    ),
+                    detail: format!("response body was not valid UTF-8: {e}"),
                     status: Some(status.as_u16()),
                 });
-            }
-            BodyRead::Failed(read_error) => {
-                return Err(Error::network_detail(format!(
-                    "HTTP {} received, body read failed: {read_error}",
-                    status.as_u16()
-                )));
             }
         };
         // An error envelope on a success status is an error, exactly
         // as if it had arrived on its own HTTP code.
-        if Error::has_error_envelope(&body) {
-            return Err(Error::from_response_detailed(
-                status.as_u16(),
-                &body,
-                content_type.as_deref(),
-            )
-            .with_retry_after(retry_after));
+        if let Some(err) =
+            envelope_error(status.as_u16(), &body, content_type.as_deref(), retry_after)
+        {
+            return Err(err);
         }
         serde_json::from_str::<T>(&body)
             .map(|value| (value, status.as_u16()))
@@ -556,6 +540,26 @@ async fn read_error_body(
         }
     }
     Error::from_response_detailed(status, &String::from_utf8_lossy(&buf), content_type)
+}
+
+/// The mapped error for a success response whose body is actually a
+/// Google error envelope, with the response's `Retry-After` attached,
+/// or `None` when the body carries no envelope. Shared by the JSON
+/// paths and both photo branches so the check and the error
+/// construction cannot drift apart.
+fn envelope_error(
+    status: u16,
+    body: &str,
+    content_type: Option<&str>,
+    retry_after: Option<u64>,
+) -> Option<Error> {
+    if Error::has_error_envelope(body) {
+        Some(
+            Error::from_response_detailed(status, body, content_type).with_retry_after(retry_after),
+        )
+    } else {
+        None
+    }
 }
 
 /// The `Retry-After` header as whole seconds, when present and in the
@@ -628,6 +632,17 @@ fn validate_max_result_count(max_result_count: Option<u32>) -> Result<(), Error>
         if !(1..=20).contains(&count) {
             return Err(Error::config(format!(
                 "max_result_count must be between 1 and 20, got {count}"
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn validate_page_size(page_size: Option<u32>) -> Result<(), Error> {
+    if let Some(size) = page_size {
+        if !(1..=20).contains(&size) {
+            return Err(Error::config(format!(
+                "page_size must be between 1 and 20, got {size}"
             )));
         }
     }
@@ -1026,6 +1041,15 @@ mod tests {
             .expect("validation must resolve immediately")
             .unwrap_err();
         assert_eq!(err.kind(), "config");
+        let req = TextSearchRequest {
+            text_query: "cafes".to_owned(),
+            page_size: Some(0),
+            ..Default::default()
+        };
+        let err = poll_once(client.text_search(&req, None))
+            .expect("validation must resolve immediately")
+            .unwrap_err();
+        assert_eq!(err.kind(), "config");
     }
 
     #[test]
@@ -1075,6 +1099,15 @@ mod tests {
         assert!(validate_max_result_count(Some(20)).is_ok());
         assert!(validate_max_result_count(Some(0)).is_err());
         assert!(validate_max_result_count(Some(21)).is_err());
+    }
+
+    #[test]
+    fn page_size_validation() {
+        assert!(validate_page_size(None).is_ok());
+        assert!(validate_page_size(Some(1)).is_ok());
+        assert!(validate_page_size(Some(20)).is_ok());
+        assert!(validate_page_size(Some(0)).is_err());
+        assert!(validate_page_size(Some(21)).is_err());
     }
 
     #[test]

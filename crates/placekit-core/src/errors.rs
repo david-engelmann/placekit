@@ -299,21 +299,39 @@ impl Error {
         content_type: Option<&str>,
     ) -> Error {
         let parsed = serde_json::from_str::<GoogleErrorEnvelope>(body).ok();
-        let (google_status, message, code, details) = match parsed {
-            Some(env) => (
-                env.error.status.unwrap_or_default(),
-                env.error
-                    .message
-                    .map(|m| m.chars().take(500).collect())
-                    .unwrap_or_else(|| format!("HTTP {status}")),
-                env.error.code,
-                env.error.details.unwrap_or_default(),
-            ),
+        let (google_status, message, code, details, class_status) = match parsed {
+            Some(env) => {
+                // Classification follows the envelope status first.
+                // With no status string, an envelope that still carries
+                // a numeric code classifies by that code (an off-spec
+                // but observed shape); otherwise the HTTP status
+                // decides. The stored status stays the HTTP one below
+                // either way.
+                let class_status = if env.error.status.is_none() {
+                    env.error
+                        .code
+                        .and_then(|c| u16::try_from(c).ok())
+                        .unwrap_or(status)
+                } else {
+                    status
+                };
+                (
+                    env.error.status.unwrap_or_default(),
+                    env.error
+                        .message
+                        .map(|m| m.chars().take(500).collect())
+                        .unwrap_or_else(|| format!("HTTP {status}")),
+                    env.error.code,
+                    env.error.details.unwrap_or_default(),
+                    class_status,
+                )
+            }
             None => (
                 String::new(),
                 non_envelope_message(status, body, content_type),
                 None,
                 Vec::new(),
+                status,
             ),
         };
 
@@ -361,7 +379,7 @@ impl Error {
                 details,
                 retry_after: None,
             },
-            _ => match status {
+            _ => match class_status {
                 401 | 403 => Error::Auth {
                     status,
                     google_status,
@@ -419,13 +437,18 @@ impl Error {
             .with_note(&format!("error body unreadable: {read_error}"))
     }
 
-    /// True when a body parses as a Google error envelope carrying a
-    /// status string. Used to catch error envelopes that arrive on a
-    /// success HTTP status, where they would otherwise decode as an
+    /// True when a body parses as a Google error envelope: an `error`
+    /// object carrying a status string, or a numeric code or a message
+    /// even without one. Used to catch error envelopes that arrive on
+    /// a success HTTP status, where they would otherwise decode as an
     /// empty or defaulted success value.
     pub(crate) fn has_error_envelope(body: &str) -> bool {
         serde_json::from_str::<GoogleErrorEnvelope>(body)
-            .map(|env| env.error.status.is_some())
+            .map(|env| {
+                env.error.status.is_some()
+                    || env.error.code.is_some()
+                    || env.error.message.is_some()
+            })
             .unwrap_or(false)
     }
 
@@ -622,8 +645,12 @@ mod tests {
             r#"{{"error": {{"code": 400, "message": "{long}", "status": "INVALID_ARGUMENT"}}}}"#
         );
         let err = Error::from_response(400, &body);
-        // The Display prefix plus exactly 500 message characters.
-        assert!(err.to_string().len() < 600);
+        // The stored message is exactly 500 characters: the run of
+        // 500 is present and a run of 501 is not, the same exact shape
+        // as the Python test of this name, so cap drift fails here.
+        let text = err.to_string();
+        assert!(text.contains(&"x".repeat(500)), "{text}");
+        assert!(!text.contains(&"x".repeat(501)), "{text}");
     }
 
     #[test]
@@ -686,8 +713,29 @@ mod tests {
         ));
         assert!(!Error::has_error_envelope(r#"{"places": []}"#));
         assert!(!Error::has_error_envelope("not json"));
-        // An envelope without a status string is not an error signal.
-        assert!(!Error::has_error_envelope(r#"{"error": {"code": 403}}"#));
+        // A code or a message makes the envelope an error signal even
+        // without a status string; a bare error object carries neither
+        // and is not one.
+        assert!(Error::has_error_envelope(r#"{"error": {"code": 403}}"#));
+        assert!(Error::has_error_envelope(
+            r#"{"error": {"message": "denied"}}"#
+        ));
+        assert!(!Error::has_error_envelope(r#"{"error": {}}"#));
+    }
+
+    #[test]
+    fn envelope_without_status_classifies_by_its_code() {
+        // The red team's case: an envelope with a code and a message
+        // but no status string, arriving on HTTP 200. The class comes
+        // from the numeric code, the stored status stays the HTTP one,
+        // and there is no Google status to report.
+        let body = r#"{"error": {"code": 403, "message": "denied but no status field"}}"#;
+        let err = Error::from_response(200, body);
+        assert_eq!(err.kind(), "auth");
+        assert_eq!(err.status_code(), Some(200));
+        assert_eq!(err.google_status(), None);
+        assert_eq!(err.error_code(), Some(403));
+        assert!(err.to_string().contains("denied but no status field"));
     }
 
     #[test]
