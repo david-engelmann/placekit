@@ -46,6 +46,7 @@ from .models import (
     PlacePrediction,
     PlusCode,
     PostalAddress,
+    QueryPrediction,
     StringMatch,
     Suggestion,
     TextSearchResult,
@@ -53,10 +54,10 @@ from .models import (
 )
 
 try:
-    from importlib.metadata import version as _metadata_version
+    from importlib.metadata import PackageNotFoundError, version as _metadata_version
 
     __version__ = _metadata_version("placekit")
-except Exception:  # pragma: no cover, only hit in uninstalled source trees
+except PackageNotFoundError:  # pragma: no cover, only hit in uninstalled source trees
     __version__ = "0.1.0"
 
 __all__ = [
@@ -92,6 +93,7 @@ __all__ = [
     "PlacePrediction",
     "PlusCode",
     "PostalAddress",
+    "QueryPrediction",
     "StringMatch",
     "Suggestion",
     "TextSearchResult",

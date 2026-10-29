@@ -29,6 +29,7 @@ from placekit.exceptions import (
     InvalidRequestError,
     NetworkError,
     NotFoundError,
+    PlacesError,
     RateLimitError,
 )
 from placekit.models import Place, TextSearchResult
@@ -1344,3 +1345,175 @@ def test_client_pickle_and_copy_name_placekit(client):
         copy.copy(client)
     with pytest.raises(TypeError):
         copy.deepcopy(client)
+
+
+# ---------------------------------------------------------------------------
+# Round 5 (T3) regressions: model layer
+# ---------------------------------------------------------------------------
+
+
+def test_model_raw_is_a_snapshot_not_an_alias():
+    # RC-08: mutating the caller's dict after decoding must not
+    # rewrite the model, its raw, or the parent result's raw.
+    from placekit.models import TextSearchResult
+
+    payload = {
+        "places": [
+            {"id": "A", "types": ["cafe"], "photos": [{"name": "p1"}]}
+        ]
+    }
+    result = TextSearchResult.from_api(payload)
+    payload["places"][0]["types"].append("hacked")
+    payload["places"][0]["photos"][0]["name"] = "changed"
+    payload["injected"] = True
+    place = result.places[0]
+    assert place.types == ["cafe"]
+    assert place.raw["photos"][0]["name"] == "p1"
+    assert "injected" not in result.raw
+    assert place.raw is not result.raw["places"][0]
+
+
+def test_models_are_frozen_and_latlng_is_hashable():
+    # RC-09: assignment to a parsed model raises instead of silently
+    # rewriting a shared result; the one pure pair is a valid dict key.
+    from dataclasses import FrozenInstanceError
+
+    from placekit.models import LatLng, Place
+
+    place = Place.from_api({"id": "A", "rating": 4.0})
+    with pytest.raises(FrozenInstanceError):
+        place.rating = 0.0
+    with pytest.raises(FrozenInstanceError):
+        place.location = LatLng(1.0, 2.0)
+    assert hash(LatLng(1.0, 2.0)) == hash(LatLng(1.0, 2.0))
+    assert {LatLng(1.0, 2.0): "x"}[LatLng(1.0, 2.0)] == "x"
+
+
+def test_latlng_construction_rejects_bools_and_non_numbers():
+    # RC-05 model side: LatLng(True, False).to_api() used to return
+    # the bools themselves.
+    from placekit.models import LatLng
+
+    with pytest.raises(ConfigError):
+        LatLng(True, False)
+    with pytest.raises(ConfigError):
+        LatLng("40.0", -70.0)
+    with pytest.raises(ConfigError):
+        LatLng(float("nan"), 0.0)
+    assert LatLng(40, -70).to_api() == {"latitude": 40.0, "longitude": -70.0}
+
+
+def test_from_api_strictness_policy():
+    # RC-18: missing required keys and ghost payloads are DecodeError
+    # naming the model, never a bare KeyError or a fabricated object.
+    from placekit.models import LatLng, Place, Viewport
+
+    with pytest.raises(DecodeError) as excinfo:
+        LatLng.from_api({})
+    assert "LatLng" in str(excinfo.value)
+    with pytest.raises(DecodeError):
+        Viewport.from_api({})
+    with pytest.raises(DecodeError):
+        Place.from_api({})
+    # A payload that merely lacks an id (a field mask that did not
+    # request one) still decodes; only the empty payload is a ghost.
+    assert Place.from_api({"displayName": {"text": "X"}}).id == ""
+
+
+def test_from_api_numeric_coercion_is_uniform():
+    # RC-18 (A11): distance_meters and opening point fields are typed
+    # Optional[int] in the stubs; the decoders now produce ints.
+    from placekit.models import OpeningPoint, PlacePrediction
+
+    prediction = PlacePrediction.from_api(
+        {"placeId": "A", "distanceMeters": 12.9}
+    )
+    assert prediction.distance_meters == 12
+    assert isinstance(prediction.distance_meters, int)
+    point = OpeningPoint.from_api({"day": "2", "hour": "9"})
+    assert point.day == 2 and point.hour == 9
+
+
+def test_from_api_rejects_shredded_type_strings():
+    # RC-01 model side: a string in a list slot is not shredded into
+    # one-character types.
+    from placekit.models import Place
+
+    with pytest.raises(DecodeError):
+        Place.from_api({"id": "A", "types": "cafe"})
+
+
+def test_query_predictions_are_modelled():
+    # RC-20: query predictions used to be silently dropped by the
+    # autocomplete convenience surface.
+    from placekit.models import AutocompleteResult
+
+    result = AutocompleteResult.from_api(
+        {
+            "suggestions": [
+                {
+                    "queryPrediction": {
+                        "text": {"text": "pizza near me"},
+                        "structuredFormat": {
+                            "mainText": {"text": "pizza"},
+                        },
+                    }
+                },
+                {"placePrediction": {"placeId": "A"}},
+            ]
+        }
+    )
+    queries = result.query_predictions
+    assert len(queries) == 1
+    assert queries[0].text is not None and queries[0].text.text == "pizza near me"
+    assert result.suggestions[0].query_prediction is queries[0]
+    assert len(result.place_predictions) == 1
+
+
+def test_place_regular_opening_hours_alias():
+    # RC-21: the alias matches the wire name regularOpeningHours.
+    from placekit.models import Place
+
+    place = Place.from_api(
+        {"id": "A", "regularOpeningHours": {"openNow": True}}
+    )
+    assert place.opening_hours is not None
+    assert place.regular_opening_hours is place.opening_hours
+    assert place.regular_opening_hours.open_now is True
+
+
+def test_repr_and_equality_exclude_raw():
+    # RC-19: repr stays readable (no whole-payload dump) and two
+    # decodes of the same payload compare equal on modelled fields.
+    from placekit.models import PhotoMedia, Place
+
+    first = Place.from_api({"id": "A", "rating": 4.0})
+    second = Place.from_api({"id": "A", "rating": 4.0})
+    assert first == second
+    assert "rating" not in repr(first) or "4.0" in repr(first)
+    assert "'id': 'A'" not in repr(first)
+    media = PhotoMedia(content=b"\x89PNG-long-payload", content_type="image/png")
+    assert "PNG-long" not in repr(media)
+
+
+def test_error_str_shows_context_and_status():
+    # RC-17: str(error) carries the context the type collects.
+    err = RateLimitError(
+        "quota exhausted", status_code=429, google_status="RESOURCE_EXHAUSTED",
+        context="text_search",
+    )
+    text = str(err)
+    assert "quota exhausted" in text
+    assert "text_search" in text
+    assert "429" in text
+    assert "RESOURCE_EXHAUSTED" in text
+    assert repr(err).startswith("RateLimitError(")
+
+
+def test_error_list_attributes_are_copied():
+    # RC-22: mutating the caller's list after construction must not
+    # rewrite the raised exception.
+    details = [{"a": 1}]
+    err = PlacesError("boom", details=details)
+    details.append({"b": 2})
+    assert err.details == [{"a": 1}]

@@ -8,7 +8,7 @@ the error came from an API response.
 
 from __future__ import annotations
 
-from typing import Optional
+from typing import Any, NoReturn, Optional
 
 
 class PlacesError(Exception):
@@ -23,9 +23,9 @@ class PlacesError(Exception):
         status_code: Optional[int] = None,
         google_status: Optional[str] = None,
         error_code: Optional[int] = None,
-        details: Optional[list] = None,
-        field_violations: Optional[list] = None,
-        quota_violations: Optional[list] = None,
+        details: Optional[list[Any]] = None,
+        field_violations: Optional[list[Any]] = None,
+        quota_violations: Optional[list[Any]] = None,
         status_mismatch: bool = False,
         retryable: bool = False,
         retry_after: Optional[float] = None,
@@ -38,17 +38,19 @@ class PlacesError(Exception):
         #: The ``code`` field of the Google error envelope, when present.
         self.error_code = error_code
         #: The parsed ``details`` array of the envelope (google.rpc detail
-        #: objects as dicts), empty when the response carried none.
-        self.details = details if details is not None else []
+        #: objects as dicts), empty when the response carried none. The
+        #: list is copied, so later mutation of the caller's list cannot
+        #: rewrite a raised exception.
+        self.details = list(details) if details is not None else []
         #: Field violations from a BadRequest detail, as dicts with
         #: ``field`` (the wire name, for example ``textQuery``) and
         #: ``description`` keys.
         self.field_violations = (
-            field_violations if field_violations is not None else []
+            list(field_violations) if field_violations is not None else []
         )
         #: Violation dicts from a QuotaFailure detail.
         self.quota_violations = (
-            quota_violations if quota_violations is not None else []
+            list(quota_violations) if quota_violations is not None else []
         )
         #: True when the envelope ``code`` and the HTTP status disagree.
         #: Classification follows the envelope status first and the HTTP
@@ -67,6 +69,25 @@ class PlacesError(Exception):
         #: place_id=...``), set by the client methods. Never a URL, so
         #: it cannot carry the API key.
         self.context = context
+
+    def __str__(self) -> str:
+        """The message plus the context the type collects, so logging
+        an exception shows why it was raised, not just its text."""
+        parts = []
+        if self.context is not None:
+            parts.append(f"context={self.context}")
+        if self.status_code is not None:
+            parts.append(f"status_code={self.status_code}")
+        if self.google_status is not None:
+            parts.append(f"google_status={self.google_status}")
+        if self.retry_after is not None:
+            parts.append(f"retry_after={self.retry_after}")
+        if not parts:
+            return self.message
+        return f"{self.message} ({', '.join(parts)})"
+
+    def __repr__(self) -> str:
+        return f"{type(self).__name__}({str(self)!r})"
 
 
 class AuthenticationError(PlacesError):
@@ -138,7 +159,7 @@ _KIND_TO_ERROR = {
 }
 
 
-def raise_translated(exc: BaseException, context: Optional[str] = None) -> None:
+def raise_translated(exc: BaseException, context: Optional[str] = None) -> NoReturn:
     """Translate a Rust-core ``PlacesError`` into the hierarchy above.
 
     ``context`` names the call that failed; the client methods supply

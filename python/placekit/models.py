@@ -3,16 +3,80 @@
 Responses arrive as dataclasses with attribute access, never raw dicts.
 Fields this client version does not model yet are preserved verbatim on
 ``Place.raw`` so nothing the API returns is silently lost.
+
+The models are frozen value objects: a parsed result cannot be mutated
+in place, so results are safe to share and cache. They stay unhashable
+where they carry list fields; ``LatLng``, the one pure pair, is
+hashable. Every ``raw`` is a deep copy of the payload it came from, so
+the caller's dict, a result's raw and a child model's raw share no
+mutable state.
 """
 
 from __future__ import annotations
 
+import copy
+import math
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
 
+from .exceptions import ConfigError, DecodeError
 
-@dataclass(slots=True)
+
+def _require(data: dict[str, Any], key: str, model: str) -> Any:
+    """Fetch a required payload key or raise a DecodeError naming it.
+
+    One strictness policy for every decoder (RC-18): a missing
+    required key is a DecodeError with the key and model named, never
+    a bare KeyError and never a fabricated empty object.
+    """
+    if key not in data:
+        raise DecodeError(f"{model} payload is missing required key {key!r}")
+    return data[key]
+
+
+def _as_float(value: Any, model: str, key: str) -> float:
+    if isinstance(value, bool):
+        raise DecodeError(f"{model} payload key {key!r} is not a number: {value!r}")
+    try:
+        return float(value)
+    except (TypeError, ValueError) as exc:
+        raise DecodeError(
+            f"{model} payload key {key!r} is not a number: {value!r}"
+        ) from exc
+
+
+def _as_int(value: Any, model: str, key: str) -> int:
+    if isinstance(value, bool):
+        raise DecodeError(f"{model} payload key {key!r} is not an integer: {value!r}")
+    try:
+        return int(value)
+    except (TypeError, ValueError) as exc:
+        raise DecodeError(
+            f"{model} payload key {key!r} is not an integer: {value!r}"
+        ) from exc
+
+
+def _optional_int(value: Any, model: str, key: str) -> Optional[int]:
+    return None if value is None else _as_int(value, model, key)
+
+
+def _str_list(value: Any, model: str, key: str) -> list[str]:
+    """Decode a list of strings; a bare string is a DecodeError, never
+    shredded into one-character items."""
+    if isinstance(value, (str, bytes)):
+        raise DecodeError(
+            f"{model} payload key {key!r} is a single string, not a list"
+        )
+    try:
+        return list(value)
+    except TypeError as exc:
+        raise DecodeError(
+            f"{model} payload key {key!r} is not a list: {value!r}"
+        ) from exc
+
+
+@dataclass(frozen=True, slots=True)
 class LocalizedText:
     """A text value paired with its language."""
 
@@ -24,22 +88,47 @@ class LocalizedText:
         return cls(text=data.get("text", ""), language_code=data.get("languageCode"))
 
 
-@dataclass(slots=True)
+@dataclass(frozen=True, slots=True)
 class LatLng:
-    """A latitude/longitude pair."""
+    """A latitude/longitude pair.
+
+    Construction validates the values are real, finite numbers
+    (bools and strings are not coordinates). Range is a request-side
+    rule enforced by the client at call time, so a LatLng decoded
+    from a response is preserved exactly as the API sent it.
+    """
 
     latitude: float
     longitude: float
 
+    def __post_init__(self) -> None:
+        for name, value in (
+            ("latitude", self.latitude),
+            ("longitude", self.longitude),
+        ):
+            if (
+                isinstance(value, bool)
+                or not isinstance(value, (int, float))
+                or not math.isfinite(float(value))
+            ):
+                raise ConfigError(
+                    f"LatLng {name} must be a finite real number, got {value!r}"
+                )
+
     @classmethod
     def from_api(cls, data: dict[str, Any]) -> "LatLng":
-        return cls(latitude=float(data["latitude"]), longitude=float(data["longitude"]))
+        return cls(
+            latitude=_as_float(_require(data, "latitude", "LatLng"), "LatLng", "latitude"),
+            longitude=_as_float(
+                _require(data, "longitude", "LatLng"), "LatLng", "longitude"
+            ),
+        )
 
     def to_api(self) -> dict[str, float]:
-        return {"latitude": self.latitude, "longitude": self.longitude}
+        return {"latitude": float(self.latitude), "longitude": float(self.longitude)}
 
 
-@dataclass(slots=True)
+@dataclass(frozen=True, slots=True)
 class AuthorAttribution:
     """Credit for a photo author."""
 
@@ -56,7 +145,7 @@ class AuthorAttribution:
         )
 
 
-@dataclass(slots=True)
+@dataclass(frozen=True, slots=True)
 class Attribution:
     """Provider attribution attached to a place."""
 
@@ -68,7 +157,7 @@ class Attribution:
         return cls(provider=data.get("provider", ""), provider_uri=data.get("providerUri", ""))
 
 
-@dataclass(slots=True)
+@dataclass(frozen=True, slots=True)
 class Photo:
     """A photo attached to a place.
 
@@ -88,8 +177,8 @@ class Photo:
     def from_api(cls, data: dict[str, Any]) -> "Photo":
         return cls(
             name=data.get("name", ""),
-            width_px=int(data.get("widthPx", 0)),
-            height_px=int(data.get("heightPx", 0)),
+            width_px=_as_int(data.get("widthPx", 0), "Photo", "widthPx"),
+            height_px=_as_int(data.get("heightPx", 0), "Photo", "heightPx"),
             author_attributions=[
                 AuthorAttribution.from_api(a) for a in data.get("authorAttributions", [])
             ],
@@ -98,7 +187,7 @@ class Photo:
         )
 
 
-@dataclass(slots=True)
+@dataclass(frozen=True, slots=True)
 class Date:
     """A calendar date. A zero component means it was unset."""
 
@@ -109,13 +198,13 @@ class Date:
     @classmethod
     def from_api(cls, data: dict[str, Any]) -> "Date":
         return cls(
-            year=int(data.get("year", 0)),
-            month=int(data.get("month", 0)),
-            day=int(data.get("day", 0)),
+            year=_as_int(data.get("year", 0), "Date", "year"),
+            month=_as_int(data.get("month", 0), "Date", "month"),
+            day=_as_int(data.get("day", 0), "Date", "day"),
         )
 
 
-@dataclass(slots=True)
+@dataclass(frozen=True, slots=True)
 class OpeningPoint:
     """One end of an opening period.
 
@@ -136,13 +225,13 @@ class OpeningPoint:
         return cls(
             date=Date.from_api(date) if date else None,
             truncated=data.get("truncated"),
-            day=data.get("day"),
-            hour=data.get("hour"),
-            minute=data.get("minute"),
+            day=_optional_int(data.get("day"), "OpeningPoint", "day"),
+            hour=_optional_int(data.get("hour"), "OpeningPoint", "hour"),
+            minute=_optional_int(data.get("minute"), "OpeningPoint", "minute"),
         )
 
 
-@dataclass(slots=True)
+@dataclass(frozen=True, slots=True)
 class Period:
     """A single open/close span within opening hours."""
 
@@ -159,7 +248,7 @@ class Period:
         )
 
 
-@dataclass(slots=True)
+@dataclass(frozen=True, slots=True)
 class OpeningHours:
     """Regular opening hours of a place."""
 
@@ -172,11 +261,15 @@ class OpeningHours:
         return cls(
             open_now=data.get("openNow"),
             periods=[Period.from_api(p) for p in data.get("periods", [])],
-            weekday_descriptions=list(data.get("weekdayDescriptions", [])),
+            weekday_descriptions=_str_list(
+                data.get("weekdayDescriptions", []),
+                "OpeningHours",
+                "weekdayDescriptions",
+            ),
         )
 
 
-@dataclass(slots=True)
+@dataclass(frozen=True, slots=True)
 class AddressComponent:
     """One component of a structured address."""
 
@@ -190,12 +283,12 @@ class AddressComponent:
         return cls(
             long_text=data.get("longText", ""),
             short_text=data.get("shortText", ""),
-            types=list(data.get("types", [])),
+            types=_str_list(data.get("types", []), "AddressComponent", "types"),
             language_code=data.get("languageCode"),
         )
 
 
-@dataclass(slots=True)
+@dataclass(frozen=True, slots=True)
 class PlusCode:
     """Plus code location reference for a place."""
 
@@ -210,7 +303,7 @@ class PlusCode:
         )
 
 
-@dataclass(slots=True)
+@dataclass(frozen=True, slots=True)
 class Viewport:
     """A rectangular area bounded by its low and high corners."""
 
@@ -220,12 +313,12 @@ class Viewport:
     @classmethod
     def from_api(cls, data: dict[str, Any]) -> "Viewport":
         return cls(
-            low=LatLng.from_api(data.get("low", {})),
-            high=LatLng.from_api(data.get("high", {})),
+            low=LatLng.from_api(_require(data, "low", "Viewport")),
+            high=LatLng.from_api(_require(data, "high", "Viewport")),
         )
 
 
-@dataclass(slots=True)
+@dataclass(frozen=True, slots=True)
 class PostalAddress:
     """A postal address in structured form."""
 
@@ -244,11 +337,13 @@ class PostalAddress:
             postal_code=data.get("postalCode"),
             administrative_area=data.get("administrativeArea"),
             locality=data.get("locality"),
-            address_lines=list(data.get("addressLines", [])),
+            address_lines=_str_list(
+                data.get("addressLines", []), "PostalAddress", "addressLines"
+            ),
         )
 
 
-@dataclass(slots=True)
+@dataclass(frozen=True, slots=True)
 class Place:
     """A single place, from search results or Place Details."""
 
@@ -279,16 +374,25 @@ class Place:
     photos: list[Photo] = field(default_factory=list)
     attributions: list[Attribution] = field(default_factory=list)
     #: The full response payload for this place, including any fields this
-    #: client version does not model yet.
-    raw: dict[str, Any] = field(default_factory=dict)
+    #: client version does not model yet. A deep copy of the payload, so
+    #: it shares no mutable state with the caller's dict. Excluded from
+    #: repr and equality, which are about the modelled fields.
+    raw: dict[str, Any] = field(default_factory=dict, repr=False, compare=False)
 
     @property
     def display_text(self) -> Optional[str]:
         """The display name as a plain string, when present."""
         return self.display_name.text if self.display_name else None
 
+    @property
+    def regular_opening_hours(self) -> Optional[OpeningHours]:
+        """Alias for ``opening_hours`` under its wire name,
+        ``regularOpeningHours``."""
+        return self.opening_hours
+
     @classmethod
     def from_api(cls, data: dict[str, Any]) -> "Place":
+        data = copy.deepcopy(data)
         display = data.get("displayName")
         location = data.get("location")
         hours = data.get("regularOpeningHours")
@@ -298,6 +402,14 @@ class Place:
         postal = data.get("postalAddress")
         type_display = data.get("primaryTypeDisplayName")
         place_id = data.get("id") or str(data.get("name", "")).removeprefix("places/")
+        if not data:
+            # An empty payload is a truncated or wrong response, not a
+            # place; a payload that merely lacks an id (a field mask
+            # that did not request one) still decodes, with id "".
+            raise DecodeError(
+                "Place payload is empty; refusing to fabricate an "
+                "empty place from it"
+            )
         rating = data.get("rating")
         user_rating_count = data.get("userRatingCount")
         return cls(
@@ -307,11 +419,15 @@ class Place:
             formatted_address=data.get("formattedAddress"),
             short_formatted_address=data.get("shortFormattedAddress"),
             location=LatLng.from_api(location) if location else None,
-            types=list(data.get("types", [])),
+            types=_str_list(data.get("types", []), "Place", "types"),
             primary_type=data.get("primaryType"),
-            rating=float(rating) if rating is not None else None,
+            rating=(
+                _as_float(rating, "Place", "rating") if rating is not None else None
+            ),
             user_rating_count=(
-                int(user_rating_count) if user_rating_count is not None else None
+                _as_int(user_rating_count, "Place", "userRatingCount")
+                if user_rating_count is not None
+                else None
             ),
             price_level=data.get("priceLevel"),
             business_status=data.get("businessStatus"),
@@ -340,7 +456,7 @@ class Place:
         )
 
 
-@dataclass(slots=True)
+@dataclass(frozen=True, slots=True)
 class TextSearchResult:
     """One page of Text Search results."""
 
@@ -354,10 +470,11 @@ class TextSearchResult:
     #: mask and routing parameters were supplied. Unmodeled entries are
     #: preserved as dicts.
     routing_summaries: list[dict[str, Any]] = field(default_factory=list)
-    raw: dict[str, Any] = field(default_factory=dict)
+    raw: dict[str, Any] = field(default_factory=dict, repr=False, compare=False)
 
     @classmethod
     def from_api(cls, data: dict[str, Any]) -> "TextSearchResult":
+        data = copy.deepcopy(data)
         return cls(
             places=[Place.from_api(p) for p in data.get("places", [])],
             next_page_token=data.get("nextPageToken"),
@@ -367,7 +484,7 @@ class TextSearchResult:
         )
 
 
-@dataclass(slots=True)
+@dataclass(frozen=True, slots=True)
 class NearbySearchResult:
     """Nearby Search results (the API returns at most one page).
 
@@ -381,10 +498,11 @@ class NearbySearchResult:
     #: Routing summaries, one per place, when requested through the field
     #: mask and routing parameters were supplied.
     routing_summaries: list[dict[str, Any]] = field(default_factory=list)
-    raw: dict[str, Any] = field(default_factory=dict)
+    raw: dict[str, Any] = field(default_factory=dict, repr=False, compare=False)
 
     @classmethod
     def from_api(cls, data: dict[str, Any]) -> "NearbySearchResult":
+        data = copy.deepcopy(data)
         return cls(
             places=[Place.from_api(p) for p in data.get("places", [])],
             routing_summaries=list(data.get("routingSummaries", [])),
@@ -392,7 +510,7 @@ class NearbySearchResult:
         )
 
 
-@dataclass(slots=True)
+@dataclass(frozen=True, slots=True)
 class StringMatch:
     """A substring match range inside an autocomplete text."""
 
@@ -402,12 +520,12 @@ class StringMatch:
     @classmethod
     def from_api(cls, data: dict[str, Any]) -> "StringMatch":
         return cls(
-            start_offset=int(data.get("startOffset", 0)),
-            end_offset=int(data.get("endOffset", 0)),
+            start_offset=_as_int(data.get("startOffset", 0), "StringMatch", "startOffset"),
+            end_offset=_as_int(data.get("endOffset", 0), "StringMatch", "endOffset"),
         )
 
 
-@dataclass(slots=True)
+@dataclass(frozen=True, slots=True)
 class FormattedText:
     """Text with match ranges, as returned by Autocomplete."""
 
@@ -422,7 +540,7 @@ class FormattedText:
         )
 
 
-@dataclass(slots=True)
+@dataclass(frozen=True, slots=True)
 class PlacePrediction:
     """A predicted place from Autocomplete."""
 
@@ -435,10 +553,11 @@ class PlacePrediction:
     secondary_text: Optional[FormattedText] = None
     types: list[str] = field(default_factory=list)
     distance_meters: Optional[int] = None
-    raw: dict[str, Any] = field(default_factory=dict)
+    raw: dict[str, Any] = field(default_factory=dict, repr=False, compare=False)
 
     @classmethod
     def from_api(cls, data: dict[str, Any]) -> "PlacePrediction":
+        data = copy.deepcopy(data)
         text = data.get("text")
         structured = data.get("structuredFormat") or {}
         main = structured.get("mainText")
@@ -449,67 +568,111 @@ class PlacePrediction:
             text=FormattedText.from_api(text) if text else None,
             main_text=FormattedText.from_api(main) if main else None,
             secondary_text=FormattedText.from_api(secondary) if secondary else None,
-            types=list(data.get("types", [])),
-            distance_meters=data.get("distanceMeters"),
+            types=_str_list(data.get("types", []), "PlacePrediction", "types"),
+            distance_meters=_optional_int(
+                data.get("distanceMeters"), "PlacePrediction", "distanceMeters"
+            ),
             raw=data,
         )
 
 
-@dataclass(slots=True)
+@dataclass(frozen=True, slots=True)
+class QueryPrediction:
+    """A predicted search query from Autocomplete, returned when
+    ``include_query_predictions`` is set."""
+
+    text: Optional[FormattedText] = None
+    main_text: Optional[FormattedText] = None
+    secondary_text: Optional[FormattedText] = None
+    raw: dict[str, Any] = field(default_factory=dict, repr=False, compare=False)
+
+    @classmethod
+    def from_api(cls, data: dict[str, Any]) -> "QueryPrediction":
+        data = copy.deepcopy(data)
+        text = data.get("text")
+        structured = data.get("structuredFormat") or {}
+        main = structured.get("mainText")
+        secondary = structured.get("secondaryText")
+        return cls(
+            text=FormattedText.from_api(text) if text else None,
+            main_text=FormattedText.from_api(main) if main else None,
+            secondary_text=FormattedText.from_api(secondary) if secondary else None,
+            raw=data,
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class Suggestion:
     """One autocomplete suggestion.
 
-    ``place_prediction`` is set for place suggestions. Query predictions are
-    not modeled yet; their payload is preserved on ``raw``.
+    ``place_prediction`` is set for place suggestions and
+    ``query_prediction`` for query suggestions; the full payload is
+    preserved on ``raw`` either way.
     """
 
     place_prediction: Optional[PlacePrediction] = None
-    raw: dict[str, Any] = field(default_factory=dict)
+    query_prediction: Optional[QueryPrediction] = None
+    raw: dict[str, Any] = field(default_factory=dict, repr=False, compare=False)
 
     @classmethod
     def from_api(cls, data: dict[str, Any]) -> "Suggestion":
+        data = copy.deepcopy(data)
         prediction = data.get("placePrediction")
+        query = data.get("queryPrediction")
         return cls(
             place_prediction=PlacePrediction.from_api(prediction) if prediction else None,
+            query_prediction=QueryPrediction.from_api(query) if query else None,
             raw=data,
         )
 
 
-@dataclass(slots=True)
+@dataclass(frozen=True, slots=True)
 class AutocompleteResult:
     """Autocomplete suggestions for one input."""
 
     suggestions: list[Suggestion]
-    raw: dict[str, Any] = field(default_factory=dict)
+    raw: dict[str, Any] = field(default_factory=dict, repr=False, compare=False)
 
     @property
     def place_predictions(self) -> list[PlacePrediction]:
         """Just the place predictions, skipping any other suggestion kinds."""
         return [s.place_prediction for s in self.suggestions if s.place_prediction]
 
+    @property
+    def query_predictions(self) -> list[QueryPrediction]:
+        """Just the query predictions, skipping any other suggestion kinds."""
+        return [s.query_prediction for s in self.suggestions if s.query_prediction]
+
     @classmethod
     def from_api(cls, data: dict[str, Any]) -> "AutocompleteResult":
+        data = copy.deepcopy(data)
         return cls(
             suggestions=[Suggestion.from_api(s) for s in data.get("suggestions", [])],
             raw=data,
         )
 
 
-@dataclass(slots=True)
+@dataclass(frozen=True, slots=True)
 class PhotoMedia:
     """Downloaded photo bytes from the photo media endpoint."""
 
-    content: bytes
+    #: The image bytes; excluded from repr so printing a result does
+    #: not dump the payload.
+    content: bytes = field(repr=False)
     content_type: Optional[str] = None
 
     def save(self, path: str | Path) -> Path:
-        """Write the photo to ``path`` and return the path."""
+        """Write the photo to ``path`` and return the path.
+
+        An existing file at ``path`` is overwritten. The parent
+        directory must already exist.
+        """
         target = Path(path)
         target.write_bytes(self.content)
         return target
 
 
-@dataclass(slots=True)
+@dataclass(frozen=True, slots=True)
 class PhotoUriResult:
     """The photo media endpoint's JSON form, returned on request instead
     of following its redirect.
