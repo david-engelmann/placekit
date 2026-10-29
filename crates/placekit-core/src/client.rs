@@ -272,6 +272,7 @@ impl Client {
             let body = response.text().await.map_err(Error::network)?;
             let media: PhotoMediaJson = serde_json::from_str(&body).map_err(|e| Error::Decode {
                 detail: e.to_string(),
+                status: Some(status.as_u16()),
             })?;
             return Ok(PhotoMedia::Uri(media));
         }
@@ -311,6 +312,7 @@ impl Client {
         }
         serde_json::from_str::<T>(&body).map_err(|e| Error::Decode {
             detail: e.to_string(),
+            status: Some(status.as_u16()),
         })
     }
 }

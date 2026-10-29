@@ -37,6 +37,9 @@ fn to_pyerr(py: Python<'_>, err: CoreError) -> PyErr {
     let _ = instance.setattr("status_code", err.status_code());
     let _ = instance.setattr("google_status", err.google_status());
     let _ = instance.setattr("error_code", err.error_code());
+    let _ = instance.setattr("status_mismatch", err.status_mismatch());
+    let _ = instance.setattr("retryable", err.retryable());
+    let _ = instance.setattr("retry_after", err.retry_after());
     if let Ok(details) = serde_json::to_value(err.details()) {
         if let Ok(value) = value_to_py(py, &details) {
             let _ = instance.setattr("details", value);
@@ -89,9 +92,20 @@ where
 }
 
 fn value_to_py(py: Python<'_>, value: &Value) -> PyResult<PyObject> {
+    // A value that cannot be converted for Python is a decode failure
+    // of this layer, reported inside the exception hierarchy like the
+    // core's own decode errors rather than as a bare PyValueError.
     pythonize::pythonize(py, value)
         .map(|bound| bound.unbind())
-        .map_err(|e| PyValueError::new_err(e.to_string()))
+        .map_err(|e| {
+            to_pyerr(
+                py,
+                CoreError::Decode {
+                    detail: e.to_string(),
+                    status: None,
+                },
+            )
+        })
 }
 
 fn result_to_py<T>(py: Python<'_>, result: Result<T, CoreError>) -> PyResult<PyObject>
@@ -105,6 +119,7 @@ where
                     py,
                     CoreError::Decode {
                         detail: e.to_string(),
+                        status: None,
                     },
                 )
             })?;
@@ -187,8 +202,10 @@ impl PyClient {
             builder = builder.base_url(base_url);
         }
         if let Some(timeout) = timeout {
-            if timeout <= 0.0 {
-                return Err(PyValueError::new_err("timeout must be greater than zero"));
+            if !timeout.is_finite() || timeout <= 0.0 {
+                return Err(PyValueError::new_err(
+                    "timeout must be a positive, finite number of seconds",
+                ));
             }
             builder = builder.timeout(std::time::Duration::from_secs_f64(timeout));
         }

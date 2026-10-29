@@ -18,6 +18,7 @@ pub enum Error {
         message: String,
         code: Option<i64>,
         details: Vec<serde_json::Value>,
+        retry_after: Option<u64>,
     },
     /// Quota exhausted or rate limit hit (HTTP 429, `RESOURCE_EXHAUSTED`).
     #[error("rate limit or quota exceeded (HTTP {status}): {message}")]
@@ -27,6 +28,7 @@ pub enum Error {
         message: String,
         code: Option<i64>,
         details: Vec<serde_json::Value>,
+        retry_after: Option<u64>,
     },
     /// The requested resource does not exist (HTTP 404, `NOT_FOUND`).
     #[error("not found (HTTP {status}): {message}")]
@@ -36,6 +38,7 @@ pub enum Error {
         message: String,
         code: Option<i64>,
         details: Vec<serde_json::Value>,
+        retry_after: Option<u64>,
     },
     /// The request itself was malformed (HTTP 400, `INVALID_ARGUMENT`).
     #[error("invalid request (HTTP {status}): {message}")]
@@ -45,6 +48,7 @@ pub enum Error {
         message: String,
         code: Option<i64>,
         details: Vec<serde_json::Value>,
+        retry_after: Option<u64>,
     },
     /// Any other error response from the API.
     #[error("places API error (HTTP {status} {google_status}): {message}")]
@@ -54,15 +58,20 @@ pub enum Error {
         message: String,
         code: Option<i64>,
         details: Vec<serde_json::Value>,
+        retry_after: Option<u64>,
     },
     /// The request never produced an HTTP response (DNS, connect, TLS,
     /// timeout, or a dropped connection).
     #[error("network error: {detail}")]
     Network { detail: String },
     /// The API returned a success status with a body that did not decode
-    /// into the expected shape.
+    /// into the expected shape. `status` carries the HTTP status of that
+    /// response when there was one.
     #[error("failed to decode response: {detail}")]
-    Decode { detail: String },
+    Decode {
+        detail: String,
+        status: Option<u16>,
+    },
     /// The client itself was configured or called incorrectly. This is a
     /// programming error, detected before any network traffic.
     #[error("invalid client configuration or call: {detail}")]
@@ -94,21 +103,106 @@ impl Error {
             | Error::NotFound { status, .. }
             | Error::InvalidRequest { status, .. }
             | Error::Api { status, .. } => Some(*status),
+            Error::Decode { status, .. } => *status,
             _ => None,
         }
     }
 
     /// The Google RPC status string (for example `INVALID_ARGUMENT`), when
-    /// the error came from an API response.
+    /// the error came from an API response. `None` when the response
+    /// carried no parseable envelope status, never an empty string.
     pub fn google_status(&self) -> Option<&str> {
-        match self {
+        let raw = match self {
             Error::Auth { google_status, .. }
             | Error::RateLimit { google_status, .. }
             | Error::NotFound { google_status, .. }
             | Error::InvalidRequest { google_status, .. }
-            | Error::Api { google_status, .. } => Some(google_status.as_str()),
+            | Error::Api { google_status, .. } => google_status.as_str(),
+            _ => return None,
+        };
+        if raw.is_empty() {
+            None
+        } else {
+            Some(raw)
+        }
+    }
+
+    /// True when the envelope `code` and the HTTP status disagree. The
+    /// exception class follows the envelope status while `status_code`
+    /// follows HTTP; this flag makes that split visible instead of
+    /// silent.
+    pub fn status_mismatch(&self) -> bool {
+        match (self.error_code(), self.status_code()) {
+            (Some(code), Some(status)) => code != i64::from(status),
+            _ => false,
+        }
+    }
+
+    /// Whether a caller side retry can plausibly succeed: quota errors,
+    /// and server side errors by HTTP status or Google status. No retry
+    /// is attempted by the client itself.
+    pub fn retryable(&self) -> bool {
+        match self {
+            Error::RateLimit { .. } => true,
+            Error::Api {
+                status,
+                google_status,
+                ..
+            } => {
+                matches!(*status, 500 | 502 | 503 | 504)
+                    || matches!(
+                        google_status.as_str(),
+                        "UNAVAILABLE" | "INTERNAL" | "DEADLINE_EXCEEDED"
+                    )
+            }
+            _ => false,
+        }
+    }
+
+    /// The value of a `Retry-After` response header in whole seconds,
+    /// when the failing response carried one.
+    pub fn retry_after(&self) -> Option<u64> {
+        match self {
+            Error::Auth { retry_after, .. }
+            | Error::RateLimit { retry_after, .. }
+            | Error::NotFound { retry_after, .. }
+            | Error::InvalidRequest { retry_after, .. }
+            | Error::Api { retry_after, .. } => *retry_after,
             _ => None,
         }
+    }
+
+    /// Attach a parsed `Retry-After` value to an API error. Other
+    /// variants have nowhere to carry it and are returned unchanged.
+    pub(crate) fn with_retry_after(mut self, retry_after: Option<u64>) -> Error {
+        match &mut self {
+            Error::Auth { retry_after: slot, .. }
+            | Error::RateLimit { retry_after: slot, .. }
+            | Error::NotFound { retry_after: slot, .. }
+            | Error::InvalidRequest { retry_after: slot, .. }
+            | Error::Api { retry_after: slot, .. } => *slot = retry_after,
+            _ => {}
+        }
+        self
+    }
+
+    /// Append a parenthesised note to an API error's message, for facts
+    /// learned outside the body (an unreadable body, the content type,
+    /// which host actually answered). Other variants are unchanged.
+    pub(crate) fn with_note(mut self, note: &str) -> Error {
+        match &mut self {
+            Error::Auth { message, .. }
+            | Error::RateLimit { message, .. }
+            | Error::NotFound { message, .. }
+            | Error::InvalidRequest { message, .. }
+            | Error::Api { message, .. } => {
+                message.push_str(" (");
+                message.push_str(note);
+                message.push(')');
+            }
+            _ => {}
+        }
+        self
     }
 
     /// The `code` field of the Google error envelope, when the response
@@ -187,23 +281,30 @@ impl Error {
     /// "details"}}`) and classifies by the Google status string first,
     /// then by HTTP code.
     pub fn from_response(status: u16, body: &str) -> Error {
+        Self::from_response_detailed(status, body, None)
+    }
+
+    /// [`Error::from_response`] with the response content type, used to
+    /// describe non-envelope bodies in the error message.
+    pub(crate) fn from_response_detailed(
+        status: u16,
+        body: &str,
+        content_type: Option<&str>,
+    ) -> Error {
         let parsed = serde_json::from_str::<GoogleErrorEnvelope>(body).ok();
         let (google_status, message, code, details) = match parsed {
             Some(env) => (
                 env.error.status.unwrap_or_default(),
                 env.error
                     .message
+                    .map(|m| m.chars().take(500).collect())
                     .unwrap_or_else(|| format!("HTTP {status}")),
                 env.error.code,
                 env.error.details.unwrap_or_default(),
             ),
             None => (
                 String::new(),
-                if body.trim().is_empty() {
-                    format!("HTTP {status}")
-                } else {
-                    body.chars().take(500).collect()
-                },
+                non_envelope_message(status, body, content_type),
                 None,
                 Vec::new(),
             ),
@@ -216,6 +317,7 @@ impl Error {
                 message,
                 code,
                 details,
+                retry_after: None,
             },
             "RESOURCE_EXHAUSTED" => Error::RateLimit {
                 status,
@@ -223,6 +325,7 @@ impl Error {
                 message,
                 code,
                 details,
+                retry_after: None,
             },
             "NOT_FOUND" => Error::NotFound {
                 status,
@@ -230,6 +333,7 @@ impl Error {
                 message,
                 code,
                 details,
+                retry_after: None,
             },
             "INVALID_ARGUMENT" | "FAILED_PRECONDITION" => Error::InvalidRequest {
                 status,
@@ -237,6 +341,18 @@ impl Error {
                 message,
                 code,
                 details,
+                retry_after: None,
+            },
+            // A canonical server side status classifies as a plain API
+            // error whatever the HTTP code says; it must never fall
+            // through to the client side HTTP classes below.
+            "UNAVAILABLE" | "INTERNAL" | "DEADLINE_EXCEEDED" => Error::Api {
+                status,
+                google_status,
+                message,
+                code,
+                details,
+                retry_after: None,
             },
             _ => match status {
                 401 | 403 => Error::Auth {
@@ -245,6 +361,7 @@ impl Error {
                     message,
                     code,
                     details,
+                    retry_after: None,
                 },
                 429 => Error::RateLimit {
                     status,
@@ -252,6 +369,7 @@ impl Error {
                     message,
                     code,
                     details,
+                    retry_after: None,
                 },
                 404 => Error::NotFound {
                     status,
@@ -259,6 +377,7 @@ impl Error {
                     message,
                     code,
                     details,
+                    retry_after: None,
                 },
                 400 => Error::InvalidRequest {
                     status,
@@ -266,6 +385,7 @@ impl Error {
                     message,
                     code,
                     details,
+                    retry_after: None,
                 },
                 _ => Error::Api {
                     status,
@@ -273,15 +393,57 @@ impl Error {
                     message,
                     code,
                     details,
+                    retry_after: None,
                 },
             },
         }
     }
 
+    /// Build the error for a response whose error body could not be
+    /// read at all. The HTTP status is the one fact that survives, so
+    /// the class comes from the HTTP fallback and the read failure is
+    /// recorded in the message rather than dropped.
+    pub(crate) fn from_unreadable_body(
+        status: u16,
+        read_error: &str,
+        content_type: Option<&str>,
+    ) -> Error {
+        Self::from_response_detailed(status, "", content_type)
+            .with_note(&format!("error body unreadable: {read_error}"))
+    }
+
+    /// True when a body parses as a Google error envelope carrying a
+    /// status string. Used to catch error envelopes that arrive on a
+    /// success HTTP status, where they would otherwise decode as an
+    /// empty or defaulted success value.
+    pub(crate) fn has_error_envelope(body: &str) -> bool {
+        serde_json::from_str::<GoogleErrorEnvelope>(body)
+            .map(|env| env.error.status.is_some())
+            .unwrap_or(false)
+    }
+
     pub(crate) fn network(err: reqwest::Error) -> Error {
+        // Prefix the detail with a stable class token so callers can
+        // branch on the transport cause without matching reqwest prose;
+        // a timeout in particular must not read as a decode failure.
+        let class = if err.is_timeout() {
+            "timeout"
+        } else if err.is_connect() {
+            "connect"
+        } else if err.is_redirect() {
+            "redirect"
+        } else if err.is_body() || err.is_decode() {
+            "body"
+        } else {
+            "network"
+        };
         Error::Network {
-            detail: err.to_string(),
+            detail: format!("{class}: {err}"),
         }
+    }
+
+    pub(crate) fn network_detail(detail: String) -> Error {
+        Error::Network { detail }
     }
 
     pub(crate) fn config(detail: impl Into<String>) -> Error {
@@ -289,6 +451,25 @@ impl Error {
             detail: detail.into(),
         }
     }
+}
+
+/// Message for an error response whose body is not a Google envelope.
+/// The body text is the only diagnostic a proxy or load balancer
+/// failure leaves, so it is echoed up to a cap; truncation is marked
+/// with the total size and content type instead of being invisible.
+fn non_envelope_message(status: u16, body: &str, content_type: Option<&str>) -> String {
+    if body.trim().is_empty() {
+        return format!("HTTP {status}");
+    }
+    let mut message: String = body.chars().take(500).collect();
+    if body.chars().count() > 500 {
+        message.push_str(&format!(
+            "... [truncated, {} bytes, {}]",
+            body.len(),
+            content_type.unwrap_or("unknown content type")
+        ));
+    }
+    message
 }
 
 #[derive(Debug, Deserialize)]
@@ -405,5 +586,114 @@ mod tests {
         assert_eq!(err.kind(), "rate_limit");
         assert_eq!(err.status_code(), Some(429));
         assert_eq!(err.error_code(), Some(400));
+    }
+
+    #[test]
+    fn status_mismatch_flags_envelope_code_against_http_status() {
+        let body =
+            r#"{"error": {"code": 400, "message": "Quota", "status": "RESOURCE_EXHAUSTED"}}"#;
+        assert!(Error::from_response(500, body).status_mismatch());
+        assert!(!Error::from_response(400, body).status_mismatch());
+        // No envelope code, no mismatch.
+        assert!(!Error::from_response(503, "").status_mismatch());
+    }
+
+    #[test]
+    fn google_status_is_none_without_an_envelope_status() {
+        // The documented contract is None, not an empty string, when a
+        // non-envelope body carried no Google status (case 6).
+        let err = Error::from_response(500, "Internal Server Error: upstream exploded");
+        assert_eq!(err.kind(), "api");
+        assert_eq!(err.google_status(), None);
+        assert_eq!(err.status_code(), Some(500));
+    }
+
+    #[test]
+    fn envelope_message_is_capped() {
+        let long = "x".repeat(5_000);
+        let body = format!(
+            r#"{{"error": {{"code": 400, "message": "{long}", "status": "INVALID_ARGUMENT"}}}}"#
+        );
+        let err = Error::from_response(400, &body);
+        // The Display prefix plus exactly 500 message characters.
+        assert!(err.to_string().len() < 600);
+    }
+
+    #[test]
+    fn server_side_statuses_never_fall_to_http_classes() {
+        for (http, google) in [
+            (400, "DEADLINE_EXCEEDED"),
+            (400, "UNAVAILABLE"),
+            (404, "INTERNAL"),
+        ] {
+            let body = format!(
+                r#"{{"error": {{"code": {http}, "message": "m", "status": "{google}"}}}}"#
+            );
+            let err = Error::from_response(http, &body);
+            assert_eq!(err.kind(), "api", "{google} on HTTP {http}");
+            assert_eq!(err.google_status(), Some(google));
+            assert!(err.retryable(), "{google} must be retryable");
+        }
+    }
+
+    #[test]
+    fn retryable_classification() {
+        assert!(Error::from_response(429, "").retryable());
+        assert!(Error::from_response(503, "").retryable());
+        assert!(!Error::from_response(404, "").retryable());
+        assert!(!Error::from_response(400, "").retryable());
+        assert!(!Error::from_response(403, "").retryable());
+    }
+
+    #[test]
+    fn retry_after_round_trips() {
+        let err = Error::from_response(429, "").with_retry_after(Some(7));
+        assert_eq!(err.retry_after(), Some(7));
+        let err = Error::from_response(429, "");
+        assert_eq!(err.retry_after(), None);
+    }
+
+    #[test]
+    fn non_envelope_truncation_is_marked() {
+        let body = "y".repeat(600);
+        let err = Error::from_response_detailed(503, &body, Some("text/html"));
+        let text = err.to_string();
+        assert!(text.contains("[truncated, 600 bytes, text/html]"), "{text}");
+    }
+
+    #[test]
+    fn unreadable_body_keeps_the_http_class_and_the_failure() {
+        let err = Error::from_unreadable_body(500, "connection closed", None);
+        assert_eq!(err.kind(), "api");
+        assert_eq!(err.status_code(), Some(500));
+        assert!(err.to_string().contains("error body unreadable: connection closed"));
+        let err = Error::from_unreadable_body(429, "connection closed", None);
+        assert_eq!(err.kind(), "rate_limit");
+    }
+
+    #[test]
+    fn error_envelope_detection() {
+        assert!(Error::has_error_envelope(
+            r#"{"error": {"code": 403, "message": "m", "status": "PERMISSION_DENIED"}}"#
+        ));
+        assert!(!Error::has_error_envelope(r#"{"places": []}"#));
+        assert!(!Error::has_error_envelope("not json"));
+        // An envelope without a status string is not an error signal.
+        assert!(!Error::has_error_envelope(r#"{"error": {"code": 403}}"#));
+    }
+
+    #[test]
+    fn decode_error_carries_its_http_status() {
+        let err = Error::Decode {
+            detail: "bad body".to_owned(),
+            status: Some(200),
+        };
+        assert_eq!(err.status_code(), Some(200));
+        assert_eq!(err.google_status(), None);
+        let err = Error::Decode {
+            detail: "local".to_owned(),
+            status: None,
+        };
+        assert_eq!(err.status_code(), None);
     }
 }
