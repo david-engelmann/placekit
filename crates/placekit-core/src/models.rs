@@ -1046,6 +1046,23 @@ mod tests {
     }
 
     #[test]
+    fn passthrough_integers_keep_full_precision() {
+        // R4-19: an unknown field carrying an integer beyond u64 used
+        // to reserialize in scientific notation with digits lost, so
+        // the value Python received in raw was not the value the API
+        // sent. Arbitrary precision numbers keep every digit.
+        let resp: SearchResponse = serde_json::from_str(
+            r#"{"places":[],"futureCounter":340282366920938463463374607431768211456}"#,
+        )
+        .unwrap();
+        let text = serde_json::to_string(&resp).unwrap();
+        assert!(
+            text.contains("340282366920938463463374607431768211456"),
+            "{text}"
+        );
+    }
+
+    #[test]
     fn empty_request_collections_and_strings_are_omitted() {
         // R4-17: an empty optional string or list serializes exactly
         // like None, as an absent field.
