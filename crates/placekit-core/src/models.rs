@@ -15,6 +15,18 @@
 //! hold at all (a negative or fractional count, for example) is still a
 //! decode error. Request values, which the caller controls, are the
 //! opposite: they are validated in the core before anything is sent.
+//!
+//! One consequence of the leniency posture is worth stating plainly.
+//! The `raw` view the Python layer exposes is the decoded model
+//! reserialized, not the literal response body, so for a partial
+//! nested object (a location carrying only a latitude, a viewport
+//! carrying only one corner) a field the server omitted appears in
+//! `raw` carrying its default value, indistinguishable from a value
+//! the server actually sent. Presence is not tracked on those types,
+//! and recording it would change their typed shape, so the
+//! overstatement is documented rather than repaired. Typed values and
+//! `raw` always agree with each other, but on partial objects `raw`
+//! can claim more than the server said.
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
@@ -59,10 +71,40 @@ pub struct LocalizedText {
     pub extra: Map<String, Value>,
 }
 
+/// Decode a request circle center, requiring both coordinates.
+///
+/// Response leniency defaults a missing latitude or longitude to 0.0,
+/// which is the right posture for values the API sent. A request body
+/// is caller supplied, though, and the same defaults silently aimed a
+/// circle whose center was absent, or missing one coordinate, at
+/// latitude 0.0 and longitude 0.0. Circle is request geometry only,
+/// never a response type, so its center decodes strictly here. A
+/// missing center or coordinate is a decode error, which the bindings
+/// surface as a configuration error, while the response types keep
+/// the lenient [`LatLng`] decoding.
+fn de_complete_center<'de, D>(deserializer: D) -> Result<LatLng, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    struct CompleteCenter {
+        latitude: f64,
+        longitude: f64,
+        #[serde(flatten)]
+        extra: Map<String, Value>,
+    }
+    let center = CompleteCenter::deserialize(deserializer)?;
+    Ok(LatLng {
+        latitude: center.latitude,
+        longitude: center.longitude,
+        extra: center.extra,
+    })
+}
+
 /// A circular area, used to bias or restrict searches.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Circle {
-    #[serde(default)]
+    #[serde(deserialize_with = "de_complete_center")]
     pub center: LatLng,
     /// Radius in meters, at most 50000.
     #[serde(default)]
@@ -322,7 +364,12 @@ fn lenient_u64_value(value: &Value) -> Option<u64> {
     match value {
         Value::Number(n) => n.as_u64().or_else(|| {
             let f = n.as_f64()?;
-            if f.fract() == 0.0 && f >= 0.0 && f <= u64::MAX as f64 {
+            // The bound is strict. u64::MAX as f64 rounds up to
+            // exactly 2^64, so a bound of f <= u64::MAX as f64 let a
+            // count of exactly 2^64 through, and the cast saturated
+            // it to u64::MAX, one less than the value sent. Anything
+            // at or above 2^64 is unrepresentable and stays an error.
+            if f.fract() == 0.0 && (0.0..18_446_744_073_709_551_616.0).contains(&f) {
                 Some(f as u64)
             } else {
                 None
@@ -954,7 +1001,8 @@ mod tests {
         let viewport = place.viewport.as_ref().unwrap();
         assert_eq!(viewport.low.latitude, 1.0);
         assert_eq!(viewport.high.longitude, 0.0);
-        let circle: Circle = serde_json::from_str(r#"{"center":{"latitude":1.0}}"#).unwrap();
+        let circle: Circle =
+            serde_json::from_str(r#"{"center":{"latitude":1.0,"longitude":2.0}}"#).unwrap();
         assert_eq!(circle.radius, 0.0);
         // Serialization of a full value is unchanged by the defaults.
         let value = serde_json::to_value(LatLng::new(-33.86, 151.2)).unwrap();
@@ -1019,6 +1067,62 @@ mod tests {
         assert!(
             serde_json::from_str::<Place>(r#"{"id":"ChIJx","userRatingCount":"many"}"#).is_err()
         );
+    }
+
+    #[test]
+    fn lenient_count_boundary_at_two_to_the_sixty_fourth() {
+        // The decoder's own rule is that a value the typed field
+        // cannot represent is a decode error, never a silent
+        // correction. 2^64 - 1 is the largest representable count and
+        // decodes exactly; exactly 2^64 and above fail in integer,
+        // float and string form alike, where they used to saturate
+        // to u64::MAX through the float fallback.
+        let place: Place =
+            serde_json::from_str(r#"{"id":"ChIJx","userRatingCount":18446744073709551615}"#)
+                .unwrap();
+        assert_eq!(place.user_rating_count, Some(u64::MAX));
+        for body in [
+            r#"{"id":"ChIJx","userRatingCount":18446744073709551616}"#,
+            r#"{"id":"ChIJx","userRatingCount":18446744073709551617}"#,
+            r#"{"id":"ChIJx","userRatingCount":18446744073709551616.0}"#,
+            r#"{"id":"ChIJx","userRatingCount":"18446744073709551616"}"#,
+        ] {
+            assert!(serde_json::from_str::<Place>(body).is_err(), "{body}");
+        }
+    }
+
+    #[test]
+    fn request_circles_require_a_complete_center() {
+        // A circle decoded for a request must carry a center with
+        // both coordinates present. The response leniency defaults
+        // would otherwise aim an omitted center, or a center missing
+        // one coordinate, at 0.0, 0.0 without a word, on every path
+        // that accepts a circle.
+        let nearby: Result<NearbySearchRequest, _> =
+            serde_json::from_str(r#"{"locationRestriction":{"circle":{"radius":100.0}}}"#);
+        assert!(nearby.is_err());
+        let nearby: Result<NearbySearchRequest, _> = serde_json::from_str(
+            r#"{"locationRestriction":{"circle":{"center":{"latitude":-33.86},"radius":100.0}}}"#,
+        );
+        assert!(nearby.is_err());
+        let text: Result<TextSearchRequest, _> = serde_json::from_str(
+            r#"{"textQuery":"cafes","locationBias":{"circle":{"center":{"longitude":151.2},"radius":100.0}}}"#,
+        );
+        assert!(text.is_err());
+        let auto: Result<AutocompleteRequest, _> = serde_json::from_str(
+            r#"{"input":"Bianco","locationRestriction":{"circle":{"radius":100.0}}}"#,
+        );
+        assert!(auto.is_err());
+        // A complete center decodes on the same path, and the radius
+        // keeps its default.
+        let nearby: NearbySearchRequest = serde_json::from_str(
+            r#"{"locationRestriction":{"circle":{"center":{"latitude":-33.86,"longitude":151.2}}}}"#,
+        )
+        .unwrap();
+        let circle = &nearby.location_restriction.circle;
+        assert_eq!(circle.center.latitude, -33.86);
+        assert_eq!(circle.center.longitude, 151.2);
+        assert_eq!(circle.radius, 0.0);
     }
 
     #[test]

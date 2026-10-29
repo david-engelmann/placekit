@@ -28,6 +28,7 @@ All notable changes to placekit are recorded here. The format follows Keep a Cha
 
 - Release wheels now build on native arm runners (ubuntu-24.04-arm, macos-14) instead of cross runners, with Linux wheels pinned to manylinux 2_28, and the publish job checks the tag against the manifests before uploading to PyPI through trusted publishing.
 - Client construction validates the base URL. A base URL carrying a query string or a fragment, or one whose scheme is not http or https, fails at build time instead of silently rerouting every request, while path prefixes keep working and dot segments can no longer escape the configured prefix.
+- Client construction also rejects a base URL carrying embedded credentials, which used to become an Authorization header sent to the API host on every request without the caller seeing it.
 - The Rust core no longer follows redirects automatically, so the API key header can never be resent to a redirect target. Photo media redirects are followed manually with the API key attached to the first request only.
 - Field masks reject duplicate paths, empty segments, wildcard segments and non-ASCII characters, and are bounded at 100 paths and a 4096 character header value.
 - The native module rejects timeout values above one hour, the same cap the Python clients document, instead of only the Python layer enforcing it.
@@ -51,6 +52,7 @@ All notable changes to placekit are recorded here. The format follows Keep a Cha
 - One mistyped field in an error envelope no longer discards the Google status, message and details the rest of the envelope carried, and retryability follows the HTTP status on every error type that carries one instead of only one variant.
 - A failed photo request can no longer leak the API key into the exception message through the photo URL, a photo response with no declared image content type is refused instead of being returned as photo bytes, an empty JSON object in the skip redirect photo form is a decode error instead of a photo result pointing at an empty URI, and a failed body read after a success status carries that status on the error instead of losing it.
 - Empty optional strings and lists are omitted from request bodies and empty Place Details query parameters are omitted, instead of being sent as empty values whose meaning differs from absence at the API, and a zero response size cap is rejected when the client is built instead of failing every call.
+- A request body whose circle omits its center, or whose center omits a latitude or a longitude, fails locally with a configuration error instead of being sent aimed at latitude 0.0 and longitude 0.0, while response decoding keeps its lenient defaults.
 
 ## [0.1.0] - 2026-10-28
 

@@ -67,7 +67,7 @@ impl ClientBuilder {
     /// Build the client. Fails on an empty API key, a key that cannot be
     /// sent as an HTTP header value, a timeout of zero, a response cap
     /// of zero, or a base URL that does not parse, is not http or https,
-    /// or carries a query string or a fragment.
+    /// or carries credentials, a query string or a fragment.
     pub fn build(self) -> Result<Client, Error> {
         if self.api_key.trim().is_empty() {
             return Err(Error::config("API key must not be empty"));
@@ -742,7 +742,8 @@ fn content_type_of(response: &reqwest::Response) -> Option<String> {
 /// a fragment silently rerouted every request (the endpoint path
 /// landed inside the query) and still built. Now the base must parse,
 /// must be http or https with a host, and must carry neither a query
-/// nor a fragment. Parsing also resolves dot segments in the path, so
+/// nor a fragment nor embedded credentials. Parsing also resolves dot
+/// segments in the path, so
 /// a configured prefix cannot be escaped by the appended endpoint
 /// path. A trailing slash is trimmed as before, and path prefixes
 /// (the documented stub form `http://host:port/v1`) keep working.
@@ -761,6 +762,15 @@ fn parse_base_url(raw: &str) -> Result<String, Error> {
     if url.query().is_some() || url.fragment().is_some() {
         return Err(Error::config(
             "base_url must not carry a query string or a fragment",
+        ));
+    }
+    if !url.username().is_empty() || url.password().is_some() {
+        // Embedded credentials are not inert text in the base: the
+        // HTTP layer turns userinfo into an Authorization Basic
+        // header sent to the API host on every request, invisible to
+        // the caller. Credentials do not belong in a base URL.
+        return Err(Error::config(
+            "base_url must not carry credentials (userinfo)",
         ));
     }
     Ok(url.to_string().trim_end_matches('/').to_owned())
@@ -1121,6 +1131,28 @@ mod tests {
             "http://localhost:8080/v1#frag",
             "localhost:8080/v1",
             "ftp://localhost:8080/v1",
+        ] {
+            assert_eq!(
+                Client::builder("k")
+                    .base_url(bad)
+                    .build()
+                    .unwrap_err()
+                    .kind(),
+                "config",
+                "{bad}"
+            );
+        }
+    }
+
+    #[test]
+    fn base_url_with_userinfo_is_a_config_error() {
+        // Userinfo in the base used to build silently, and the HTTP
+        // layer turned it into an Authorization Basic header sent to
+        // the API host on every request.
+        for bad in [
+            "http://user:pass@127.0.0.1:9/v1",
+            "http://user@127.0.0.1:9/v1",
+            "http://:pass@127.0.0.1:9/v1",
         ] {
             assert_eq!(
                 Client::builder("k")
