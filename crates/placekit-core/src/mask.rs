@@ -54,7 +54,9 @@ impl FieldMask {
                 || !path.is_ascii()
                 || path.chars().any(|c| c.is_whitespace())
                 || path.chars().any(|c| c.is_control())
-                || path.split('.').any(|segment| segment.is_empty() || segment == "*")
+                || path
+                    .split('.')
+                    .any(|segment| segment.is_empty() || segment == "*")
                 || !seen.insert(path.clone())
             {
                 return Err(Error::config(format!("invalid field mask path: {path:?}")));
@@ -204,8 +206,7 @@ mod tests {
             let err = FieldMask::new(vec![bad.to_owned()]).unwrap_err();
             assert_eq!(err.kind(), "config", "path {bad:?} should be rejected");
         }
-        let err = FieldMask::new(vec!["places.id".to_owned(), "places.id".to_owned()])
-            .unwrap_err();
+        let err = FieldMask::new(vec!["places.id".to_owned(), "places.id".to_owned()]).unwrap_err();
         assert_eq!(err.kind(), "config");
     }
 

@@ -109,7 +109,10 @@ fn to_pyerr(py: Python<'_>, err: CoreError) -> PyErr {
     match value_to_py(py, &serde_json::Value::Array(err.quota_violations()))
         .map_err(|e| e.to_string())
     {
-        Ok(value) => record_failure(&mut first_failure, instance.setattr("quota_violations", value)),
+        Ok(value) => record_failure(
+            &mut first_failure,
+            instance.setattr("quota_violations", value),
+        ),
         Err(e) => {
             if first_failure.is_none() {
                 first_failure = Some(e);
@@ -248,8 +251,8 @@ fn photo_to_py(
                 .map_err(|e| photo_conversion_err(py, e))?
                 .unbind()
                 .into_any();
-            let tuple = PyTuple::new(py, [tag, uri, name])
-                .map_err(|e| photo_conversion_err(py, e))?;
+            let tuple =
+                PyTuple::new(py, [tag, uri, name]).map_err(|e| photo_conversion_err(py, e))?;
             Ok(tuple.unbind().into_any())
         }
         Err(e) => Err(to_pyerr(py, e)),

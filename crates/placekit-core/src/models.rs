@@ -943,10 +943,9 @@ mod tests {
         // response. A location carrying only a latitude, a viewport
         // carrying only one corner of one point, and a circle carrying
         // only a center all decode with the missing pieces defaulted.
-        let resp: SearchResponse = serde_json::from_str(
-            r#"{"places":[{"id":"ChIJx","location":{"latitude":-33.86}}]}"#,
-        )
-        .unwrap();
+        let resp: SearchResponse =
+            serde_json::from_str(r#"{"places":[{"id":"ChIJx","location":{"latitude":-33.86}}]}"#)
+                .unwrap();
         let loc = resp.places[0].location.as_ref().unwrap();
         assert_eq!(loc.latitude, -33.86);
         assert_eq!(loc.longitude, 0.0);
@@ -1015,12 +1014,8 @@ mod tests {
         assert_eq!(place.photos[0].height_px, 600);
         // Values the typed fields cannot represent are decode errors,
         // never silent truncations.
-        assert!(
-            serde_json::from_str::<Place>(r#"{"id":"ChIJx","userRatingCount":-3}"#).is_err()
-        );
-        assert!(
-            serde_json::from_str::<Place>(r#"{"id":"ChIJx","userRatingCount":1.5}"#).is_err()
-        );
+        assert!(serde_json::from_str::<Place>(r#"{"id":"ChIJx","userRatingCount":-3}"#).is_err());
+        assert!(serde_json::from_str::<Place>(r#"{"id":"ChIJx","userRatingCount":1.5}"#).is_err());
         assert!(
             serde_json::from_str::<Place>(r#"{"id":"ChIJx","userRatingCount":"many"}"#).is_err()
         );

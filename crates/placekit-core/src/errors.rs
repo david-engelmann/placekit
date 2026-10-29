@@ -29,7 +29,8 @@ pub enum Error {
         retry_after: Option<u64>,
     },
     /// The requested resource does not exist (HTTP 404, `NOT_FOUND`).
-    #[error("not found (HTTP {status}): {message}")]    NotFound {
+    #[error("not found (HTTP {status}): {message}")]
+    NotFound {
         status: u16,
         google_status: String,
         message: String,

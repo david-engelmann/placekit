@@ -279,7 +279,12 @@ impl Client {
             ));
         }
         if let Some(location) = &request.location_bias {
-            validate_location_shape("location_bias", &location.rectangle, &location.circle, false)?;
+            validate_location_shape(
+                "location_bias",
+                &location.rectangle,
+                &location.circle,
+                false,
+            )?;
         }
         if let Some(location) = &request.location_restriction {
             validate_location_shape(
@@ -937,9 +942,7 @@ fn validate_location_shape(
             "{label} must carry a rectangle or a circle"
         ))),
         (Some(rectangle), None) => validate_viewport(rectangle, label),
-        (None, Some(circle)) => {
-            validate_circle(circle, &format!("{label} circle"), restriction)
-        }
+        (None, Some(circle)) => validate_circle(circle, &format!("{label} circle"), restriction),
     }
 }
 
@@ -1120,7 +1123,11 @@ mod tests {
             "ftp://localhost:8080/v1",
         ] {
             assert_eq!(
-                Client::builder("k").base_url(bad).build().unwrap_err().kind(),
+                Client::builder("k")
+                    .base_url(bad)
+                    .build()
+                    .unwrap_err()
+                    .kind(),
                 "config",
                 "{bad}"
             );
@@ -1625,9 +1632,8 @@ mod tests {
                                 Ok(n) => {
                                     buf.extend_from_slice(&chunk[..n]);
                                     if header_end.is_none() {
-                                        if let Some(pos) = buf
-                                            .windows(4)
-                                            .position(|w| w == b"\r\n\r\n")
+                                        if let Some(pos) =
+                                            buf.windows(4).position(|w| w == b"\r\n\r\n")
                                         {
                                             header_end = Some(pos + 4);
                                             let head =
@@ -1791,8 +1797,8 @@ mod tests {
             response
         });
         let client = media.client("k");
-        let result = block_on(client.place_photo("places/ChIJ/photos/ref", Some(100), None, false))
-            .unwrap();
+        let result =
+            block_on(client.place_photo("places/ChIJ/photos/ref", Some(100), None, false)).unwrap();
         match result {
             PhotoMedia::Bytes(photo) => {
                 assert_eq!(photo.bytes, PNG_BYTES);
@@ -1825,11 +1831,14 @@ mod tests {
             .unwrap_err();
         assert_eq!(err.kind(), "decode");
         let stub = Stub::start(|_| {
-            stub_json(200, r#"{"name":"places/ChIJ/photos/ref","photoUri":"https://example.test/img"}"#)
+            stub_json(
+                200,
+                r#"{"name":"places/ChIJ/photos/ref","photoUri":"https://example.test/img"}"#,
+            )
         });
         let client = stub.client("k");
-        let result = block_on(client.place_photo("places/ChIJ/photos/ref", Some(100), None, true))
-            .unwrap();
+        let result =
+            block_on(client.place_photo("places/ChIJ/photos/ref", Some(100), None, true)).unwrap();
         match result {
             PhotoMedia::Uri(media) => {
                 assert_eq!(media.photo_uri, "https://example.test/img");
@@ -1861,7 +1870,8 @@ mod tests {
         // R4-10: headers arrive with a 200 and a promised length, then
         // the connection drops mid body. The error is a decode error
         // whose status_code is the HTTP status, as data.
-        let stub = Stub::start(|_| StubResponse {
+        let stub = Stub::start(|_| {
+            StubResponse {
             status: 200,
             content_type: None,
             headers: Vec::new(),
@@ -1870,6 +1880,7 @@ mod tests {
                 b"HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: 100\r\nconnection: close\r\n\r\n{\"places\":"
                     .to_vec(),
             ),
+        }
         });
         let client = stub.client("k");
         let req = TextSearchRequest {
