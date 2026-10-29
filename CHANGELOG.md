@@ -17,6 +17,7 @@ All notable changes to placekit are recorded here. The format follows Keep a Cha
 
 ### Changed
 
+- A circle in a Text Search location restriction now raises `ConfigError`, the same type as the other local validations, instead of a bare `ValueError` outside the exception hierarchy.
 - Default field masks now include the place resource name on every endpoint, and the README and fields docs state plainly that the defaults reach the Enterprise billing tier.
 - Header construction fails loudly on a value that cannot be sent instead of silently dropping the header, and an API key that cannot be a header value is rejected when the client is built.
 - The offline test stub now honours field masks, returns autocomplete distances only for requests with an origin, and serves photos through a redirect, so the suite asserts the behaviour the real API actually has.

@@ -139,6 +139,8 @@ def test_place_details_typed_fields_with_explicit_mask(client):
             "viewport",
             "primaryTypeDisplayName",
             "currentOpeningHours",
+            "postalAddress",
+            "adrFormatAddress",
         ],
     )
     assert place.address_components[1].long_text == "George Street"
@@ -150,6 +152,17 @@ def test_place_details_typed_fields_with_explicit_mask(client):
     assert place.primary_type_display_name.text == "Cafe"
     assert place.current_opening_hours is not None
     assert place.current_opening_hours.open_now is True
+    # Postal address and the adr microformat address are typed too
+    # (finding C4); both are outside the default mask, as here.
+    assert place.postal_address is not None
+    assert place.postal_address.region_code == "AU"
+    assert place.postal_address.postal_code == "2000"
+    assert place.postal_address.administrative_area == "New South Wales"
+    assert place.postal_address.locality == "Sydney"
+    assert place.postal_address.address_lines == ["Shop 1/123 George St"]
+    assert place.adr_format_address is not None
+    assert "Shop 1/123 George St" in place.adr_format_address
+    assert 'class="postal-code">2000<' in place.adr_format_address
 
 
 def test_place_details_editorial_summary_needs_explicit_field(client):
@@ -184,10 +197,18 @@ def test_autocomplete_origin_enables_distance(client, stub_server):
         "Bianco", origin=(-33.8668, 151.2071), input_offset=6
     )
     first = result.place_predictions[0]
-    assert first.distance_meters == 1250
+    # The stub computes the distance from the origin to the fixture
+    # place at (-33.866784, 151.20713) with the haversine formula; this
+    # origin sits about 3 meters from it. A constant stand-in value
+    # would give the same number for every origin (red team finding A4).
+    assert first.distance_meters == 3
     body = json.loads(stub_server.last_request["body"])
     assert body["origin"]["latitude"] == pytest.approx(-33.8668)
     assert body["inputOffset"] == 6
+    # The same input from New York gives the computed trans-Pacific
+    # distance, proving the value follows the origin.
+    far = client.autocomplete("Bianco", origin=(40.7128, -74.0060))
+    assert far.place_predictions[0].distance_meters == 15988845
 
 
 def test_autocomplete_primary_types_and_mask(client, stub_server):
@@ -263,6 +284,52 @@ def test_text_search_top_level_fields_survive(client):
     assert result.places[0].display_text is None
 
 
+def test_text_search_contextual_contents_survive(client):
+    # contextualContents is not typed in Python; it must still reach
+    # the caller through the catch-all into raw when masked (finding
+    # C1). The fixture carries the documented shape so the shipped
+    # suite regress-tests this half of C1.
+    result = client.text_search(
+        "cafes", fields=["places.id", "contextualContents"]
+    )
+    assert result.raw["contextualContents"] == [
+        {
+            "justifications": [
+                {
+                    "reviewJustification": {
+                        "highlightedText": "known for single-origin espresso"
+                    }
+                }
+            ]
+        }
+    ]
+
+
+def test_masked_raw_carries_no_fabricated_keys(client):
+    # A response masked down to places.id must come back with no keys
+    # beyond what the wire carried. Absent typed fields stay absent
+    # instead of appearing with null or empty values (finding N1).
+    result = client.text_search("cafes", fields=["places.id"])
+    assert result.places[0].raw == {"id": "ChIJrTLr-GyuEmsRBfy61i59si0"}
+    # Autocomplete without an origin: no distanceMeters key at all,
+    # not a null one.
+    suggestions = client.autocomplete("Bianco")
+    prediction = suggestions.place_predictions[0]
+    assert "distanceMeters" not in prediction.raw
+    # Place Details on the default mask: typed fields outside the mask
+    # do not appear in raw either.
+    place = client.place_details("ChIJrTLr-GyuEmsRBfy61i59si0")
+    for absent in (
+        "postalAddress",
+        "adrFormatAddress",
+        "plusCode",
+        "viewport",
+        "currentOpeningHours",
+        "primaryTypeDisplayName",
+    ):
+        assert absent not in place.raw
+
+
 def test_min_rating_out_of_range_rejected(client):
     with pytest.raises(ConfigError):
         client.text_search("cafes", min_rating=5.5)
@@ -281,8 +348,10 @@ def test_location_bias_and_restriction_are_exclusive(client):
 
 def test_text_search_circle_restriction_rejected(client):
     # Text Search restrictions are rectangle only (finding F11); the
-    # typed Rust request refuses a circle before anything is sent.
-    with pytest.raises(ValueError):
+    # typed Rust request refuses a circle before anything is sent, and
+    # the failure surfaces as ConfigError like the other local
+    # validations, not as a bare ValueError (finding S2).
+    with pytest.raises(ConfigError):
         client.text_search(
             "cafes",
             location_restriction={
@@ -418,7 +487,9 @@ def test_async_client_matches_sync(api_key, base_url):
         with_origin = await client.autocomplete(
             "Bianco", origin=(-33.8668, 151.2071)
         )
-        assert with_origin.place_predictions[0].distance_meters == 1250
+        # Computed by the stub from that origin to the fixture place,
+        # about 3 meters away.
+        assert with_origin.place_predictions[0].distance_meters == 3
         photo = await client.place_photo(
             "places/ChIJrTLr-GyuEmsRBfy61i59si0/photos/ATJ83zh8vExample",
             max_height_px=200,

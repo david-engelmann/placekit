@@ -10,7 +10,9 @@ The stub behaves like the real API in the ways the suite depends on:
   fields the mask names, so a test can only see a field the client
   actually asked for (the fix for findings A2 and A3).
 * Autocomplete predictions carry ``distanceMeters`` only when the request
-  carried an ``origin``, as the API documents (finding A4).
+  carried an ``origin``, as the API documents (finding A4). The value is
+  computed from the request origin to the fixture place's location with
+  the haversine formula, not a constant stand-in.
 * The photo media route answers with an HTTP redirect to a second route
   that serves the image, and with ``skipHttpRedirect=true`` it answers
   with the documented JSON photo object instead (finding A7 with F8).
@@ -19,6 +21,7 @@ The stub behaves like the real API in the ways the suite depends on:
 from __future__ import annotations
 
 import json
+import math
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -77,6 +80,34 @@ def _filter_to_mask(value, mask: list[str]):
         return node
 
     return walk(value, "")
+
+
+def _fixture_place_locations() -> dict[str, dict]:
+    """Locations of the fixture places, keyed by place id.
+
+    Drawn from the search and details fixtures, so the autocomplete stub
+    measures distances to the same coordinates the rest of the suite
+    serves.
+    """
+    locations: dict[str, dict] = {}
+    details = json.loads(load_fixture("place_details.json"))
+    for place in (details, *json.loads(load_fixture("text_search.json"))["places"]):
+        if place.get("id") and place.get("location"):
+            locations[place["id"]] = place["location"]
+    return locations
+
+
+def _haversine_meters(origin: dict, location: dict) -> int:
+    """Great circle distance in whole meters between two lat/lng points."""
+    lat1 = math.radians(origin["latitude"])
+    lat2 = math.radians(location["latitude"])
+    dlat = lat2 - lat1
+    dlng = math.radians(location["longitude"] - origin["longitude"])
+    a = (
+        math.sin(dlat / 2) ** 2
+        + math.cos(lat1) * math.cos(lat2) * math.sin(dlng / 2) ** 2
+    )
+    return int(math.floor(6371000 * 2 * math.asin(math.sqrt(a)) + 0.5))
 
 
 def _filter_fixture(name: str, headers) -> bytes:
@@ -141,10 +172,10 @@ class StubHandler(BaseHTTPRequestHandler):
         return self._send_fixture(404, "error_not_found.json")
 
     def _send_autocomplete(self, payload):
-        # distanceMeters exists only when the request carried an origin;
-        # the fixture ships without it and the stub adds a stand-in value
-        # when it may legitimately appear (finding A4 with F7), honouring
-        # the field mask when one was sent.
+        # distanceMeters exists only when the request carried an origin.
+        # The fixture ships without it; the stub computes it from the
+        # request origin to each fixture place's location (finding A4
+        # with F7), honouring the field mask when one was sent.
         data = json.loads(load_fixture("autocomplete.json"))
         mask = _mask_paths(self.headers)
         if mask is not None:
@@ -159,11 +190,18 @@ class StubHandler(BaseHTTPRequestHandler):
             )
             for path in mask
         )
-        if payload.get("origin") and distance_allowed:
+        origin = payload.get("origin")
+        if origin and distance_allowed:
+            locations = _fixture_place_locations()
             for suggestion in data.get("suggestions", []):
                 prediction = suggestion.get("placePrediction")
-                if prediction is not None:
-                    prediction["distanceMeters"] = 1250
+                if prediction is None:
+                    continue
+                location = locations.get(prediction.get("placeId"))
+                if location is not None:
+                    prediction["distanceMeters"] = _haversine_meters(
+                        origin, location
+                    )
         self._send(200, json.dumps(data).encode())
 
     def do_GET(self):

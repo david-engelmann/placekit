@@ -261,6 +261,9 @@ pub struct AutocompleteRequest {
 // Python layer, instead of appearing with a null, empty or zero value
 // (red team finding N1). Python `raw` mirrors the reserialized value, so
 // without these guards raw overstates which fields the API returned.
+// (serde calls the string guard with `&String` by contract, hence the
+// allow for the clippy pointer argument lint.)
+#[allow(clippy::ptr_arg)]
 fn is_empty_string(value: &String) -> bool {
     value.is_empty()
 }
