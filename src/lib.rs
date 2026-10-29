@@ -154,21 +154,53 @@ where
 }
 
 fn value_to_py(py: Python<'_>, value: &Value) -> PyResult<PyObject> {
-    // A value that cannot be converted for Python is a decode failure
-    // of this layer, reported inside the exception hierarchy like the
-    // core's own decode errors rather than as a bare PyValueError.
-    pythonize::pythonize(py, value)
-        .map(|bound| bound.unbind())
-        .map_err(|e| {
-            to_pyerr(
-                py,
-                CoreError::Decode {
-                    detail: e.to_string(),
-                    status: None,
-                    source: Some(Box::new(e)),
-                },
-            )
-        })
+    // Converted by hand rather than through a generic converter
+    // (R4-19): with arbitrary precision numbers, a serde_json Number
+    // serializes through a private envelope shape that generic
+    // converters hand back as a dict, so every numeric field broke.
+    // Here an integer keeps its exact value at any size (Python ints
+    // are arbitrary precision too) and a float stays a float.
+    match value {
+        Value::Null => Ok(py.None()),
+        Value::Bool(b) => Ok(b.into_pyobject(py)?.to_owned().unbind().into_any()),
+        Value::Number(n) => number_to_py(py, n),
+        Value::String(s) => Ok(s.as_str().into_pyobject(py)?.unbind().into_any()),
+        Value::Array(items) => {
+            let list = pyo3::types::PyList::empty(py);
+            for item in items {
+                list.append(value_to_py(py, item)?)?;
+            }
+            Ok(list.unbind().into_any())
+        }
+        Value::Object(map) => {
+            let dict = PyDict::new(py);
+            for (key, item) in map {
+                dict.set_item(key, value_to_py(py, item)?)?;
+            }
+            Ok(dict.unbind().into_any())
+        }
+    }
+}
+
+fn number_to_py(py: Python<'_>, n: &serde_json::Number) -> PyResult<PyObject> {
+    if let Some(i) = n.as_i64() {
+        return Ok(i.into_pyobject(py)?.unbind().into_any());
+    }
+    if let Some(u) = n.as_u64() {
+        return Ok(u.into_pyobject(py)?.unbind().into_any());
+    }
+    let text = n.to_string();
+    if !text.contains(['.', 'e', 'E']) {
+        // An integer beyond u64: Python's int parses the exact
+        // decimal text, so no digit is lost on the way across.
+        let builtins = pyo3::types::PyModule::import(py, "builtins")?;
+        return Ok(builtins.getattr("int")?.call1((text,))?.unbind());
+    }
+    Ok(n.as_f64()
+        .unwrap_or(f64::NAN)
+        .into_pyobject(py)?
+        .unbind()
+        .into_any())
 }
 
 fn result_to_py<T>(py: Python<'_>, result: Result<T, CoreError>) -> PyResult<PyObject>

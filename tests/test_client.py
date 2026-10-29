@@ -918,6 +918,19 @@ def test_autocomplete_unknown_top_level_field_survives(client, raw_response):
     assert result.raw["futureSummary"] == {"legs": [1, 2]}
 
 
+def test_unknown_field_big_integer_survives_exactly(client, raw_response):
+    # R4-19: an unknown field carrying an integer beyond 64 bits
+    # reaches raw with every digit, as a Python int, not collapsed
+    # into a float.
+    raw_response(
+        200,
+        b'{"places": [], "futureCounter": 340282366920938463463374607431768211456}',
+    )
+    result = client.text_search("cafes")
+    assert result.raw["futureCounter"] == 340282366920938463463374607431768211456
+    assert isinstance(result.raw["futureCounter"], int)
+
+
 def test_async_error_attributes_match_sync(api_key, base_url):
     async def run():
         client = AsyncClient(api_key, base_url=base_url)
