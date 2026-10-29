@@ -824,6 +824,63 @@ def test_native_timeout_never_panics(api_key):
     _placekit.Client(api_key, timeout=3600.0)
 
 
+def test_native_dict_body_circle_without_a_complete_center_is_rejected(
+    api_key, base_url, stub_server
+):
+    # Through the native module directly, a hand built dict body is
+    # decoded by the core. A circle that omits its center, or whose
+    # center omits a coordinate, used to decode through the response
+    # leniency defaults and reach the wire aimed at latitude 0.0 and
+    # longitude 0.0. It is a configuration error now, raised before
+    # any request is made.
+    from placekit import _placekit
+
+    native = _placekit.Client(api_key, base_url=base_url)
+    stub_server.last_request = None
+    with pytest.raises(_placekit.PlacesError) as excinfo:
+        native.text_search(
+            {"textQuery": "cafes", "locationBias": {"circle": {"radius": 100.0}}}
+        )
+    assert excinfo.value.kind == "config"
+    with pytest.raises(_placekit.PlacesError) as excinfo:
+        native.nearby_search(
+            {
+                "locationRestriction": {
+                    "circle": {"center": {"latitude": -33.86}, "radius": 100.0}
+                }
+            }
+        )
+    assert excinfo.value.kind == "config"
+    assert stub_server.last_request is None
+
+
+def test_native_dict_body_complete_circle_reaches_the_wire(
+    api_key, base_url, stub_server
+):
+    # The same dict body path with a complete center is accepted and
+    # the circle reaches the stub exactly as supplied.
+    from placekit import _placekit
+
+    native = _placekit.Client(api_key, base_url=base_url)
+    native.text_search(
+        {
+            "textQuery": "cafes",
+            "locationBias": {
+                "circle": {
+                    "center": {"latitude": -33.86, "longitude": 151.2},
+                    "radius": 100.0,
+                }
+            },
+        }
+    )
+    body = json.loads(stub_server.last_request["body"])
+    assert body["locationBias"]["circle"]["center"] == {
+        "latitude": -33.86,
+        "longitude": 151.2,
+    }
+    assert body["locationBias"]["circle"]["radius"] == 100.0
+
+
 def test_error_carries_all_documented_attributes(client, raw_response):
     # R4-15: a normal error reaches Python with every documented
     # attribute attached, not a silently partial set.

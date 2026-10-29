@@ -1305,6 +1305,114 @@ mod tests {
     }
 
     #[test]
+    fn public_methods_validate_origins_and_viewport_corners() {
+        // The routing origin call sites on Text Search and Nearby
+        // Search, the Autocomplete origin, and viewport corners
+        // reached through the public methods. Deleting any one of
+        // these validation calls sends the future to the network
+        // instead of resolving with the config error under one poll.
+        let client = test_client();
+        let viewport = |low: LatLng, high: LatLng| Viewport {
+            low,
+            high,
+            extra: serde_json::Map::new(),
+        };
+        let routing = |origin: LatLng| crate::models::RoutingParameters {
+            origin: Some(origin),
+            travel_mode: None,
+            route_modifiers: None,
+            routing_preference: None,
+        };
+        // Text Search routing origin, latitude out of range.
+        let req = TextSearchRequest {
+            text_query: "cafes".to_owned(),
+            routing_parameters: Some(routing(LatLng::new(91.0, 151.2))),
+            ..Default::default()
+        };
+        let err = poll_once(client.text_search(&req, None))
+            .expect("validation must resolve immediately")
+            .unwrap_err();
+        assert_eq!(err.kind(), "config");
+        // Nearby Search routing origin, longitude not finite.
+        let req = NearbySearchRequest {
+            location_restriction: crate::models::LocationRestriction {
+                circle: Circle {
+                    center: LatLng::new(-33.86, 151.2),
+                    radius: 100.0,
+                },
+            },
+            included_types: None,
+            excluded_types: None,
+            included_primary_types: None,
+            excluded_primary_types: None,
+            max_result_count: None,
+            language_code: None,
+            region_code: None,
+            rank_preference: None,
+            routing_parameters: Some(routing(LatLng::new(-33.86, f64::NAN))),
+            include_future_opening_businesses: None,
+        };
+        let err = poll_once(client.nearby_search(&req, None))
+            .expect("validation must resolve immediately")
+            .unwrap_err();
+        assert_eq!(err.kind(), "config");
+        // Autocomplete origin, longitude out of range.
+        let req = AutocompleteRequest {
+            input: "Bianco".to_owned(),
+            origin: Some(LatLng::new(-33.86, 181.0)),
+            ..Default::default()
+        };
+        let err = poll_once(client.autocomplete(&req, None))
+            .expect("validation must resolve immediately")
+            .unwrap_err();
+        assert_eq!(err.kind(), "config");
+        // Text Search bias rectangle, low corner latitude out of range.
+        let req = TextSearchRequest {
+            text_query: "cafes".to_owned(),
+            location_bias: Some(crate::models::TextSearchLocationBias {
+                rectangle: Some(viewport(
+                    LatLng::new(-91.0, 151.2),
+                    LatLng::new(-33.0, 152.0),
+                )),
+                circle: None,
+            }),
+            ..Default::default()
+        };
+        let err = poll_once(client.text_search(&req, None))
+            .expect("validation must resolve immediately")
+            .unwrap_err();
+        assert_eq!(err.kind(), "config");
+        // Text Search restriction rectangle, high corner not finite.
+        let req = TextSearchRequest {
+            text_query: "cafes".to_owned(),
+            location_restriction: Some(crate::models::TextSearchLocationRestriction {
+                rectangle: viewport(LatLng::new(-34.0, 151.0), LatLng::new(-33.0, f64::INFINITY)),
+            }),
+            ..Default::default()
+        };
+        let err = poll_once(client.text_search(&req, None))
+            .expect("validation must resolve immediately")
+            .unwrap_err();
+        assert_eq!(err.kind(), "config");
+        // Autocomplete restriction rectangle, high corner out of range.
+        let req = AutocompleteRequest {
+            input: "Bianco".to_owned(),
+            location_restriction: Some(crate::models::AutocompleteLocation {
+                rectangle: Some(viewport(
+                    LatLng::new(-34.0, 151.0),
+                    LatLng::new(91.0, 152.0),
+                )),
+                circle: None,
+            }),
+            ..Default::default()
+        };
+        let err = poll_once(client.autocomplete(&req, None))
+            .expect("validation must resolve immediately")
+            .unwrap_err();
+        assert_eq!(err.kind(), "config");
+    }
+
+    #[test]
     fn text_search_sends_the_built_request_to_the_wire() {
         // Drives Client::text_search itself against the recording
         // stub (R4-28). The previous version rebuilt the request by
@@ -1839,6 +1947,14 @@ mod tests {
             PhotoMedia::Uri(_) => panic!("expected downloaded bytes"),
         }
         assert_eq!(image.requests().len(), 1);
+        // The redirect target received exactly what its own URL
+        // said: the recorded path is /img with no query string at
+        // all, so the key query from the media request was not
+        // reattached on the hop, and no API key header was sent.
+        let target_requests = image.requests();
+        let target = &target_requests[0];
+        assert_eq!(target.path, "/img");
+        assert!(target.header("x-goog-api-key").is_none());
 
         let untyped = Stub::start(|_| StubResponse {
             status: 200,
@@ -1851,6 +1967,73 @@ mod tests {
         let err = block_on(client.place_photo("places/ChIJ/photos/ref", Some(100), None, false))
             .unwrap_err();
         assert_eq!(err.kind(), "decode");
+    }
+
+    #[test]
+    fn photo_follows_a_relative_redirect_location() {
+        // A relative Location resolves against the current URL. The
+        // follow-up request lands on the same host carrying no query
+        // string at all, so the key query from the media request is
+        // not reattached, and no API key header is sent either.
+        let media = Stub::start(|req| {
+            if req.path.contains("/media") {
+                let mut response = stub_json(302, "");
+                response
+                    .headers
+                    .push(("location".to_owned(), "/rel-img".to_owned()));
+                response
+            } else {
+                StubResponse {
+                    status: 200,
+                    content_type: Some("image/png".to_owned()),
+                    headers: Vec::new(),
+                    body: PNG_BYTES.to_vec(),
+                    raw: None,
+                }
+            }
+        });
+        let client = media.client("k");
+        let result =
+            block_on(client.place_photo("places/ChIJ/photos/ref", Some(100), None, false)).unwrap();
+        match result {
+            PhotoMedia::Bytes(photo) => assert_eq!(photo.bytes, PNG_BYTES),
+            PhotoMedia::Uri(_) => panic!("expected downloaded bytes"),
+        }
+        let requests = media.requests();
+        assert_eq!(requests.len(), 2);
+        assert_eq!(requests[1].path, "/rel-img");
+        assert!(requests[1].header("x-goog-api-key").is_none());
+    }
+
+    #[test]
+    fn photo_redirect_limit_refuses_the_eleventh_hop() {
+        // An endless redirect chain is followed ten times and then
+        // refused: the stub sees the media request plus ten follows,
+        // and the caller gets a network error naming the limit. If
+        // the hop counter were deleted this chain would never end.
+        let media = Stub::start(|req| {
+            let mut response = stub_json(302, "");
+            if req.path.contains("/media") {
+                response
+                    .headers
+                    .push(("location".to_owned(), "/c/1".to_owned()));
+            } else if let Some(n) = req
+                .path
+                .strip_prefix("/c/")
+                .and_then(|n| n.parse::<u32>().ok())
+            {
+                response
+                    .headers
+                    .push(("location".to_owned(), format!("/c/{}", n + 1)));
+            }
+            response
+        });
+        let client = media.client("k");
+        let err = block_on(client.place_photo("places/ChIJ/photos/ref", Some(100), None, false))
+            .unwrap_err();
+        assert_eq!(err.kind(), "network");
+        assert!(err.to_string().contains("too many redirects"), "{err}");
+        assert_eq!(media.requests().len(), 11);
     }
 
     #[test]
