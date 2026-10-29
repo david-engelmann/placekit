@@ -30,23 +30,63 @@ create_exception!(
 /// the Python layer uses to pick a concrete exception subclass. API errors
 /// also carry the envelope `error_code`, the parsed `details`, and any
 /// field or quota violations extracted from them (C6).
+/// Record the first attribute attachment failure on an error being
+/// translated (R4-15); later failures do not overwrite it.
+fn record_failure(slot: &mut Option<String>, result: PyResult<()>) {
+    if let Err(e) = result {
+        if slot.is_none() {
+            *slot = Some(e.to_string());
+        }
+    }
+}
+
 fn to_pyerr(py: Python<'_>, err: CoreError) -> PyErr {
     let pyerr = PyErr::new::<PlacesError, _>(err.to_string());
     let instance = pyerr.value(py);
-    let _ = instance.setattr("kind", err.kind());
-    let _ = instance.setattr("status_code", err.status_code());
-    let _ = instance.setattr("google_status", err.google_status());
-    let _ = instance.setattr("error_code", err.error_code());
-    let _ = instance.setattr("status_mismatch", err.status_mismatch());
-    let _ = instance.setattr("retryable", err.retryable());
-    let _ = instance.setattr("retry_after", err.retry_after());
-    if let Ok(details) = serde_json::to_value(err.details()) {
-        if let Ok(value) = value_to_py(py, &details) {
-            let _ = instance.setattr("details", value);
+    // Every attribute attachment is attempted and the first failure is
+    // remembered (R4-15). On any failure the caller gets the one
+    // defined fallback below, the plainest PlacesError carrying the
+    // message and the attachment failure, instead of an exception
+    // object whose attributes silently went missing one by one.
+    let mut first_failure: Option<String> = None;
+    record_failure(&mut first_failure, instance.setattr("kind", err.kind()));
+    record_failure(
+        &mut first_failure,
+        instance.setattr("status_code", err.status_code()),
+    );
+    record_failure(
+        &mut first_failure,
+        instance.setattr("google_status", err.google_status()),
+    );
+    record_failure(
+        &mut first_failure,
+        instance.setattr("error_code", err.error_code()),
+    );
+    record_failure(
+        &mut first_failure,
+        instance.setattr("status_mismatch", err.status_mismatch()),
+    );
+    record_failure(
+        &mut first_failure,
+        instance.setattr("retryable", err.retryable()),
+    );
+    record_failure(
+        &mut first_failure,
+        instance.setattr("retry_after", err.retry_after()),
+    );
+    match serde_json::to_value(err.details())
+        .map_err(|e| e.to_string())
+        .and_then(|details| value_to_py(py, &details).map_err(|e| e.to_string()))
+    {
+        Ok(value) => record_failure(&mut first_failure, instance.setattr("details", value)),
+        Err(e) => {
+            if first_failure.is_none() {
+                first_failure = Some(e);
+            }
         }
     }
     let violations: Vec<(String, String)> = err.field_violations();
-    if let Ok(value) = value_to_py(
+    match value_to_py(
         py,
         &serde_json::Value::Array(
             violations
@@ -56,11 +96,30 @@ fn to_pyerr(py: Python<'_>, err: CoreError) -> PyErr {
                 })
                 .collect(),
         ),
-    ) {
-        let _ = instance.setattr("field_violations", value);
+    )
+    .map_err(|e| e.to_string())
+    {
+        Ok(value) => record_failure(&mut first_failure, instance.setattr("field_violations", value)),
+        Err(e) => {
+            if first_failure.is_none() {
+                first_failure = Some(e);
+            }
+        }
     }
-    if let Ok(value) = value_to_py(py, &serde_json::Value::Array(err.quota_violations())) {
-        let _ = instance.setattr("quota_violations", value);
+    match value_to_py(py, &serde_json::Value::Array(err.quota_violations()))
+        .map_err(|e| e.to_string())
+    {
+        Ok(value) => record_failure(&mut first_failure, instance.setattr("quota_violations", value)),
+        Err(e) => {
+            if first_failure.is_none() {
+                first_failure = Some(e);
+            }
+        }
+    }
+    if let Some(failure) = first_failure {
+        return PyErr::new::<PlacesError, _>(format!(
+            "{err} (error attributes could not be attached: {failure})"
+        ));
     }
     pyerr
 }
@@ -135,6 +194,20 @@ where
 /// layer can tell the two wire forms apart: `("bytes", content, content
 /// type)` for the downloaded image, `("uri", photo_uri, name)` when the
 /// redirect was skipped and the endpoint answered with JSON.
+/// A photo result conversion failure is a decode failure of this
+/// layer (R4-22), reported inside the exception hierarchy like every
+/// other conversion failure here, never as a bare PyValueError.
+fn photo_conversion_err(py: Python<'_>, e: impl std::fmt::Display) -> PyErr {
+    to_pyerr(
+        py,
+        CoreError::Decode {
+            detail: e.to_string(),
+            status: None,
+            source: None,
+        },
+    )
+}
+
 fn photo_to_py(
     py: Python<'_>,
     result: Result<placekit_core::models::PhotoMedia, CoreError>,
@@ -143,40 +216,40 @@ fn photo_to_py(
         Ok(placekit_core::models::PhotoMedia::Bytes(photo)) => {
             let tag = "bytes"
                 .into_pyobject(py)
-                .map_err(|e| PyValueError::new_err(e.to_string()))?
+                .map_err(|e| photo_conversion_err(py, e))?
                 .unbind()
                 .into_any();
             let bytes = PyBytes::new(py, &photo.bytes).unbind().into_any();
             let content_type = photo
                 .content_type
                 .into_pyobject(py)
-                .map_err(|e| PyValueError::new_err(e.to_string()))?
+                .map_err(|e| photo_conversion_err(py, e))?
                 .unbind()
                 .into_any();
             let tuple = PyTuple::new(py, [tag, bytes, content_type])
-                .map_err(|e| PyValueError::new_err(e.to_string()))?;
+                .map_err(|e| photo_conversion_err(py, e))?;
             Ok(tuple.unbind().into_any())
         }
         Ok(placekit_core::models::PhotoMedia::Uri(media)) => {
             let tag = "uri"
                 .into_pyobject(py)
-                .map_err(|e| PyValueError::new_err(e.to_string()))?
+                .map_err(|e| photo_conversion_err(py, e))?
                 .unbind()
                 .into_any();
             let uri = media
                 .photo_uri
                 .into_pyobject(py)
-                .map_err(|e| PyValueError::new_err(e.to_string()))?
+                .map_err(|e| photo_conversion_err(py, e))?
                 .unbind()
                 .into_any();
             let name = media
                 .name
                 .into_pyobject(py)
-                .map_err(|e| PyValueError::new_err(e.to_string()))?
+                .map_err(|e| photo_conversion_err(py, e))?
                 .unbind()
                 .into_any();
             let tuple = PyTuple::new(py, [tag, uri, name])
-                .map_err(|e| PyValueError::new_err(e.to_string()))?;
+                .map_err(|e| photo_conversion_err(py, e))?;
             Ok(tuple.unbind().into_any())
         }
         Err(e) => Err(to_pyerr(py, e)),
@@ -204,9 +277,15 @@ impl PyClient {
             builder = builder.base_url(base_url);
         }
         if let Some(timeout) = timeout {
-            if !timeout.is_finite() || timeout <= 0.0 {
+            // One rule everywhere (R4-04): the same 3600 second cap
+            // the Python wrapper documents, applied here so direct
+            // native consumers get it too. The bound also keeps the
+            // value far from the range where Duration::from_secs_f64
+            // panics (at or above 2^64 seconds), which used to escape
+            // as a PanicException outside the exception hierarchy.
+            if !timeout.is_finite() || timeout <= 0.0 || timeout > 3600.0 {
                 return Err(PyValueError::new_err(
-                    "timeout must be a positive, finite number of seconds",
+                    "timeout must be a positive, finite number of seconds, at most 3600",
                 ));
             }
             builder = builder.timeout(std::time::Duration::from_secs_f64(timeout));

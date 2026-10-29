@@ -810,6 +810,48 @@ def test_timeout_accepts_int_and_float(api_key, base_url):
     Client(api_key, base_url=base_url, timeout=0.5)
 
 
+def test_native_timeout_never_panics(api_key):
+    # R4-04: through the native module directly (no Python wrapper in
+    # the way), an absurd timeout is a ValueError. A PanicException is
+    # a BaseException, not a ValueError, so this fails if the panic
+    # ever escapes the FFI boundary again.
+    from placekit import _placekit
+
+    with pytest.raises(ValueError):
+        _placekit.Client(api_key, timeout=1e20)
+    with pytest.raises(ValueError):
+        _placekit.Client(api_key, timeout=3601.0)
+    _placekit.Client(api_key, timeout=3600.0)
+
+
+def test_error_carries_all_documented_attributes(client, raw_response):
+    # R4-15: a normal error reaches Python with every documented
+    # attribute attached, not a silently partial set.
+    raw_response(404, fixture_bytes("error_not_found.json"))
+    with pytest.raises(NotFoundError) as excinfo:
+        client.place_details("ChIJrTLr-GyuEmsRBfy61i59si0")
+    err = excinfo.value
+    for attr in (
+        "kind",
+        "status_code",
+        "google_status",
+        "error_code",
+        "status_mismatch",
+        "retryable",
+        "retry_after",
+        "details",
+        "field_violations",
+        "quota_violations",
+    ):
+        assert hasattr(err, attr), attr
+    assert err.kind == "not_found"
+    assert err.status_code == 404
+    # Values that exist only if the native attributes were attached
+    # and copied across: the envelope code, the Google status.
+    assert err.error_code == 404
+    assert err.google_status == "NOT_FOUND"
+
+
 def test_header_unfriendly_api_key_is_config_error(base_url):
     with pytest.raises(ConfigError):
         Client("bad\nkey", base_url=base_url)
