@@ -1,9 +1,11 @@
+from dataclasses import dataclass
 from typing import Iterable, Tuple, Union
 
 TEXT_SEARCH_FIELDS: Tuple[str, ...]
 NEARBY_SEARCH_FIELDS: Tuple[str, ...]
 PLACE_DETAILS_FIELDS: Tuple[str, ...]
 
+@dataclass(frozen=True)
 class FieldMask:
     paths: Tuple[str, ...]
     def __init__(self, *paths: str) -> None: ...

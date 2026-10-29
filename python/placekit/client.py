@@ -840,7 +840,7 @@ class Client(_Base):
     def __enter__(self) -> "Client":
         return self
 
-    def __exit__(self, *exc_info: object) -> None:
+    def __exit__(self, exc_type: object, exc_value: object, traceback: object) -> None:
         self.close()
 
 
@@ -1058,5 +1058,7 @@ class AsyncClient(_Base):
     async def __aenter__(self) -> "AsyncClient":
         return self
 
-    async def __aexit__(self, *exc_info: object) -> None:
+    async def __aexit__(
+        self, exc_type: object, exc_value: object, traceback: object
+    ) -> None:
         self.close()

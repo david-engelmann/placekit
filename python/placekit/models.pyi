@@ -183,8 +183,40 @@ class Place:
     photos: list[Photo]
     attributions: list[Attribution]
     raw: dict[str, Any]
+    def __init__(
+        self,
+        id: str,
+        name: str = ...,
+        display_name: Optional[LocalizedText] = ...,
+        formatted_address: Optional[str] = ...,
+        short_formatted_address: Optional[str] = ...,
+        location: Optional[LatLng] = ...,
+        types: list[str] = ...,
+        primary_type: Optional[str] = ...,
+        rating: Optional[float] = ...,
+        user_rating_count: Optional[int] = ...,
+        price_level: Optional[str] = ...,
+        business_status: Optional[str] = ...,
+        national_phone_number: Optional[str] = ...,
+        international_phone_number: Optional[str] = ...,
+        website_uri: Optional[str] = ...,
+        google_maps_uri: Optional[str] = ...,
+        opening_hours: Optional[OpeningHours] = ...,
+        current_opening_hours: Optional[OpeningHours] = ...,
+        address_components: list[AddressComponent] = ...,
+        plus_code: Optional[PlusCode] = ...,
+        viewport: Optional[Viewport] = ...,
+        postal_address: Optional[PostalAddress] = ...,
+        adr_format_address: Optional[str] = ...,
+        primary_type_display_name: Optional[LocalizedText] = ...,
+        photos: list[Photo] = ...,
+        attributions: list[Attribution] = ...,
+        raw: dict[str, Any] = ...,
+    ) -> None: ...
     @property
     def display_text(self) -> Optional[str]: ...
+    @property
+    def regular_opening_hours(self) -> Optional[OpeningHours]: ...
     @classmethod
     def from_api(cls, data: dict[str, Any]) -> "Place": ...
 
@@ -243,15 +275,43 @@ class PlacePrediction:
     types: list[str]
     distance_meters: Optional[int]
     raw: dict[str, Any]
+    def __init__(
+        self,
+        place_id: str,
+        place: str = ...,
+        text: Optional[FormattedText] = ...,
+        main_text: Optional[FormattedText] = ...,
+        secondary_text: Optional[FormattedText] = ...,
+        types: list[str] = ...,
+        distance_meters: Optional[int] = ...,
+        raw: dict[str, Any] = ...,
+    ) -> None: ...
     @classmethod
     def from_api(cls, data: dict[str, Any]) -> "PlacePrediction": ...
 
+class QueryPrediction:
+    text: Optional[FormattedText]
+    main_text: Optional[FormattedText]
+    secondary_text: Optional[FormattedText]
+    raw: dict[str, Any]
+    def __init__(
+        self,
+        text: Optional[FormattedText] = ...,
+        main_text: Optional[FormattedText] = ...,
+        secondary_text: Optional[FormattedText] = ...,
+        raw: dict[str, Any] = ...,
+    ) -> None: ...
+    @classmethod
+    def from_api(cls, data: dict[str, Any]) -> "QueryPrediction": ...
+
 class Suggestion:
     place_prediction: Optional[PlacePrediction]
+    query_prediction: Optional[QueryPrediction]
     raw: dict[str, Any]
     def __init__(
         self,
         place_prediction: Optional[PlacePrediction] = ...,
+        query_prediction: Optional[QueryPrediction] = ...,
         raw: dict[str, Any] = ...,
     ) -> None: ...
     @classmethod
@@ -265,6 +325,8 @@ class AutocompleteResult:
     ) -> None: ...
     @property
     def place_predictions(self) -> list[PlacePrediction]: ...
+    @property
+    def query_predictions(self) -> list[QueryPrediction]: ...
     @classmethod
     def from_api(cls, data: dict[str, Any]) -> "AutocompleteResult": ...
 

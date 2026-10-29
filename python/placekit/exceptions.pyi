@@ -1,4 +1,4 @@
-from typing import Optional
+from typing import Any, NoReturn, Optional
 
 class PlacesError(Exception):
     kind: str
@@ -6,9 +6,9 @@ class PlacesError(Exception):
     status_code: Optional[int]
     google_status: Optional[str]
     error_code: Optional[int]
-    details: list
-    field_violations: list
-    quota_violations: list
+    details: list[Any]
+    field_violations: list[Any]
+    quota_violations: list[Any]
     status_mismatch: bool
     retryable: bool
     retry_after: Optional[float]
@@ -20,9 +20,9 @@ class PlacesError(Exception):
         status_code: Optional[int] = ...,
         google_status: Optional[str] = ...,
         error_code: Optional[int] = ...,
-        details: Optional[list] = ...,
-        field_violations: Optional[list] = ...,
-        quota_violations: Optional[list] = ...,
+        details: Optional[list[Any]] = ...,
+        field_violations: Optional[list[Any]] = ...,
+        quota_violations: Optional[list[Any]] = ...,
         status_mismatch: bool = ...,
         retryable: bool = ...,
         retry_after: Optional[float] = ...,
@@ -40,3 +40,7 @@ class NetworkError(PlacesError): ...
 class DecodeError(PlacesError): ...
 class ApiError(PlacesError): ...
 class ConfigError(PlacesError, ValueError): ...
+
+def raise_translated(
+    exc: BaseException, context: Optional[str] = ...
+) -> NoReturn: ...

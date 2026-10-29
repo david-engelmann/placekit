@@ -1,3 +1,4 @@
+from types import TracebackType
 from typing import Any, Iterable, Optional
 
 from .fields import FieldsLike
@@ -18,6 +19,14 @@ class Client:
         *,
         base_url: Optional[str] = ...,
         timeout: Optional[float] = ...,
+    ) -> None: ...
+    def close(self) -> None: ...
+    def __enter__(self) -> "Client": ...
+    def __exit__(
+        self,
+        exc_type: Optional[type[BaseException]] = ...,
+        exc_value: Optional[BaseException] = ...,
+        traceback: Optional[TracebackType] = ...,
     ) -> None: ...
     def text_search(
         self,
@@ -103,6 +112,14 @@ class AsyncClient:
         *,
         base_url: Optional[str] = ...,
         timeout: Optional[float] = ...,
+    ) -> None: ...
+    def close(self) -> None: ...
+    async def __aenter__(self) -> "AsyncClient": ...
+    async def __aexit__(
+        self,
+        exc_type: Optional[type[BaseException]] = ...,
+        exc_value: Optional[BaseException] = ...,
+        traceback: Optional[TracebackType] = ...,
     ) -> None: ...
     async def text_search(
         self,
