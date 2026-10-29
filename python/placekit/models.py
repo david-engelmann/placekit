@@ -365,7 +365,13 @@ class TextSearchResult:
 
 @dataclass(slots=True)
 class NearbySearchResult:
-    """Nearby Search results (the API returns at most one page)."""
+    """Nearby Search results (the API returns at most one page).
+
+    There is deliberately no ``next_page_token`` here. The Places API
+    does not paginate Nearby Search; the Rust response type is shared
+    with Text Search, which is the only reason the field exists at the
+    wire layer at all.
+    """
 
     places: list[Place]
     #: Routing summaries, one per place, when requested through the field

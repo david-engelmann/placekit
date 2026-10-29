@@ -573,6 +573,11 @@ pub struct Suggestion {
 pub struct AutocompleteResponse {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub suggestions: Vec<Suggestion>,
+    /// Any other top level fields the API returned, preserved verbatim
+    /// like on [`SearchResponse`] so nothing is dropped when this
+    /// response is reserialized for the Python layer.
+    #[serde(flatten)]
+    pub extra: Map<String, Value>,
 }
 
 /// Downloaded photo media.
@@ -740,6 +745,18 @@ mod tests {
             value,
             serde_json::json!({"suggestions": [{"placePrediction": {"placeId": "ChIJx"}}]})
         );
+    }
+
+    #[test]
+    fn autocomplete_top_level_unknown_fields_survive() {
+        // A future top level field on Autocomplete must reach the
+        // Python layer through extra, like it already does on search.
+        let resp: AutocompleteResponse = serde_json::from_str(
+            r#"{"suggestions":[],"futureSummary":{"legs":[]}}"#,
+        )
+        .unwrap();
+        let value = serde_json::to_value(&resp).unwrap();
+        assert_eq!(value["futureSummary"], serde_json::json!({"legs": []}));
     }
 
     #[test]
