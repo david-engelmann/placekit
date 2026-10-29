@@ -1007,3 +1007,64 @@ def test_async_error_attributes_match_sync(api_key, base_url):
             )
 
     asyncio.run(run())
+
+
+# ---------------------------------------------------------------------------
+# Round 5 (T3) regressions: field mask grammar, string guards, defaults
+# ---------------------------------------------------------------------------
+
+
+def test_bare_string_fields_rejected_before_any_request(client, stub_server):
+    # RC-01: a bare string used to shred into one-character paths and
+    # reach the stub as the header "p,l,a,c,e,s,.,i,d". The stub must
+    # see no request at all.
+    stub_server.last_request = None
+    with pytest.raises(ConfigError):
+        client.text_search("cafes", fields="places.id")
+    assert stub_server.last_request is None
+    with pytest.raises(ConfigError):
+        FieldMask.of("places.id")
+
+
+def test_field_mask_grammar_rejects_semantic_errors():
+    # RC-10: snake_case, empty segments, stray punctuation, spaces,
+    # wildcards and one-letter segments all fail locally.
+    for bad in (
+        "places.display_name",
+        "places..rating",
+        "places.",
+        ".places",
+        "not a field!!!",
+        "a b",
+        "*",
+        "places.*",
+        "a",
+        "places.i",
+    ):
+        with pytest.raises(ConfigError):
+            FieldMask(bad)
+
+
+def test_field_mask_deduplicates_and_set_input_is_deterministic():
+    # RC-10: duplicates collapse keeping first seen order, and a set
+    # produces the same sorted header on every call.
+    assert FieldMask("places.id", "places.id", "places.rating").paths == (
+        "places.id",
+        "places.rating",
+    )
+    first = FieldMask.of({"places.rating", "places.id", "places.name"})
+    second = FieldMask.of({"places.name", "places.rating", "places.id"})
+    assert first.paths == second.paths == ("places.id", "places.name", "places.rating")
+
+
+def test_place_details_default_mask_covers_modelled_fields(client):
+    # RC-07: the default Place Details mask now asks for every modelled
+    # field, so these attributes arrive populated instead of reading as
+    # permanently empty.
+    place = client.place_details("ChIJrTLr-GyuEmsRBfy61i59si0")
+    assert place.plus_code is not None and place.plus_code.global_code
+    assert place.viewport is not None
+    assert place.address_components
+    assert place.postal_address is not None
+    assert place.current_opening_hours is not None
+    assert place.primary_type_display_name is not None

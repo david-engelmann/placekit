@@ -124,7 +124,9 @@ impl FieldMask {
     }
 
     /// Default mask for Place Details. Field paths here are unprefixed
-    /// because the response is a single place.
+    /// because the response is a single place. This is every modelled
+    /// field, mirroring `PLACE_DETAILS_FIELDS` in the Python package,
+    /// because the method promises full details.
     pub fn place_details_default() -> Self {
         Self::from_static(&[
             "id",
@@ -145,6 +147,13 @@ impl FieldMask {
             "websiteUri",
             "googleMapsUri",
             "regularOpeningHours",
+            "currentOpeningHours",
+            "addressComponents",
+            "adrFormatAddress",
+            "plusCode",
+            "postalAddress",
+            "primaryTypeDisplayName",
+            "viewport",
             "attributions",
         ])
     }
