@@ -302,10 +302,9 @@ impl Client {
         // is not the API host, failures belong to the image host.
         let final_host = response.url().host_str().map(str::to_owned);
         if !status.is_success() {
-            let mut err =
-                read_error_body(response, status.as_u16(), content_type.as_deref())
-                    .await
-                    .with_retry_after(retry_after);
+            let mut err = read_error_body(response, status.as_u16(), content_type.as_deref())
+                .await
+                .with_retry_after(retry_after);
             let mut notes: Vec<String> = Vec::new();
             let base_host = reqwest::Url::parse(&self.base_url)
                 .ok()
@@ -335,11 +334,10 @@ impl Client {
                 )
                 .with_retry_after(retry_after));
             }
-            let media: PhotoMediaJson =
-                serde_json::from_str(&body).map_err(|e| Error::Decode {
-                    detail: e.to_string(),
-                    status: Some(status.as_u16()),
-                })?;
+            let media: PhotoMediaJson = serde_json::from_str(&body).map_err(|e| Error::Decode {
+                detail: e.to_string(),
+                status: Some(status.as_u16()),
+            })?;
             return Ok(PhotoMedia::Uri(media));
         }
         // A success body only becomes a photo when it plausibly is
@@ -349,9 +347,7 @@ impl Client {
         if let Some(ct) = &content_type {
             if !ct.starts_with("image/") {
                 return Err(Error::Decode {
-                    detail: format!(
-                        "photo endpoint returned a non-image content type: {ct}"
-                    ),
+                    detail: format!("photo endpoint returned a non-image content type: {ct}"),
                     status: Some(status.as_u16()),
                 });
             }
@@ -968,9 +964,7 @@ mod tests {
     fn photo_magic_must_match_the_declared_type() {
         let png = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 1, 2];
         assert!(validate_photo_magic(&png, Some("image/png"), 200).is_ok());
-        assert!(
-            validate_photo_magic(&png, Some("image/png; charset=binary"), 200).is_ok()
-        );
+        assert!(validate_photo_magic(&png, Some("image/png; charset=binary"), 200).is_ok());
         // A one byte body claims PNG and matches nothing.
         assert_eq!(
             validate_photo_magic(&[0x89], Some("image/png"), 200)

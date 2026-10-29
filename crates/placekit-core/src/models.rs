@@ -751,10 +751,8 @@ mod tests {
     fn autocomplete_top_level_unknown_fields_survive() {
         // A future top level field on Autocomplete must reach the
         // Python layer through extra, like it already does on search.
-        let resp: AutocompleteResponse = serde_json::from_str(
-            r#"{"suggestions":[],"futureSummary":{"legs":[]}}"#,
-        )
-        .unwrap();
+        let resp: AutocompleteResponse =
+            serde_json::from_str(r#"{"suggestions":[],"futureSummary":{"legs":[]}}"#).unwrap();
         let value = serde_json::to_value(&resp).unwrap();
         assert_eq!(value["futureSummary"], serde_json::json!({"legs": []}));
     }

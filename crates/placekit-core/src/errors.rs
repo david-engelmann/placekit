@@ -68,10 +68,7 @@ pub enum Error {
     /// into the expected shape. `status` carries the HTTP status of that
     /// response when there was one.
     #[error("failed to decode response: {detail}")]
-    Decode {
-        detail: String,
-        status: Option<u16>,
-    },
+    Decode { detail: String, status: Option<u16> },
     /// The client itself was configured or called incorrectly. This is a
     /// programming error, detected before any network traffic.
     #[error("invalid client configuration or call: {detail}")]
@@ -176,11 +173,21 @@ impl Error {
     /// variants have nowhere to carry it and are returned unchanged.
     pub(crate) fn with_retry_after(mut self, retry_after: Option<u64>) -> Error {
         match &mut self {
-            Error::Auth { retry_after: slot, .. }
-            | Error::RateLimit { retry_after: slot, .. }
-            | Error::NotFound { retry_after: slot, .. }
-            | Error::InvalidRequest { retry_after: slot, .. }
-            | Error::Api { retry_after: slot, .. } => *slot = retry_after,
+            Error::Auth {
+                retry_after: slot, ..
+            }
+            | Error::RateLimit {
+                retry_after: slot, ..
+            }
+            | Error::NotFound {
+                retry_after: slot, ..
+            }
+            | Error::InvalidRequest {
+                retry_after: slot, ..
+            }
+            | Error::Api {
+                retry_after: slot, ..
+            } => *slot = retry_after,
             _ => {}
         }
         self
@@ -626,9 +633,8 @@ mod tests {
             (400, "UNAVAILABLE"),
             (404, "INTERNAL"),
         ] {
-            let body = format!(
-                r#"{{"error": {{"code": {http}, "message": "m", "status": "{google}"}}}}"#
-            );
+            let body =
+                format!(r#"{{"error": {{"code": {http}, "message": "m", "status": "{google}"}}}}"#);
             let err = Error::from_response(http, &body);
             assert_eq!(err.kind(), "api", "{google} on HTTP {http}");
             assert_eq!(err.google_status(), Some(google));
@@ -666,7 +672,9 @@ mod tests {
         let err = Error::from_unreadable_body(500, "connection closed", None);
         assert_eq!(err.kind(), "api");
         assert_eq!(err.status_code(), Some(500));
-        assert!(err.to_string().contains("error body unreadable: connection closed"));
+        assert!(err
+            .to_string()
+            .contains("error body unreadable: connection closed"));
         let err = Error::from_unreadable_body(429, "connection closed", None);
         assert_eq!(err.kind(), "rate_limit");
     }

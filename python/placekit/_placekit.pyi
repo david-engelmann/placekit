@@ -17,6 +17,9 @@ class PlacesError(Exception):
     details: list[Any]
     field_violations: list[dict[str, Any]]
     quota_violations: list[dict[str, Any]]
+    status_mismatch: bool
+    retryable: bool
+    retry_after: Optional[int]
 
 class Client:
     def __init__(
