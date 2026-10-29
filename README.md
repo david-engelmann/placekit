@@ -81,6 +81,8 @@ One billing note on the defaults. They include fields from the Enterprise billin
 
 Every failure raises a subclass of `PlacesError`, carrying `status_code` and `google_status` when the error came from the API.
 
+Classification follows the Google envelope status first and the HTTP code second, so the exception class and `status_code` can come from different sources. A quota envelope on an HTTP 500 is a `RateLimitError` with `status_code` 500, and the `status_mismatch` attribute is True whenever the envelope code and the HTTP status disagree. API exceptions also carry `retryable`, which says whether a caller side retry can plausibly succeed, and `retry_after`, the seconds from a `Retry-After` header when the response sent one. Every exception carries `context`, naming the call that failed.
+
 | Exception | Raised when |
 | --- | --- |
 | `AuthenticationError` | The key was rejected or lacks permission, HTTP 401 or 403 |
