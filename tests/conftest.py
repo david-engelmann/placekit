@@ -20,6 +20,7 @@ The stub behaves like the real API in the ways the suite depends on:
 
 from __future__ import annotations
 
+import gzip
 import json
 import math
 import threading
@@ -127,12 +128,34 @@ class StubHandler(BaseHTTPRequestHandler):
 
     # -- helpers -----------------------------------------------------------
 
-    def _send(self, status: int, body: bytes, content_type: str = "application/json"):
+    def _send(
+        self,
+        status: int,
+        body: bytes,
+        content_type: str = "application/json",
+        headers: dict | None = None,
+    ):
         self.send_response(status)
         self.send_header("Content-Type", content_type)
+        for key, value in (headers or {}).items():
+            self.send_header(key, value)
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
+
+    def _send_raw(self) -> bool:
+        """Serve the arbitrary response a test installed, if any.
+
+        This is what lets the suite express divergent HTTP status and
+        envelope pairs, and error envelopes on success statuses; the
+        fixture routes alone can only serve congruent pairs.
+        """
+        raw = getattr(self.server, "raw_response", None)
+        if raw is None:
+            return False
+        status, body, content_type, headers = raw
+        self._send(status, body, content_type, headers)
+        return True
 
     def _send_fixture(self, status: int, name: str, *, filter_mask: bool = False):
         if filter_mask:
@@ -154,12 +177,18 @@ class StubHandler(BaseHTTPRequestHandler):
         length = int(self.headers.get("Content-Length") or 0)
         body = self.rfile.read(length) if length else b""
         self._record(body)
+        if self._send_raw():
+            return
         path = urlparse(self.path).path
         payload = json.loads(body) if body else {}
         if path.endswith("places:searchText"):
             query = payload.get("textQuery", "")
             if "TRIGGER_QUOTA" in query:
-                return self._send_fixture(429, "error_quota.json")
+                return self._send(
+                    429,
+                    load_fixture("error_quota.json"),
+                    headers={"Retry-After": "7"},
+                )
             if "TRIGGER_INVALID" in query:
                 return self._send_fixture(400, "error_invalid.json")
             return self._send_fixture(200, "text_search.json", filter_mask=True)
@@ -206,6 +235,8 @@ class StubHandler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         self._record(None)
+        if self._send_raw():
+            return
         parsed = urlparse(self.path)
         path = parsed.path
         if path == PHOTO_URI_PATH:
@@ -216,6 +247,14 @@ class StubHandler(BaseHTTPRequestHandler):
             query = parse_qs(parsed.query)
             if "key" not in query:
                 return self._send_fixture(400, "error_invalid.json")
+            if "loop-photo" in path:
+                # Redirect back to this same media URL forever; the
+                # client must stop at its redirect limit, not hang.
+                self.send_response(302)
+                self.send_header("Location", self.path)
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
             host = self.headers.get("Host", "127.0.0.1")
             if query.get("skipHttpRedirect") == ["true"]:
                 photo_name = path[path.index("places/") : -len("/media")]
@@ -237,6 +276,24 @@ class StubHandler(BaseHTTPRequestHandler):
             place_id = path.rsplit("/", 1)[-1]
             if place_id == "missing-place":
                 return self._send_fixture(404, "error_not_found.json")
+            if place_id == "gzip-place":
+                body = gzip.compress(_filter_fixture("place_details.json", self.headers))
+                return self._send(
+                    200, body, headers={"Content-Encoding": "gzip"}
+                )
+            if place_id == "drop-place":
+                # Advertise a long error body, send a fragment of an
+                # envelope, then close the connection mid-body. The
+                # client knows the HTTP status and the read failure,
+                # and must lose neither.
+                self.send_response(500)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", "9999")
+                self.end_headers()
+                self.wfile.write(b'{"error": {"code": 500, "mess')
+                self.wfile.flush()
+                self.close_connection = True
+                return
             if place_id == "denied-place":
                 return self._send_fixture(403, "error_denied.json")
             if place_id == "unauthenticated-place":
@@ -249,11 +306,29 @@ class StubHandler(BaseHTTPRequestHandler):
 def stub_server():
     server = ThreadingHTTPServer(("127.0.0.1", 0), StubHandler)
     server.last_request = None  # type: ignore[attr-defined]
+    server.raw_response = None  # type: ignore[attr-defined]
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     yield server
     server.shutdown()
     thread.join(timeout=5)
+
+
+@pytest.fixture()
+def raw_response(stub_server):
+    """Install an arbitrary response the stub serves on every route.
+
+    Takes ``(status, body, content_type, headers)``; body may be str
+    or bytes. Cleared after the test so routes return to the fixtures.
+    """
+
+    def set_raw(status, body, content_type="application/json", headers=None):
+        if isinstance(body, str):
+            body = body.encode()
+        stub_server.raw_response = (status, body, content_type, headers or {})
+
+    yield set_raw
+    stub_server.raw_response = None
 
 
 @pytest.fixture()

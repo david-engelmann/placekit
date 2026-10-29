@@ -535,9 +535,10 @@ async fn read_body_capped(response: reqwest::Response, cap: usize) -> BodyRead {
 
 /// Read an error response body and build the error from it. The read
 /// is capped and truncation is harmless (messages are capped again
-/// downstream). A read failure with nothing read at all keeps the
-/// HTTP fallback class and records the failure in the message, so
-/// neither the status nor the read error is lost.
+/// downstream). A read failure discards the partial body, which is
+/// unreliable by definition, and keeps the HTTP fallback class with
+/// the read failure recorded in the message, so neither the status
+/// nor the read error is lost.
 async fn read_error_body(
     response: reqwest::Response,
     status: u16,
@@ -546,7 +547,6 @@ async fn read_error_body(
     use futures_util::StreamExt;
     let mut stream = response.bytes_stream();
     let mut buf = Vec::new();
-    let mut failure: Option<String> = None;
     while buf.len() < ERROR_BODY_CAP {
         match stream.next().await {
             Some(Ok(chunk)) => {
@@ -554,15 +554,9 @@ async fn read_error_body(
                 buf.extend_from_slice(&chunk[..take]);
             }
             Some(Err(e)) => {
-                failure = Some(e.to_string());
-                break;
+                return Error::from_unreadable_body(status, &e.to_string(), content_type);
             }
             None => break,
-        }
-    }
-    if let Some(read_error) = failure {
-        if buf.is_empty() {
-            return Error::from_unreadable_body(status, &read_error, content_type);
         }
     }
     Error::from_response_detailed(status, &String::from_utf8_lossy(&buf), content_type)

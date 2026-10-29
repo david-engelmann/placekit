@@ -22,12 +22,16 @@ from placekit import (
     PhotoUriResult,
 )
 from placekit.exceptions import (
+    ApiError,
     AuthenticationError,
     ConfigError,
+    DecodeError,
     InvalidRequestError,
+    NetworkError,
     NotFoundError,
     RateLimitError,
 )
+from placekit.models import Place, TextSearchResult
 
 
 @pytest.fixture()
@@ -405,6 +409,10 @@ def test_error_invalid_request(client):
             "description": "Request contains an invalid argument.",
         }
     ]
+    assert excinfo.value.details
+    assert excinfo.value.details[0]["fieldViolations"][0]["field"] == "textQuery"
+    assert excinfo.value.context == "text_search"
+    assert excinfo.value.retryable is False
 
 
 def test_error_rate_limit(client):
@@ -455,14 +463,17 @@ def test_photo_rejects_bad_name(client):
 
 
 def test_empty_api_key_rejected(base_url):
-    with pytest.raises(ValueError):
+    # ConfigError specifically, not just any ValueError: it subclasses
+    # ValueError, so the old assertion could not tell the documented
+    # type from a bare one escaping the hierarchy.
+    with pytest.raises(ConfigError):
         Client("", base_url=base_url)
 
 
 def test_invalid_field_mask_rejected():
-    with pytest.raises(ValueError):
+    with pytest.raises(ConfigError):
         FieldMask("places.id, places.rating")
-    with pytest.raises(ValueError):
+    with pytest.raises(ConfigError):
         FieldMask()
 
 
@@ -505,5 +516,314 @@ def test_async_client_matches_sync(api_key, base_url):
             await client.text_search("TRIGGER_QUOTA")
         with pytest.raises(NotFoundError):
             await client.place_details("missing-place")
+
+    asyncio.run(run())
+
+
+# ---------------------------------------------------------------------------
+# Round 2 (T4) regressions: error envelopes, hostile inputs, attributes
+# ---------------------------------------------------------------------------
+
+FIXTURES = Path(__file__).parent / "fixtures"
+
+
+def fixture_bytes(name: str) -> bytes:
+    return (FIXTURES / name).read_bytes()
+
+
+def envelope(code: int, status: str, message: str = "boom") -> bytes:
+    return json.dumps(
+        {"error": {"code": code, "message": message, "status": status}}
+    ).encode()
+
+
+def test_error_envelope_on_200_text_search_raises(client, raw_response):
+    # The round's worst case: a PERMISSION_DENIED envelope on HTTP 200
+    # used to come back as a successful empty result.
+    raw_response(200, fixture_bytes("error_denied.json"))
+    with pytest.raises(AuthenticationError) as excinfo:
+        client.text_search("cafes in Sydney")
+    assert excinfo.value.status_code == 200
+    assert excinfo.value.google_status == "PERMISSION_DENIED"
+    assert "has not been used" in excinfo.value.message
+
+
+def test_error_envelope_on_200_details_and_autocomplete_raise(client, raw_response):
+    raw_response(200, fixture_bytes("error_denied.json"))
+    with pytest.raises(AuthenticationError) as excinfo:
+        client.place_details("ChIJrTLr-GyuEmsRBfy61i59si0")
+    assert excinfo.value.status_code == 200
+    with pytest.raises(AuthenticationError):
+        client.autocomplete("Bianco")
+    with pytest.raises(AuthenticationError):
+        client.nearby_search((-33.8668, 151.2071), 800.0)
+
+
+def test_error_envelope_on_200_photo_raises(client, raw_response):
+    # Served with an image content type so only the envelope check can
+    # catch it; the envelope JSON used to be returned as image bytes.
+    raw_response(200, fixture_bytes("error_denied.json"), "image/png")
+    with pytest.raises(AuthenticationError) as excinfo:
+        client.place_photo(
+            "places/ChIJrTLr-GyuEmsRBfy61i59si0/photos/ATJ83zh8vExample",
+            max_width_px=400,
+        )
+    assert excinfo.value.status_code == 200
+    assert excinfo.value.google_status == "PERMISSION_DENIED"
+
+
+def test_error_envelope_on_200_photo_skip_redirect_raises(client, raw_response):
+    raw_response(200, fixture_bytes("error_denied.json"))
+    with pytest.raises(AuthenticationError):
+        client.place_photo(
+            "places/ChIJrTLr-GyuEmsRBfy61i59si0/photos/ATJ83zh8vExample",
+            max_width_px=400,
+            skip_http_redirect=True,
+        )
+
+
+def test_photo_non_image_content_type_is_decode_error(client, raw_response):
+    raw_response(200, b"<html><body>not an image</body></html>", "text/html")
+    with pytest.raises(DecodeError) as excinfo:
+        client.place_photo(
+            "places/ChIJrTLr-GyuEmsRBfy61i59si0/photos/ATJ83zh8vExample",
+            max_width_px=400,
+        )
+    assert excinfo.value.status_code == 200
+    assert "text/html" in excinfo.value.message
+
+
+def test_photo_body_must_match_declared_image_type(client, raw_response):
+    # A one byte body and a truncated signature both claim image/png.
+    for body in (b"\x00", b"\x89PNG"):
+        raw_response(200, body, "image/png")
+        with pytest.raises(DecodeError) as excinfo:
+            client.place_photo(
+                "places/ChIJrTLr-GyuEmsRBfy61i59si0/photos/ATJ83zh8vExample",
+                max_width_px=400,
+            )
+        assert "content type" in excinfo.value.message
+
+
+def test_photo_redirect_loop_is_network_error_with_cause(client):
+    with pytest.raises(NetworkError) as excinfo:
+        client.place_photo("places/ChIJ/photos/loop-photo", max_width_px=100)
+    assert "redirect:" in str(excinfo.value)
+
+
+def test_mid_body_drop_keeps_status_and_read_failure(client):
+    with pytest.raises(ApiError) as excinfo:
+        client.place_details("drop-place")
+    assert excinfo.value.status_code == 500
+    assert excinfo.value.google_status is None
+    assert "error body unreadable" in excinfo.value.message
+
+
+def test_gzipped_details_decode(client):
+    place = client.place_details("gzip-place")
+    assert place.display_text == "Bianco Latte"
+
+
+def test_quota_error_carries_retry_after(client):
+    with pytest.raises(RateLimitError) as excinfo:
+        client.text_search("TRIGGER_QUOTA")
+    assert excinfo.value.retryable is True
+    assert excinfo.value.retry_after == 7
+    assert excinfo.value.status_mismatch is False
+
+
+def test_envelope_http_disagreement_is_flagged(client, raw_response):
+    # Repro case 4b: RESOURCE_EXHAUSTED on HTTP 500, envelope code 429.
+    raw_response(500, envelope(429, "RESOURCE_EXHAUSTED", "check quota"))
+    with pytest.raises(RateLimitError) as excinfo:
+        client.text_search("cafes")
+    assert excinfo.value.status_code == 500
+    assert excinfo.value.error_code == 429
+    assert excinfo.value.status_mismatch is True
+    assert excinfo.value.retryable is True
+
+
+def test_server_side_status_on_client_http_code_is_api_error(client, raw_response):
+    raw_response(400, envelope(400, "DEADLINE_EXCEEDED", "too slow"))
+    with pytest.raises(ApiError) as excinfo:
+        client.text_search("cafes")
+    assert type(excinfo.value) is ApiError
+    assert excinfo.value.google_status == "DEADLINE_EXCEEDED"
+    assert excinfo.value.retryable is True
+
+
+def test_non_json_error_body_has_no_google_status(client, raw_response):
+    # Repro case 6, fixed: google_status is None, not an empty string.
+    raw_response(500, "Internal Server Error: upstream exploded", "text/plain")
+    with pytest.raises(ApiError) as excinfo:
+        client.text_search("cafes")
+    assert excinfo.value.status_code == 500
+    assert excinfo.value.google_status is None
+    assert "upstream exploded" in excinfo.value.message
+
+
+def test_long_non_envelope_body_truncation_is_marked(client, raw_response):
+    raw_response(503, "y" * 600, "text/html")
+    with pytest.raises(ApiError) as excinfo:
+        client.text_search("cafes")
+    assert "[truncated, 600 bytes, text/html]" in excinfo.value.message
+
+
+def test_envelope_message_is_capped(client, raw_response):
+    raw_response(400, envelope(400, "INVALID_ARGUMENT", "x" * 5000))
+    with pytest.raises(InvalidRequestError) as excinfo:
+        client.text_search("cafes")
+    # The stored envelope message is capped at 500 characters (the
+    # exception text adds the class prefix on top of it).
+    assert "x" * 500 in excinfo.value.message
+    assert "x" * 501 not in excinfo.value.message
+
+
+def test_malformed_success_body_decode_error_has_status(client, raw_response):
+    # Repro case 1: truncated JSON on a 200.
+    raw_response(200, b'{"places": [{"id": "ChIJ1", "displayName": {"text": "Cut')
+    with pytest.raises(DecodeError) as excinfo:
+        client.text_search("cafes")
+    assert excinfo.value.status_code == 200
+    assert excinfo.value.google_status is None
+
+
+def test_details_empty_object_is_decode_error_but_search_is_not(
+    client, raw_response
+):
+    # Deliberate asymmetry: Place Details always has an identity, so
+    # an empty object there is a wrong shape; an empty search object
+    # is indistinguishable from a genuine empty result and stays one.
+    raw_response(200, b"{}")
+    with pytest.raises(DecodeError) as excinfo:
+        client.place_details("ChIJrTLr-GyuEmsRBfy61i59si0")
+    assert "no id or name" in excinfo.value.message
+    assert excinfo.value.status_code == 200
+    result = client.text_search("cafes")
+    assert result.places == []
+
+
+def test_oversized_response_is_decode_error_naming_the_cap(client, raw_response):
+    big = json.dumps({"places": [], "blob": "x" * (33 * 1024 * 1024)}).encode()
+    raw_response(200, big)
+    with pytest.raises(DecodeError) as excinfo:
+        client.text_search("cafes")
+    assert excinfo.value.status_code == 200
+    assert "maximum" in excinfo.value.message
+
+
+def test_network_error_names_the_transport_cause(api_key):
+    dead = Client(api_key, base_url="http://127.0.0.1:9/v1", timeout=2.0)
+    with pytest.raises(NetworkError) as excinfo:
+        dead.text_search("cafes")
+    assert str(excinfo.value).startswith("network error: connect:")
+
+
+def test_error_context_names_the_call(client, raw_response):
+    with pytest.raises(NotFoundError) as excinfo:
+        client.place_details("missing-place")
+    assert excinfo.value.context == "place_details place_id=missing-place"
+    raw_response(404, fixture_bytes("error_not_found.json"))
+    with pytest.raises(NotFoundError) as excinfo:
+        client.place_photo("places/ChIJ/photos/ATJ83zh8vExample", max_width_px=10)
+    assert (
+        excinfo.value.context
+        == "place_photo name=places/ChIJ/photos/ATJ83zh8vExample"
+    )
+
+
+def test_place_id_url_hostile_values_rejected(client):
+    for hostile in ("ChIJ?sessionToken=evil", "..", "ChIJ#frag", "ChIJ%2e"):
+        with pytest.raises(ConfigError):
+            client.place_details(hostile)
+
+
+def test_photo_name_traversal_and_forgery_rejected(client):
+    for hostile in (
+        "places/ChIJ/photos/../../../../etc/passwd",
+        "places/ChIJ/photos/ref?key=forged",
+        "places/ChIJ/photos/ref/extra",
+        "places//photos/ref",
+    ):
+        with pytest.raises(ConfigError):
+            client.place_photo(hostile, max_width_px=100)
+
+
+@pytest.mark.parametrize(
+    "bad_timeout",
+    [float("nan"), float("inf"), float("-inf"), 0, -1, True, "5", 3601],
+)
+def test_timeout_must_be_positive_finite_and_bounded(api_key, base_url, bad_timeout):
+    with pytest.raises(ConfigError):
+        Client(api_key, base_url=base_url, timeout=bad_timeout)
+
+
+def test_timeout_accepts_int_and_float(api_key, base_url):
+    Client(api_key, base_url=base_url, timeout=5)
+    Client(api_key, base_url=base_url, timeout=0.5)
+
+
+def test_header_unfriendly_api_key_is_config_error(base_url):
+    with pytest.raises(ConfigError):
+        Client("bad\nkey", base_url=base_url)
+
+
+@pytest.mark.parametrize("bad", [-1, 0, 2**32, True])
+def test_max_results_range_validated(client, bad):
+    with pytest.raises(ConfigError):
+        client.text_search("cafes", max_results=bad)
+    with pytest.raises(ConfigError):
+        client.nearby_search((-33.8668, 151.2071), 800.0, max_results=bad)
+
+
+@pytest.mark.parametrize("bad", [-1, 0, 4801, 2**32])
+def test_photo_dimensions_range_validated(client, bad):
+    with pytest.raises(ConfigError):
+        client.place_photo("places/ChIJ/photos/ATJ83zh8vExample", max_width_px=bad)
+
+
+def test_model_conversion_failure_is_decode_error(client, monkeypatch):
+    def boom(data):
+        raise KeyError("places")
+
+    monkeypatch.setattr(TextSearchResult, "from_api", boom)
+    with pytest.raises(DecodeError) as excinfo:
+        client.text_search("cafes")
+    assert "model conversion" in excinfo.value.message
+
+
+def test_place_from_api_coerces_numeric_fields():
+    place = Place.from_api({"id": "ChIJx", "rating": "4.6", "userRatingCount": "1284"})
+    assert place.rating == pytest.approx(4.6)
+    assert isinstance(place.rating, float)
+    assert place.user_rating_count == 1284
+    assert isinstance(place.user_rating_count, int)
+
+
+def test_autocomplete_unknown_top_level_field_survives(client, raw_response):
+    data = json.loads(fixture_bytes("autocomplete.json"))
+    data["futureSummary"] = {"legs": [1, 2]}
+    raw_response(200, json.dumps(data).encode())
+    result = client.autocomplete("Bianco")
+    assert result.raw["futureSummary"] == {"legs": [1, 2]}
+
+
+def test_async_error_attributes_match_sync(api_key, base_url):
+    async def run():
+        client = AsyncClient(api_key, base_url=base_url)
+        with pytest.raises(RateLimitError) as excinfo:
+            await client.text_search("TRIGGER_QUOTA")
+        assert excinfo.value.status_code == 429
+        assert excinfo.value.google_status == "RESOURCE_EXHAUSTED"
+        assert excinfo.value.retryable is True
+        assert excinfo.value.retry_after == 7
+        assert excinfo.value.context == "text_search"
+        with pytest.raises(NotFoundError) as excinfo:
+            await client.place_details("missing-place")
+        assert excinfo.value.context == "place_details place_id=missing-place"
+        with pytest.raises(ConfigError):
+            await client.place_photo(
+                "places/ChIJ/photos/../../../../etc/passwd", max_width_px=100
+            )
 
     asyncio.run(run())
