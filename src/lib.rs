@@ -73,7 +73,19 @@ fn body_to_request<T>(body: &Bound<'_, PyDict>) -> PyResult<T>
 where
     T: serde::de::DeserializeOwned,
 {
-    pythonize::depythonize(body.as_any()).map_err(|e| PyValueError::new_err(e.to_string()))
+    // A body that does not fit the typed request shape is a local call
+    // error (for example a circle in a Text Search location restriction,
+    // which is rectangle only), so it raises the config error like the
+    // core's own local validations instead of escaping as a bare
+    // PyValueError outside the exception hierarchy.
+    pythonize::depythonize(body.as_any()).map_err(|e| {
+        to_pyerr(
+            body.py(),
+            CoreError::Config {
+                detail: e.to_string(),
+            },
+        )
+    })
 }
 
 fn value_to_py(py: Python<'_>, value: &Value) -> PyResult<PyObject> {

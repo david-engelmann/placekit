@@ -23,6 +23,7 @@ pub struct LatLng {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LocalizedText {
+    #[serde(default, skip_serializing_if = "is_empty_string")]
     pub text: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub language_code: Option<String>,
@@ -255,25 +256,42 @@ pub struct AutocompleteRequest {
 // Responses
 // ---------------------------------------------------------------------------
 
+// Reserialization guards for the response models below: a field the wire
+// did not carry must stay absent when the value is reserialized for the
+// Python layer, instead of appearing with a null, empty or zero value
+// (red team finding N1). Python `raw` mirrors the reserialized value, so
+// without these guards raw overstates which fields the API returned.
+fn is_empty_string(value: &String) -> bool {
+    value.is_empty()
+}
+
+fn is_zero_u32(value: &u32) -> bool {
+    *value == 0
+}
+
+fn is_zero_i32(value: &i32) -> bool {
+    *value == 0
+}
+
 /// A photo attached to a place.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Photo {
     /// Resource name, for example `places/{id}/photos/{ref}`. Pass this to
     /// the photo media endpoint.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "is_empty_string")]
     pub name: String,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub width_px: u32,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub height_px: u32,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub author_attributions: Vec<AuthorAttribution>,
     /// Link where users can flag a problem with this photo.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub flag_content_uri: Option<String>,
     /// Link to view this photo on Google Maps.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub google_maps_uri: Option<String>,
     #[serde(flatten)]
     pub extra: Map<String, Value>,
@@ -283,11 +301,11 @@ pub struct Photo {
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AuthorAttribution {
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "is_empty_string")]
     pub display_name: String,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "is_empty_string")]
     pub uri: String,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "is_empty_string")]
     pub photo_uri: String,
 }
 
@@ -295,9 +313,9 @@ pub struct AuthorAttribution {
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Attribution {
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "is_empty_string")]
     pub provider: String,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "is_empty_string")]
     pub provider_uri: String,
 }
 
@@ -305,11 +323,11 @@ pub struct Attribution {
 /// that component is unset in the API value.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct Date {
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "is_zero_i32")]
     pub year: i32,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "is_zero_i32")]
     pub month: i32,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "is_zero_i32")]
     pub day: i32,
 }
 
@@ -319,15 +337,15 @@ pub struct Date {
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OpeningPoint {
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub date: Option<Date>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub truncated: Option<bool>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub day: Option<i32>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hour: Option<i32>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub minute: Option<i32>,
 }
 
@@ -335,9 +353,9 @@ pub struct OpeningPoint {
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Period {
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub open: Option<OpeningPoint>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub close: Option<OpeningPoint>,
 }
 
@@ -345,11 +363,11 @@ pub struct Period {
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OpeningHours {
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub open_now: Option<bool>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub periods: Vec<Period>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub weekday_descriptions: Vec<String>,
     #[serde(flatten)]
     pub extra: Map<String, Value>,
@@ -359,13 +377,13 @@ pub struct OpeningHours {
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AddressComponent {
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "is_empty_string")]
     pub long_text: String,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "is_empty_string")]
     pub short_text: String,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub types: Vec<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub language_code: Option<String>,
 }
 
@@ -373,9 +391,9 @@ pub struct AddressComponent {
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PlusCode {
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "is_empty_string")]
     pub global_code: String,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub compound_code: Option<String>,
 }
 
@@ -383,17 +401,17 @@ pub struct PlusCode {
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PostalAddress {
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub region_code: Option<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub language_code: Option<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub postal_code: Option<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub administrative_area: Option<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub locality: Option<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub address_lines: Vec<String>,
     #[serde(flatten)]
     pub extra: Map<String, Value>,
@@ -404,60 +422,60 @@ pub struct PostalAddress {
 #[serde(rename_all = "camelCase")]
 pub struct Place {
     /// Resource name, `places/{id}`.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "is_empty_string")]
     pub name: String,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "is_empty_string")]
     pub id: String,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub display_name: Option<LocalizedText>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub formatted_address: Option<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub short_formatted_address: Option<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub location: Option<LatLng>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub types: Vec<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub primary_type: Option<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rating: Option<f64>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub user_rating_count: Option<u64>,
     /// One of `PRICE_LEVEL_FREE`, `PRICE_LEVEL_INEXPENSIVE`,
     /// `PRICE_LEVEL_MODERATE`, `PRICE_LEVEL_EXPENSIVE`,
     /// `PRICE_LEVEL_VERY_EXPENSIVE`.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub price_level: Option<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub business_status: Option<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub national_phone_number: Option<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub international_phone_number: Option<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub website_uri: Option<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub google_maps_uri: Option<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub regular_opening_hours: Option<OpeningHours>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub current_opening_hours: Option<OpeningHours>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub address_components: Vec<AddressComponent>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub plus_code: Option<PlusCode>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub viewport: Option<Viewport>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub postal_address: Option<PostalAddress>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub adr_format_address: Option<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub primary_type_display_name: Option<LocalizedText>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub photos: Vec<Photo>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub attributions: Vec<Attribution>,
     /// Any fields this version of the client does not model yet, preserved
     /// verbatim so nothing the API returns is lost.
@@ -469,10 +487,10 @@ pub struct Place {
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SearchResponse {
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub places: Vec<Place>,
     /// Present only when more Text Search pages exist.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub next_page_token: Option<String>,
     /// Any other top level fields the API returned, such as `searchUri`,
     /// `routingSummaries` and `contextualContents` when they are requested
@@ -486,9 +504,9 @@ pub struct SearchResponse {
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StringMatch {
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub start_offset: u32,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub end_offset: u32,
 }
 
@@ -496,9 +514,9 @@ pub struct StringMatch {
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FormattedText {
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "is_empty_string")]
     pub text: String,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub matches: Vec<StringMatch>,
 }
 
@@ -506,9 +524,9 @@ pub struct FormattedText {
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StructuredFormat {
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub main_text: Option<FormattedText>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub secondary_text: Option<FormattedText>,
 }
 
@@ -518,17 +536,17 @@ pub struct StructuredFormat {
 pub struct PlacePrediction {
     /// Resource name of the suggested place, for example
     /// `places/ChIJrTLr-GyuEmsRBfy61i59si0`.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "is_empty_string")]
     pub place: String,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "is_empty_string")]
     pub place_id: String,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub text: Option<FormattedText>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub structured_format: Option<StructuredFormat>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub types: Vec<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub distance_meters: Option<u32>,
     #[serde(flatten)]
     pub extra: Map<String, Value>,
@@ -538,7 +556,7 @@ pub struct PlacePrediction {
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Suggestion {
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub place_prediction: Option<PlacePrediction>,
     /// Raw prediction payload for suggestion kinds this client does not
     /// model (for example query predictions), when present.
@@ -550,7 +568,7 @@ pub struct Suggestion {
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AutocompleteResponse {
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub suggestions: Vec<Suggestion>,
 }
 
@@ -566,9 +584,9 @@ pub struct PhotoResponse {
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PhotoMediaJson {
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "is_empty_string")]
     pub name: String,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "is_empty_string")]
     pub photo_uri: String,
 }
 
@@ -603,9 +621,11 @@ mod tests {
         // and survive reserialization (the C1 regression test).
         assert!(resp.extra.contains_key("searchUri"));
         assert!(resp.extra.contains_key("routingSummaries"));
+        assert!(resp.extra.contains_key("contextualContents"));
         let value = serde_json::to_value(&resp).unwrap();
         assert!(value.get("searchUri").is_some());
         assert!(value.get("routingSummaries").is_some());
+        assert!(value.get("contextualContents").is_some());
         let first = &resp.places[0];
         assert_eq!(first.id, "ChIJrTLr-GyuEmsRBfy61i59si0");
         assert_eq!(first.display_name.as_ref().unwrap().text, "Bianco Latte");
@@ -657,6 +677,22 @@ mod tests {
         assert_eq!(place.address_components.len(), 3);
         assert_eq!(place.address_components[1].long_text, "George Street");
         assert_eq!(place.plus_code.as_ref().unwrap().global_code, "4RRH46J5+QJ");
+        // Postal address and the adr microformat address are typed too
+        // (finding C4); the fixture carries both so a wire name mistake
+        // in either layer fails here.
+        let postal = place.postal_address.as_ref().unwrap();
+        assert_eq!(postal.region_code.as_deref(), Some("AU"));
+        assert_eq!(postal.postal_code.as_deref(), Some("2000"));
+        assert_eq!(
+            postal.administrative_area.as_deref(),
+            Some("New South Wales")
+        );
+        assert_eq!(postal.locality.as_deref(), Some("Sydney"));
+        assert_eq!(postal.address_lines, vec!["Shop 1/123 George St"]);
+        assert_eq!(
+            place.adr_format_address.as_deref(),
+            Some("<span class=\"street-address\">Shop 1/123 George St</span>, <span class=\"locality\">Sydney</span> <span class=\"region\">NSW</span> <span class=\"postal-code\">2000</span>, <span class=\"country-name\">Australia</span>")
+        );
         let viewport = place.viewport.unwrap();
         assert!((viewport.low.latitude - (-33.868)).abs() < 1e-9);
         assert_eq!(
@@ -676,6 +712,31 @@ mod tests {
         );
         assert_eq!(place.attributions.len(), 1);
         assert_eq!(place.attributions[0].provider, "Example Maps Data");
+    }
+
+    #[test]
+    fn reserialization_adds_no_keys_the_wire_did_not_carry() {
+        // A response masked down to places.id must reserialize with no
+        // keys beyond what the wire carried: absent typed fields stay
+        // absent instead of appearing with null or empty values (red
+        // team finding N1).
+        let resp: SearchResponse = serde_json::from_str(r#"{"places":[{"id":"ChIJx"}]}"#).unwrap();
+        let value = serde_json::to_value(&resp).unwrap();
+        assert_eq!(value, serde_json::json!({"places": [{"id": "ChIJx"}]}));
+        // The same holds for a bare Place Details payload.
+        let place: Place = serde_json::from_str(r#"{"id":"ChIJx"}"#).unwrap();
+        let value = serde_json::to_value(&place).unwrap();
+        assert_eq!(value, serde_json::json!({"id": "ChIJx"}));
+        // And for an autocomplete prediction with no distance, where the
+        // wire omits distanceMeters unless an origin was sent.
+        let resp: AutocompleteResponse =
+            serde_json::from_str(r#"{"suggestions":[{"placePrediction":{"placeId":"ChIJx"}}]}"#)
+                .unwrap();
+        let value = serde_json::to_value(&resp).unwrap();
+        assert_eq!(
+            value,
+            serde_json::json!({"suggestions": [{"placePrediction": {"placeId": "ChIJx"}}]})
+        );
     }
 
     #[test]

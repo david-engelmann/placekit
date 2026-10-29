@@ -14,8 +14,8 @@ use serde::de::DeserializeOwned;
 use crate::errors::Error;
 use crate::mask::FieldMask;
 use crate::models::{
-    AutocompleteRequest, AutocompleteResponse, NearbySearchRequest, PhotoMedia, PhotoMediaJson,
-    PhotoResponse, Place, SearchResponse, TextSearchRequest,
+    AutocompleteRequest, AutocompleteResponse, Circle, NearbySearchRequest, PhotoMedia,
+    PhotoMediaJson, PhotoResponse, Place, SearchResponse, TextSearchRequest, Viewport,
 };
 
 /// Default endpoint root for the Places API (New).
@@ -199,18 +199,15 @@ impl Client {
                 "location_bias and location_restriction cannot both be set",
             ));
         }
-        for location in [&request.location_bias, &request.location_restriction]
-            .into_iter()
-            .flatten()
-        {
-            if location.rectangle.is_some() && location.circle.is_some() {
-                return Err(Error::config(
-                    "a location value carries either a rectangle or a circle, not both",
-                ));
-            }
-            if let Some(circle) = &location.circle {
-                validate_bias_circle_radius(circle.radius)?;
-            }
+        if let Some(location) = &request.location_bias {
+            validate_location_shape("location_bias", &location.rectangle, &location.circle)?;
+        }
+        if let Some(location) = &request.location_restriction {
+            validate_location_shape(
+                "location_restriction",
+                &location.rectangle,
+                &location.circle,
+            )?;
         }
         let url = format!("{}/places:autocomplete", self.base_url);
         let builder = self
@@ -395,14 +392,27 @@ fn validate_text_search_locations(request: &TextSearchRequest) -> Result<(), Err
         ));
     }
     if let Some(bias) = &request.location_bias {
-        if bias.rectangle.is_some() && bias.circle.is_some() {
-            return Err(Error::config(
-                "location_bias carries either a rectangle or a circle, not both",
-            ));
-        }
-        if let Some(circle) = &bias.circle {
-            validate_bias_circle_radius(circle.radius)?;
-        }
+        validate_location_shape("location_bias", &bias.rectangle, &bias.circle)?;
+    }
+    Ok(())
+}
+
+/// One location value carries a rectangle or a circle, never both, and a
+/// bias circle radius stays in range. Shared by Text Search and
+/// Autocomplete, whose location types differ but whose rules and error
+/// wording are the same; `label` names the field in the message.
+fn validate_location_shape(
+    label: &str,
+    rectangle: &Option<Viewport>,
+    circle: &Option<Circle>,
+) -> Result<(), Error> {
+    if rectangle.is_some() && circle.is_some() {
+        return Err(Error::config(format!(
+            "{label} carries either a rectangle or a circle, not both"
+        )));
+    }
+    if let Some(circle) = circle {
+        validate_bias_circle_radius(circle.radius)?;
     }
     Ok(())
 }

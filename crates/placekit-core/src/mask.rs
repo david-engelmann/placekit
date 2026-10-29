@@ -143,8 +143,11 @@ mod tests {
 
     #[test]
     fn rejects_control_characters() {
-        // A control character would corrupt the header value (F13).
-        let err = FieldMask::new(vec!["places.id\n".to_owned()]).unwrap_err();
+        // An interior control character is rejected only by the F13
+        // control character clause: it is not whitespace, so the trimmed
+        // comparison cannot catch it. (A trailing newline would also be
+        // caught by the older trimmed check, so it cannot isolate F13.)
+        let err = FieldMask::new(vec!["places.\u{1}id".to_owned()]).unwrap_err();
         assert_eq!(err.kind(), "config");
     }
 
