@@ -1,1 +1,1 @@
-{"error":{"code":400,"details":[{"@type":"type.googleapis.com/google.rpc.BadRequest","fieldViolations":[{"description":"Request contains an invalid argument.","field":"text_query"}]}],"message":"Request contains an invalid argument.","status":"INVALID_ARGUMENT"}}
+{"error":{"code":400,"details":[{"@type":"type.googleapis.com/google.rpc.BadRequest","fieldViolations":[{"description":"Request contains an invalid argument.","field":"textQuery"}]}],"message":"Request contains an invalid argument.","status":"INVALID_ARGUMENT"}}

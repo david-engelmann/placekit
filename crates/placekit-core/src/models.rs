@@ -42,6 +42,92 @@ pub struct LocationRestriction {
     pub circle: Circle,
 }
 
+/// A rectangular area, bounded by its low (southwest) and high (northeast)
+/// corners. Used by location bias and restriction values.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Viewport {
+    pub low: LatLng,
+    pub high: LatLng,
+}
+
+/// A `locationBias` value for Text Search: a rectangle or a circle, never
+/// both (the API rejects a bias carrying both shapes).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TextSearchLocationBias {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rectangle: Option<Viewport>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub circle: Option<Circle>,
+}
+
+/// A `locationRestriction` value for Text Search, which accepts a
+/// rectangle only (unlike the other endpoints).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TextSearchLocationRestriction {
+    pub rectangle: Viewport,
+}
+
+/// A `locationBias` or `locationRestriction` value for Autocomplete: a
+/// rectangle or a circle, never both.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AutocompleteLocation {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rectangle: Option<Viewport>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub circle: Option<Circle>,
+}
+
+/// Electric vehicle charging filter for Text Search.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EvOptions {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub minimum_charging_rate_kw: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub connector_types: Option<Vec<String>>,
+}
+
+/// A polyline in encoded or GeoJSON form, used by search along route.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Polyline {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub encoded_polyline: Option<String>,
+}
+
+/// Parameters for Text Search along a route.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SearchAlongRouteParameters {
+    pub polyline: Polyline,
+}
+
+/// Route features to avoid when computing routing summaries.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RouteModifiers {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub avoid_tolls: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub avoid_highways: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub avoid_ferries: Option<bool>,
+}
+
+/// Routing inputs shared by Text Search and Nearby Search. When an origin
+/// is supplied the API can return routing summaries with the results.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RoutingParameters {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin: Option<LatLng>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub travel_mode: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub route_modifiers: Option<RouteModifiers>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub routing_preference: Option<String>,
+}
+
 // ---------------------------------------------------------------------------
 // Requests
 // ---------------------------------------------------------------------------
@@ -86,9 +172,23 @@ pub struct TextSearchRequest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub included_type: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub location_bias: Option<Value>,
+    pub location_bias: Option<TextSearchLocationBias>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub location_restriction: Option<Value>,
+    pub location_restriction: Option<TextSearchLocationRestriction>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub page_size: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min_rating: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ev_options: Option<EvOptions>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub search_along_route_parameters: Option<SearchAlongRouteParameters>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub routing_parameters: Option<RoutingParameters>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub include_pure_service_area_businesses: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub include_future_opening_businesses: Option<bool>,
 }
 
 /// Body of a `places:searchNearby` request.
@@ -103,6 +203,8 @@ pub struct NearbySearchRequest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub included_primary_types: Option<Vec<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub excluded_primary_types: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_result_count: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub language_code: Option<String>,
@@ -110,6 +212,12 @@ pub struct NearbySearchRequest {
     pub region_code: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rank_preference: Option<NearbySearchRankPreference>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub routing_parameters: Option<RoutingParameters>,
+    // Nearby Search documents includeFutureOpeningBusinesses only; it has
+    // no includePureServiceAreaBusinesses field (spec note N1).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub include_future_opening_businesses: Option<bool>,
 }
 
 /// Body of a `places:autocomplete` request.
@@ -128,9 +236,19 @@ pub struct AutocompleteRequest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub include_query_predictions: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub location_bias: Option<Value>,
+    pub location_bias: Option<AutocompleteLocation>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub location_restriction: Option<Value>,
+    pub location_restriction: Option<AutocompleteLocation>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin: Option<LatLng>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub input_offset: Option<i32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub included_primary_types: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub include_pure_service_area_businesses: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub include_future_opening_businesses: Option<bool>,
 }
 
 // ---------------------------------------------------------------------------
@@ -151,6 +269,12 @@ pub struct Photo {
     pub height_px: u32,
     #[serde(default)]
     pub author_attributions: Vec<AuthorAttribution>,
+    /// Link where users can flag a problem with this photo.
+    #[serde(default)]
+    pub flag_content_uri: Option<String>,
+    /// Link to view this photo on Google Maps.
+    #[serde(default)]
+    pub google_maps_uri: Option<String>,
     #[serde(flatten)]
     pub extra: Map<String, Value>,
 }
@@ -177,6 +301,46 @@ pub struct Attribution {
     pub provider_uri: String,
 }
 
+/// A calendar date, as used by opening hour points. A zero field means
+/// that component is unset in the API value.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct Date {
+    #[serde(default)]
+    pub year: i32,
+    #[serde(default)]
+    pub month: i32,
+    #[serde(default)]
+    pub day: i32,
+}
+
+/// One end of an opening period. `day` is 0 for Sunday through 6 for
+/// Saturday, but the first period in a list does not start on any fixed
+/// day, and period order is independent of weekday description order.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OpeningPoint {
+    #[serde(default)]
+    pub date: Option<Date>,
+    #[serde(default)]
+    pub truncated: Option<bool>,
+    #[serde(default)]
+    pub day: Option<i32>,
+    #[serde(default)]
+    pub hour: Option<i32>,
+    #[serde(default)]
+    pub minute: Option<i32>,
+}
+
+/// A single open/close span within opening hours.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Period {
+    #[serde(default)]
+    pub open: Option<OpeningPoint>,
+    #[serde(default)]
+    pub close: Option<OpeningPoint>,
+}
+
 /// Regular opening hours of a place.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -184,7 +348,53 @@ pub struct OpeningHours {
     #[serde(default)]
     pub open_now: Option<bool>,
     #[serde(default)]
+    pub periods: Vec<Period>,
+    #[serde(default)]
     pub weekday_descriptions: Vec<String>,
+    #[serde(flatten)]
+    pub extra: Map<String, Value>,
+}
+
+/// One component of a structured address.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AddressComponent {
+    #[serde(default)]
+    pub long_text: String,
+    #[serde(default)]
+    pub short_text: String,
+    #[serde(default)]
+    pub types: Vec<String>,
+    #[serde(default)]
+    pub language_code: Option<String>,
+}
+
+/// Plus code location reference for a place.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PlusCode {
+    #[serde(default)]
+    pub global_code: String,
+    #[serde(default)]
+    pub compound_code: Option<String>,
+}
+
+/// A postal address in structured form.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PostalAddress {
+    #[serde(default)]
+    pub region_code: Option<String>,
+    #[serde(default)]
+    pub language_code: Option<String>,
+    #[serde(default)]
+    pub postal_code: Option<String>,
+    #[serde(default)]
+    pub administrative_area: Option<String>,
+    #[serde(default)]
+    pub locality: Option<String>,
+    #[serde(default)]
+    pub address_lines: Vec<String>,
     #[serde(flatten)]
     pub extra: Map<String, Value>,
 }
@@ -232,6 +442,20 @@ pub struct Place {
     #[serde(default)]
     pub regular_opening_hours: Option<OpeningHours>,
     #[serde(default)]
+    pub current_opening_hours: Option<OpeningHours>,
+    #[serde(default)]
+    pub address_components: Vec<AddressComponent>,
+    #[serde(default)]
+    pub plus_code: Option<PlusCode>,
+    #[serde(default)]
+    pub viewport: Option<Viewport>,
+    #[serde(default)]
+    pub postal_address: Option<PostalAddress>,
+    #[serde(default)]
+    pub adr_format_address: Option<String>,
+    #[serde(default)]
+    pub primary_type_display_name: Option<LocalizedText>,
+    #[serde(default)]
     pub photos: Vec<Photo>,
     #[serde(default)]
     pub attributions: Vec<Attribution>,
@@ -250,6 +474,12 @@ pub struct SearchResponse {
     /// Present only when more Text Search pages exist.
     #[serde(default)]
     pub next_page_token: Option<String>,
+    /// Any other top level fields the API returned, such as `searchUri`,
+    /// `routingSummaries` and `contextualContents` when they are requested
+    /// through the field mask, preserved verbatim so nothing is dropped
+    /// when this response is reserialized for the Python layer.
+    #[serde(flatten)]
+    pub extra: Map<String, Value>,
 }
 
 /// A substring match range inside an autocomplete text.
@@ -286,6 +516,10 @@ pub struct StructuredFormat {
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PlacePrediction {
+    /// Resource name of the suggested place, for example
+    /// `places/ChIJrTLr-GyuEmsRBfy61i59si0`.
+    #[serde(default)]
+    pub place: String,
     #[serde(default)]
     pub place_id: String,
     #[serde(default)]
@@ -327,6 +561,25 @@ pub struct PhotoResponse {
     pub content_type: Option<String>,
 }
 
+/// The JSON form of the photo media response, returned when the redirect
+/// is skipped: a short lived URI the caller can render or fetch.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PhotoMediaJson {
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub photo_uri: String,
+}
+
+/// Result of a photo media request: downloaded bytes by default, or the
+/// JSON photo URI form when the caller asked to skip the redirect.
+#[derive(Debug, Clone, PartialEq)]
+pub enum PhotoMedia {
+    Bytes(PhotoResponse),
+    Uri(PhotoMediaJson),
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -340,7 +593,19 @@ mod tests {
     fn decodes_text_search_response() {
         let resp: SearchResponse = serde_json::from_str(TEXT_SEARCH_JSON).unwrap();
         assert_eq!(resp.places.len(), 2);
-        assert_eq!(resp.next_page_token.as_deref(), Some("token-abc-123"));
+        assert_eq!(
+            resp.next_page_token.as_deref(),
+            Some(
+                "Aen7H9k2QpXv4mZ8wRtYuIoP3sDfGhJkL6zXcVbNmQ9wErTyUiOpA2sDfGhJkL5zXcVbNmQ8wErTyUiOpA1sDfGhJkL4zXcVbNmQ7wErTy9"
+            )
+        );
+        // Top level fields this client does not type yet survive in extra
+        // and survive reserialization (the C1 regression test).
+        assert!(resp.extra.contains_key("searchUri"));
+        assert!(resp.extra.contains_key("routingSummaries"));
+        let value = serde_json::to_value(&resp).unwrap();
+        assert!(value.get("searchUri").is_some());
+        assert!(value.get("routingSummaries").is_some());
         let first = &resp.places[0];
         assert_eq!(first.id, "ChIJrTLr-GyuEmsRBfy61i59si0");
         assert_eq!(first.display_name.as_ref().unwrap().text, "Bianco Latte");
@@ -379,6 +644,36 @@ mod tests {
         let hours = place.regular_opening_hours.unwrap();
         assert_eq!(hours.open_now, Some(true));
         assert_eq!(hours.weekday_descriptions.len(), 7);
+        // Periods are typed, with day not aligned to the weekday
+        // descriptions order (spec note N6).
+        assert_eq!(hours.periods.len(), 2);
+        let open = hours.periods[0].open.as_ref().unwrap();
+        assert_eq!(open.day, Some(3));
+        assert_eq!(open.hour, Some(7));
+        assert_eq!(open.minute, Some(0));
+        let close = hours.periods[0].close.as_ref().unwrap();
+        assert_eq!(close.hour, Some(15));
+        // Structured address fields are typed.
+        assert_eq!(place.address_components.len(), 3);
+        assert_eq!(place.address_components[1].long_text, "George Street");
+        assert_eq!(place.plus_code.as_ref().unwrap().global_code, "4RRH46J5+QJ");
+        let viewport = place.viewport.unwrap();
+        assert!((viewport.low.latitude - (-33.868)).abs() < 1e-9);
+        assert_eq!(
+            place.primary_type_display_name.as_ref().unwrap().text,
+            "Cafe"
+        );
+        assert!(place.current_opening_hours.is_some());
+        // Photo URI fields are typed.
+        let photo = &place.photos[0];
+        assert_eq!(
+            photo.flag_content_uri.as_deref(),
+            Some("https://maps.example.com/flag/photo")
+        );
+        assert_eq!(
+            photo.google_maps_uri.as_deref(),
+            Some("https://maps.google.com/?cid=1234567890")
+        );
         assert_eq!(place.attributions.len(), 1);
         assert_eq!(place.attributions[0].provider, "Example Maps Data");
     }
@@ -389,13 +684,18 @@ mod tests {
         assert_eq!(resp.suggestions.len(), 2);
         let pred = resp.suggestions[0].place_prediction.as_ref().unwrap();
         assert_eq!(pred.place_id, "ChIJrTLr-GyuEmsRBfy61i59si0");
+        assert_eq!(pred.place, "places/ChIJrTLr-GyuEmsRBfy61i59si0");
         assert_eq!(
             pred.text.as_ref().unwrap().text,
             "Bianco Latte, George Street, Sydney NSW, Australia"
         );
         let structured = pred.structured_format.as_ref().unwrap();
         assert_eq!(structured.main_text.as_ref().unwrap().text, "Bianco Latte");
-        assert_eq!(pred.distance_meters, Some(1250));
+        // The fixture carries no distanceMeters: the API returns it only
+        // for requests that carried an origin, so asserting a value here
+        // asserted behaviour the client could never produce (finding A4).
+        // The end to end Python test supplies an origin and asserts it.
+        assert_eq!(pred.distance_meters, None);
     }
 
     #[test]
@@ -426,6 +726,66 @@ mod tests {
     }
 
     #[test]
+    fn text_search_request_serializes_round_1_fields() {
+        let req = TextSearchRequest {
+            text_query: "ev charging".to_owned(),
+            page_size: Some(10),
+            min_rating: Some(4.0),
+            ev_options: Some(EvOptions {
+                minimum_charging_rate_kw: Some(50.0),
+                connector_types: Some(vec!["EV_CONNECTOR_TYPE_J1772".to_owned()]),
+            }),
+            routing_parameters: Some(RoutingParameters {
+                origin: Some(LatLng {
+                    latitude: -33.86,
+                    longitude: 151.20,
+                }),
+                travel_mode: Some("DRIVE".to_owned()),
+                route_modifiers: None,
+                routing_preference: None,
+            }),
+            include_pure_service_area_businesses: Some(true),
+            location_bias: Some(TextSearchLocationBias {
+                rectangle: None,
+                circle: Some(Circle {
+                    center: LatLng {
+                        latitude: -33.86,
+                        longitude: 151.20,
+                    },
+                    radius: 1000.0,
+                }),
+            }),
+            ..Default::default()
+        };
+        let value = serde_json::to_value(&req).unwrap();
+        assert_eq!(value["pageSize"], 10);
+        assert_eq!(value["minRating"], 4.0);
+        assert_eq!(value["evOptions"]["minimumChargingRateKw"], 50.0);
+        assert_eq!(value["routingParameters"]["origin"]["latitude"], -33.86);
+        assert_eq!(value["includePureServiceAreaBusinesses"], true);
+        assert_eq!(value["locationBias"]["circle"]["radius"], 1000.0);
+        assert!(value.get("searchAlongRouteParameters").is_none());
+    }
+
+    #[test]
+    fn autocomplete_request_serializes_origin_offset_and_types() {
+        let req = AutocompleteRequest {
+            input: "Bianco".to_owned(),
+            origin: Some(LatLng {
+                latitude: -33.86,
+                longitude: 151.20,
+            }),
+            input_offset: Some(6),
+            included_primary_types: Some(vec!["cafe".to_owned()]),
+            ..Default::default()
+        };
+        let value = serde_json::to_value(&req).unwrap();
+        assert_eq!(value["origin"]["latitude"], -33.86);
+        assert_eq!(value["inputOffset"], 6);
+        assert_eq!(value["includedPrimaryTypes"], serde_json::json!(["cafe"]));
+    }
+
+    #[test]
     fn nearby_search_request_serializes_location_restriction() {
         let req = NearbySearchRequest {
             location_restriction: LocationRestriction {
@@ -440,10 +800,13 @@ mod tests {
             included_types: Some(vec!["cafe".to_owned()]),
             excluded_types: None,
             included_primary_types: None,
+            excluded_primary_types: Some(vec!["bar".to_owned()]),
             max_result_count: Some(5),
             language_code: None,
             region_code: None,
             rank_preference: Some(NearbySearchRankPreference::Distance),
+            routing_parameters: None,
+            include_future_opening_businesses: None,
         };
         let value = serde_json::to_value(&req).unwrap();
         assert_eq!(
@@ -452,6 +815,7 @@ mod tests {
         );
         assert_eq!(value["locationRestriction"]["circle"]["radius"], 800.0);
         assert_eq!(value["rankPreference"], "DISTANCE");
+        assert_eq!(value["excludedPrimaryTypes"], serde_json::json!(["bar"]));
         assert!(value.get("excludedTypes").is_none());
     }
 }

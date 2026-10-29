@@ -27,13 +27,38 @@ create_exception!(
 );
 
 /// Translate a core error into a `PlacesError` with structured attributes
-/// the Python layer uses to pick a concrete exception subclass.
+/// the Python layer uses to pick a concrete exception subclass. API errors
+/// also carry the envelope `error_code`, the parsed `details`, and any
+/// field or quota violations extracted from them (C6).
 fn to_pyerr(py: Python<'_>, err: CoreError) -> PyErr {
     let pyerr = PyErr::new::<PlacesError, _>(err.to_string());
     let instance = pyerr.value(py);
     let _ = instance.setattr("kind", err.kind());
     let _ = instance.setattr("status_code", err.status_code());
     let _ = instance.setattr("google_status", err.google_status());
+    let _ = instance.setattr("error_code", err.error_code());
+    if let Ok(details) = serde_json::to_value(err.details()) {
+        if let Ok(value) = value_to_py(py, &details) {
+            let _ = instance.setattr("details", value);
+        }
+    }
+    let violations: Vec<(String, String)> = err.field_violations();
+    if let Ok(value) = value_to_py(
+        py,
+        &serde_json::Value::Array(
+            violations
+                .iter()
+                .map(|(field, description)| {
+                    serde_json::json!({"field": field, "description": description})
+                })
+                .collect(),
+        ),
+    ) {
+        let _ = instance.setattr("field_violations", value);
+    }
+    if let Ok(value) = value_to_py(py, &serde_json::Value::Array(err.quota_violations())) {
+        let _ = instance.setattr("quota_violations", value);
+    }
     pyerr
 }
 
@@ -77,12 +102,21 @@ where
     }
 }
 
+/// Photo results cross the boundary as a tagged 3-tuple so the Python
+/// layer can tell the two wire forms apart: `("bytes", content, content
+/// type)` for the downloaded image, `("uri", photo_uri, name)` when the
+/// redirect was skipped and the endpoint answered with JSON.
 fn photo_to_py(
     py: Python<'_>,
-    result: Result<placekit_core::models::PhotoResponse, CoreError>,
+    result: Result<placekit_core::models::PhotoMedia, CoreError>,
 ) -> PyResult<PyObject> {
     match result {
-        Ok(photo) => {
+        Ok(placekit_core::models::PhotoMedia::Bytes(photo)) => {
+            let tag = "bytes"
+                .into_pyobject(py)
+                .map_err(|e| PyValueError::new_err(e.to_string()))?
+                .unbind()
+                .into_any();
             let bytes = PyBytes::new(py, &photo.bytes).unbind().into_any();
             let content_type = photo
                 .content_type
@@ -90,7 +124,29 @@ fn photo_to_py(
                 .map_err(|e| PyValueError::new_err(e.to_string()))?
                 .unbind()
                 .into_any();
-            let tuple = PyTuple::new(py, [bytes, content_type])
+            let tuple = PyTuple::new(py, [tag, bytes, content_type])
+                .map_err(|e| PyValueError::new_err(e.to_string()))?;
+            Ok(tuple.unbind().into_any())
+        }
+        Ok(placekit_core::models::PhotoMedia::Uri(media)) => {
+            let tag = "uri"
+                .into_pyobject(py)
+                .map_err(|e| PyValueError::new_err(e.to_string()))?
+                .unbind()
+                .into_any();
+            let uri = media
+                .photo_uri
+                .into_pyobject(py)
+                .map_err(|e| PyValueError::new_err(e.to_string()))?
+                .unbind()
+                .into_any();
+            let name = media
+                .name
+                .into_pyobject(py)
+                .map_err(|e| PyValueError::new_err(e.to_string()))?
+                .unbind()
+                .into_any();
+            let tuple = PyTuple::new(py, [tag, uri, name])
                 .map_err(|e| PyValueError::new_err(e.to_string()))?;
             Ok(tuple.unbind().into_any())
         }
@@ -261,62 +317,74 @@ impl PyClient {
 
     // -- Autocomplete ------------------------------------------------------
 
-    fn autocomplete(&self, py: Python<'_>, body: Bound<'_, PyDict>) -> PyResult<PyObject> {
+    #[pyo3(signature = (body, fields=None))]
+    fn autocomplete(
+        &self,
+        py: Python<'_>,
+        body: Bound<'_, PyDict>,
+        fields: Option<Vec<String>>,
+    ) -> PyResult<PyObject> {
         let request: AutocompleteRequest = body_to_request(&body)?;
+        let mask = mask_from(py, fields)?;
         let inner = self.inner.clone();
         let result = py.allow_threads(|| {
             pyo3_async_runtimes::tokio::get_runtime()
-                .block_on(async move { inner.autocomplete(&request).await })
+                .block_on(async move { inner.autocomplete(&request, mask.as_ref()).await })
         });
         result_to_py(py, result)
     }
 
+    #[pyo3(signature = (body, fields=None))]
     fn autocomplete_async<'py>(
         &self,
         py: Python<'py>,
         body: Bound<'py, PyDict>,
+        fields: Option<Vec<String>>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let request: AutocompleteRequest = body_to_request(&body)?;
+        let mask = mask_from(py, fields)?;
         let inner = self.inner.clone();
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            let result = inner.autocomplete(&request).await;
+            let result = inner.autocomplete(&request, mask.as_ref()).await;
             Python::with_gil(|py| result_to_py(py, result))
         })
     }
 
     // -- Place Photos ------------------------------------------------------
 
-    #[pyo3(signature = (photo_name, max_width_px=None, max_height_px=None))]
+    #[pyo3(signature = (photo_name, max_width_px=None, max_height_px=None, skip_http_redirect=false))]
     fn place_photo(
         &self,
         py: Python<'_>,
         photo_name: String,
         max_width_px: Option<u32>,
         max_height_px: Option<u32>,
+        skip_http_redirect: bool,
     ) -> PyResult<PyObject> {
         let inner = self.inner.clone();
         let result = py.allow_threads(|| {
             pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
                 inner
-                    .place_photo(&photo_name, max_width_px, max_height_px)
+                    .place_photo(&photo_name, max_width_px, max_height_px, skip_http_redirect)
                     .await
             })
         });
         photo_to_py(py, result)
     }
 
-    #[pyo3(signature = (photo_name, max_width_px=None, max_height_px=None))]
+    #[pyo3(signature = (photo_name, max_width_px=None, max_height_px=None, skip_http_redirect=false))]
     fn place_photo_async<'py>(
         &self,
         py: Python<'py>,
         photo_name: String,
         max_width_px: Option<u32>,
         max_height_px: Option<u32>,
+        skip_http_redirect: bool,
     ) -> PyResult<Bound<'py, PyAny>> {
         let inner = self.inner.clone();
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             let result = inner
-                .place_photo(&photo_name, max_width_px, max_height_px)
+                .place_photo(&photo_name, max_width_px, max_height_px, skip_http_redirect)
                 .await;
             Python::with_gil(|py| photo_to_py(py, result))
         })

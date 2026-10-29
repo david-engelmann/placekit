@@ -14,15 +14,20 @@ pub struct FieldMask(Vec<String>);
 impl FieldMask {
     /// Build a mask from field paths such as `places.displayName`.
     ///
-    /// Fails on an empty list, an empty path, or a path containing a comma
-    /// or whitespace (all of which would corrupt the header).
+    /// Fails on an empty list, an empty path, or a path containing a comma,
+    /// whitespace or a control character (all of which would corrupt the
+    /// header).
     pub fn new(paths: Vec<String>) -> Result<Self, Error> {
         if paths.is_empty() {
             return Err(Error::config("field mask must contain at least one path"));
         }
         for path in &paths {
             let trimmed = path.trim();
-            if trimmed.is_empty() || trimmed != path || path.contains(',') {
+            if trimmed.is_empty()
+                || trimmed != path
+                || path.contains(',')
+                || path.chars().any(|c| c.is_control())
+            {
                 return Err(Error::config(format!("invalid field mask path: {path:?}")));
             }
         }
@@ -48,6 +53,7 @@ impl FieldMask {
     pub fn text_search_default() -> Self {
         Self::from_static(&[
             "places.id",
+            "places.name",
             "places.displayName",
             "places.formattedAddress",
             "places.location",
@@ -66,6 +72,7 @@ impl FieldMask {
     pub fn nearby_search_default() -> Self {
         Self::from_static(&[
             "places.id",
+            "places.name",
             "places.displayName",
             "places.formattedAddress",
             "places.location",
@@ -84,6 +91,7 @@ impl FieldMask {
     pub fn place_details_default() -> Self {
         Self::from_static(&[
             "id",
+            "name",
             "displayName",
             "formattedAddress",
             "shortFormattedAddress",
@@ -131,6 +139,13 @@ mod tests {
             let err = FieldMask::new(vec![bad.to_owned()]).unwrap_err();
             assert_eq!(err.kind(), "config", "path {bad:?} should be rejected");
         }
+    }
+
+    #[test]
+    fn rejects_control_characters() {
+        // A control character would corrupt the header value (F13).
+        let err = FieldMask::new(vec!["places.id\n".to_owned()]).unwrap_err();
+        assert_eq!(err.kind(), "config");
     }
 
     #[test]

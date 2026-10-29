@@ -16,6 +16,8 @@ pub enum Error {
         status: u16,
         google_status: String,
         message: String,
+        code: Option<i64>,
+        details: Vec<serde_json::Value>,
     },
     /// Quota exhausted or rate limit hit (HTTP 429, `RESOURCE_EXHAUSTED`).
     #[error("rate limit or quota exceeded (HTTP {status}): {message}")]
@@ -23,6 +25,8 @@ pub enum Error {
         status: u16,
         google_status: String,
         message: String,
+        code: Option<i64>,
+        details: Vec<serde_json::Value>,
     },
     /// The requested resource does not exist (HTTP 404, `NOT_FOUND`).
     #[error("not found (HTTP {status}): {message}")]
@@ -30,6 +34,8 @@ pub enum Error {
         status: u16,
         google_status: String,
         message: String,
+        code: Option<i64>,
+        details: Vec<serde_json::Value>,
     },
     /// The request itself was malformed (HTTP 400, `INVALID_ARGUMENT`).
     #[error("invalid request (HTTP {status}): {message}")]
@@ -37,6 +43,8 @@ pub enum Error {
         status: u16,
         google_status: String,
         message: String,
+        code: Option<i64>,
+        details: Vec<serde_json::Value>,
     },
     /// Any other error response from the API.
     #[error("places API error (HTTP {status} {google_status}): {message}")]
@@ -44,6 +52,8 @@ pub enum Error {
         status: u16,
         google_status: String,
         message: String,
+        code: Option<i64>,
+        details: Vec<serde_json::Value>,
     },
     /// The request never produced an HTTP response (DNS, connect, TLS,
     /// timeout, or a dropped connection).
@@ -101,17 +111,91 @@ impl Error {
         }
     }
 
+    /// The `code` field of the Google error envelope, when the response
+    /// carried one. Cross checked against the HTTP status by callers; a
+    /// mismatch is visible here rather than silently trusted.
+    pub fn error_code(&self) -> Option<i64> {
+        match self {
+            Error::Auth { code, .. }
+            | Error::RateLimit { code, .. }
+            | Error::NotFound { code, .. }
+            | Error::InvalidRequest { code, .. }
+            | Error::Api { code, .. } => *code,
+            _ => None,
+        }
+    }
+
+    /// The parsed `details` array of the Google error envelope (the
+    /// `google.rpc` detail objects), empty when the response carried none.
+    pub fn details(&self) -> &[serde_json::Value] {
+        match self {
+            Error::Auth { details, .. }
+            | Error::RateLimit { details, .. }
+            | Error::NotFound { details, .. }
+            | Error::InvalidRequest { details, .. }
+            | Error::Api { details, .. } => details,
+            _ => &[],
+        }
+    }
+
+    /// Field violations from a `google.rpc.BadRequest` detail, as
+    /// (field, description) pairs. Field names are the wire (JSON) names,
+    /// for example `textQuery`.
+    pub fn field_violations(&self) -> Vec<(String, String)> {
+        let mut out = Vec::new();
+        for detail in self.details() {
+            let type_url = detail.get("@type").and_then(|v| v.as_str());
+            if !matches!(type_url, Some(t) if t.ends_with("google.rpc.BadRequest")) {
+                continue;
+            }
+            if let Some(violations) = detail.get("fieldViolations").and_then(|v| v.as_array()) {
+                for violation in violations {
+                    let field = violation
+                        .get("field")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or_default()
+                        .to_owned();
+                    let description = violation
+                        .get("description")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or_default()
+                        .to_owned();
+                    out.push((field, description));
+                }
+            }
+        }
+        out
+    }
+
+    /// Violation objects from a `google.rpc.QuotaFailure` detail.
+    pub fn quota_violations(&self) -> Vec<serde_json::Value> {
+        let mut out = Vec::new();
+        for detail in self.details() {
+            let type_url = detail.get("@type").and_then(|v| v.as_str());
+            if !matches!(type_url, Some(t) if t.ends_with("google.rpc.QuotaFailure")) {
+                continue;
+            }
+            if let Some(violations) = detail.get("violations").and_then(|v| v.as_array()) {
+                out.extend(violations.iter().cloned());
+            }
+        }
+        out
+    }
+
     /// Build an error from a non-success HTTP response. Parses the standard
-    /// Google error envelope (`{"error": {"code", "message", "status"}}`)
-    /// and classifies by the Google status string first, then by HTTP code.
+    /// Google error envelope (`{"error": {"code", "message", "status",
+    /// "details"}}`) and classifies by the Google status string first,
+    /// then by HTTP code.
     pub fn from_response(status: u16, body: &str) -> Error {
         let parsed = serde_json::from_str::<GoogleErrorEnvelope>(body).ok();
-        let (google_status, message) = match parsed {
+        let (google_status, message, code, details) = match parsed {
             Some(env) => (
                 env.error.status.unwrap_or_default(),
                 env.error
                     .message
                     .unwrap_or_else(|| format!("HTTP {status}")),
+                env.error.code,
+                env.error.details.unwrap_or_default(),
             ),
             None => (
                 String::new(),
@@ -120,6 +204,8 @@ impl Error {
                 } else {
                     body.chars().take(500).collect()
                 },
+                None,
+                Vec::new(),
             ),
         };
 
@@ -128,47 +214,65 @@ impl Error {
                 status,
                 google_status,
                 message,
+                code,
+                details,
             },
             "RESOURCE_EXHAUSTED" => Error::RateLimit {
                 status,
                 google_status,
                 message,
+                code,
+                details,
             },
             "NOT_FOUND" => Error::NotFound {
                 status,
                 google_status,
                 message,
+                code,
+                details,
             },
             "INVALID_ARGUMENT" | "FAILED_PRECONDITION" => Error::InvalidRequest {
                 status,
                 google_status,
                 message,
+                code,
+                details,
             },
             _ => match status {
                 401 | 403 => Error::Auth {
                     status,
                     google_status,
                     message,
+                    code,
+                    details,
                 },
                 429 => Error::RateLimit {
                     status,
                     google_status,
                     message,
+                    code,
+                    details,
                 },
                 404 => Error::NotFound {
                     status,
                     google_status,
                     message,
+                    code,
+                    details,
                 },
                 400 => Error::InvalidRequest {
                     status,
                     google_status,
                     message,
+                    code,
+                    details,
                 },
                 _ => Error::Api {
                     status,
                     google_status,
                     message,
+                    code,
+                    details,
                 },
             },
         }
@@ -194,8 +298,10 @@ struct GoogleErrorEnvelope {
 
 #[derive(Debug, Deserialize)]
 struct GoogleErrorBody {
+    code: Option<i64>,
     message: Option<String>,
     status: Option<String>,
+    details: Option<Vec<serde_json::Value>>,
 }
 
 #[cfg(test)]
@@ -253,5 +359,51 @@ mod tests {
             r#"{"error": {"code": 400, "message": "Quota", "status": "RESOURCE_EXHAUSTED"}}"#;
         let err = Error::from_response(400, body);
         assert_eq!(err.kind(), "rate_limit");
+    }
+
+    #[test]
+    fn parses_field_violations_from_fixture() {
+        // The fixture field name is the wire form textQuery (finding A1);
+        // this test fails if details stop being parsed or the fixture
+        // regresses to the proto name.
+        let body = include_str!("../../../tests/fixtures/error_invalid.json");
+        let err = Error::from_response(400, body);
+        assert_eq!(err.error_code(), Some(400));
+        assert_eq!(err.details().len(), 1);
+        assert_eq!(
+            err.field_violations(),
+            vec![(
+                "textQuery".to_owned(),
+                "Request contains an invalid argument.".to_owned()
+            )]
+        );
+        assert!(err.quota_violations().is_empty());
+    }
+
+    #[test]
+    fn parses_quota_violations_from_fixture() {
+        let body = include_str!("../../../tests/fixtures/error_quota.json");
+        let err = Error::from_response(429, body);
+        assert_eq!(err.kind(), "rate_limit");
+        assert_eq!(err.error_code(), Some(429));
+        let violations = err.quota_violations();
+        assert_eq!(violations.len(), 1);
+        assert_eq!(
+            violations[0]["quotaMetric"],
+            "places.googleapis.com/default"
+        );
+        assert!(err.field_violations().is_empty());
+    }
+
+    #[test]
+    fn envelope_code_is_kept_even_when_it_disagrees_with_http_status() {
+        // Classification follows the Google status string, but the
+        // envelope code stays available for the caller to cross check.
+        let body =
+            r#"{"error": {"code": 400, "message": "Quota", "status": "RESOURCE_EXHAUSTED"}}"#;
+        let err = Error::from_response(429, body);
+        assert_eq!(err.kind(), "rate_limit");
+        assert_eq!(err.status_code(), Some(429));
+        assert_eq!(err.error_code(), Some(400));
     }
 }
