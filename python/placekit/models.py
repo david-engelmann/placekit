@@ -2,7 +2,12 @@
 
 Responses arrive as dataclasses with attribute access, never raw dicts.
 Fields this client version does not model yet are preserved verbatim on
-``Place.raw`` so nothing the API returns is silently lost.
+``Place.raw`` and on the result level ``raw`` dicts, so nothing the API
+returns is silently lost at those levels. A typed child object carries
+only its modelled fields, though. An unmodelled field nested inside a
+child (a ``Photo``, an ``OpeningHours``) survives only in the ancestor
+``raw``, not on the child itself, so a caller who needs an unmodelled
+leaf must read it from the ancestor raw before passing the child on.
 
 The models are frozen value objects. Attribute assignment on a
 parsed result raises instead of silently rewriting it, so a result
@@ -268,18 +273,42 @@ class Period:
 
 
 @dataclass(frozen=True, slots=True)
+class SpecialDay:
+    """A day on which the hours differ from the regular schedule,
+    carried inside current opening hours."""
+
+    date: Optional[Date] = None
+
+    @classmethod
+    def from_api(cls, data: dict[str, Any]) -> "SpecialDay":
+        date = data.get("date")
+        return cls(date=Date.from_api(date) if date else None)
+
+
+@dataclass(frozen=True, slots=True)
 class OpeningHours:
     """Regular opening hours of a place."""
 
     open_now: Optional[bool] = None
     periods: list[Period] = field(default_factory=list)
     weekday_descriptions: list[str] = field(default_factory=list)
+    #: When the place next closes, as an unparsed timestamp string.
+    #: Present on an open place; absent (None) when the API sends none.
+    next_close_time: Optional[str] = None
+    #: When the place next opens, as an unparsed timestamp string.
+    next_open_time: Optional[str] = None
+    special_days: list[SpecialDay] = field(default_factory=list)
+    #: Which kind of secondary hours this entry describes (for example
+    #: drive through or delivery hours). Set on the secondary opening
+    #: hours lists of a place, absent on regular and current hours.
+    secondary_hours_type: Optional[str] = None
 
     def __post_init__(self) -> None:
         _reject_bare_string("OpeningHours", "periods", self.periods)
         _reject_bare_string(
             "OpeningHours", "weekday_descriptions", self.weekday_descriptions
         )
+        _reject_bare_string("OpeningHours", "special_days", self.special_days)
 
     @classmethod
     def from_api(cls, data: dict[str, Any]) -> "OpeningHours":
@@ -291,6 +320,12 @@ class OpeningHours:
                 "OpeningHours",
                 "weekdayDescriptions",
             ),
+            next_close_time=data.get("nextCloseTime"),
+            next_open_time=data.get("nextOpenTime"),
+            special_days=[
+                SpecialDay.from_api(d) for d in data.get("specialDays", [])
+            ],
+            secondary_hours_type=data.get("secondaryHoursType"),
         )
 
 
@@ -356,9 +391,13 @@ class PostalAddress:
     administrative_area: Optional[str] = None
     locality: Optional[str] = None
     address_lines: list[str] = field(default_factory=list)
+    sublocality: Optional[str] = None
+    organization: Optional[str] = None
+    recipients: list[str] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         _reject_bare_string("PostalAddress", "address_lines", self.address_lines)
+        _reject_bare_string("PostalAddress", "recipients", self.recipients)
 
     @classmethod
     def from_api(cls, data: dict[str, Any]) -> "PostalAddress":
@@ -371,6 +410,410 @@ class PostalAddress:
             address_lines=_str_list(
                 data.get("addressLines", []), "PostalAddress", "addressLines"
             ),
+            sublocality=data.get("sublocality"),
+            organization=data.get("organization"),
+            recipients=_str_list(
+                data.get("recipients", []), "PostalAddress", "recipients"
+            ),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class Review:
+    """One user review of a place, as carried on Place Details results."""
+
+    name: str = ""
+    relative_publish_time_description: str = ""
+    text: Optional[LocalizedText] = None
+    original_text: Optional[LocalizedText] = None
+    rating: Optional[float] = None
+    author_attribution: Optional[AuthorAttribution] = None
+    #: When the review was published, as an unparsed timestamp string.
+    publish_time: Optional[str] = None
+    flag_content_uri: Optional[str] = None
+    google_maps_uri: Optional[str] = None
+    visit_date: Optional[Date] = None
+
+    @classmethod
+    def from_api(cls, data: dict[str, Any]) -> "Review":
+        text = data.get("text")
+        original = data.get("originalText")
+        rating = data.get("rating")
+        attribution = data.get("authorAttribution")
+        visit = data.get("visitDate")
+        return cls(
+            name=data.get("name", ""),
+            relative_publish_time_description=data.get(
+                "relativePublishTimeDescription", ""
+            ),
+            text=LocalizedText.from_api(text) if text else None,
+            original_text=LocalizedText.from_api(original) if original else None,
+            rating=(
+                _as_float(rating, "Review", "rating")
+                if rating is not None
+                else None
+            ),
+            author_attribution=(
+                AuthorAttribution.from_api(attribution) if attribution else None
+            ),
+            publish_time=data.get("publishTime"),
+            flag_content_uri=data.get("flagContentUri"),
+            google_maps_uri=data.get("googleMapsUri"),
+            visit_date=Date.from_api(visit) if visit else None,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class PaymentOptions:
+    """Payment methods a place accepts."""
+
+    accepts_credit_cards: Optional[bool] = None
+    accepts_debit_cards: Optional[bool] = None
+    accepts_cash_only: Optional[bool] = None
+    accepts_nfc: Optional[bool] = None
+
+    @classmethod
+    def from_api(cls, data: dict[str, Any]) -> "PaymentOptions":
+        return cls(
+            accepts_credit_cards=data.get("acceptsCreditCards"),
+            accepts_debit_cards=data.get("acceptsDebitCards"),
+            accepts_cash_only=data.get("acceptsCashOnly"),
+            accepts_nfc=data.get("acceptsNfc"),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class ParkingOptions:
+    """Parking options a place offers."""
+
+    free_parking_lot: Optional[bool] = None
+    paid_parking_lot: Optional[bool] = None
+    free_street_parking: Optional[bool] = None
+    paid_street_parking: Optional[bool] = None
+    valet_parking: Optional[bool] = None
+    free_garage_parking: Optional[bool] = None
+    paid_garage_parking: Optional[bool] = None
+
+    @classmethod
+    def from_api(cls, data: dict[str, Any]) -> "ParkingOptions":
+        return cls(
+            free_parking_lot=data.get("freeParkingLot"),
+            paid_parking_lot=data.get("paidParkingLot"),
+            free_street_parking=data.get("freeStreetParking"),
+            paid_street_parking=data.get("paidStreetParking"),
+            valet_parking=data.get("valetParking"),
+            free_garage_parking=data.get("freeGarageParking"),
+            paid_garage_parking=data.get("paidGarageParking"),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class AccessibilityOptions:
+    """Accessibility options a place offers."""
+
+    wheelchair_accessible_parking: Optional[bool] = None
+    wheelchair_accessible_entrance: Optional[bool] = None
+    wheelchair_accessible_restroom: Optional[bool] = None
+    wheelchair_accessible_seating: Optional[bool] = None
+
+    @classmethod
+    def from_api(cls, data: dict[str, Any]) -> "AccessibilityOptions":
+        return cls(
+            wheelchair_accessible_parking=data.get("wheelchairAccessibleParking"),
+            wheelchair_accessible_entrance=data.get(
+                "wheelchairAccessibleEntrance"
+            ),
+            wheelchair_accessible_restroom=data.get(
+                "wheelchairAccessibleRestroom"
+            ),
+            wheelchair_accessible_seating=data.get("wheelchairAccessibleSeating"),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class TimeZone:
+    """The time zone of a place.
+
+    Only the id is typed. The IANA database version the API reports
+    beside it is version metadata and stays in ``Place.raw``.
+    """
+
+    id: str = ""
+
+    @classmethod
+    def from_api(cls, data: dict[str, Any]) -> "TimeZone":
+        return cls(id=data.get("id", ""))
+
+
+@dataclass(frozen=True, slots=True)
+class GenerativeSummary:
+    """An AI generated overview of a place.
+
+    Only the overview text is typed. The flag and disclosure leaves
+    beside it stay in ``Place.raw``.
+    """
+
+    overview: Optional[LocalizedText] = None
+
+    @classmethod
+    def from_api(cls, data: dict[str, Any]) -> "GenerativeSummary":
+        overview = data.get("overview")
+        return cls(
+            overview=LocalizedText.from_api(overview) if overview else None
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class ReviewSummary:
+    """An AI generated summary of a place's reviews.
+
+    Only the summary text is typed. The flag, disclosure and reviews
+    link leaves beside it stay in ``Place.raw``.
+    """
+
+    text: Optional[LocalizedText] = None
+
+    @classmethod
+    def from_api(cls, data: dict[str, Any]) -> "ReviewSummary":
+        text = data.get("text")
+        return cls(text=LocalizedText.from_api(text) if text else None)
+
+
+@dataclass(frozen=True, slots=True)
+class ConsumerAlert:
+    """A consumer alert about a place, with its headline and language.
+
+    The detail blocks under the headline stay in ``Place.raw``. The
+    overview is a plain string here, not a LocalizedText, because the
+    wire carries the language as the sibling field below.
+    """
+
+    overview: str = ""
+    language_code: Optional[str] = None
+
+    @classmethod
+    def from_api(cls, data: dict[str, Any]) -> "ConsumerAlert":
+        return cls(
+            overview=data.get("overview", ""),
+            language_code=data.get("languageCode"),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class GoogleMapsLinks:
+    """The Google Maps links for a place, beyond the single maps URI
+    carried on the place itself."""
+
+    directions_uri: Optional[str] = None
+    place_uri: Optional[str] = None
+    write_a_review_uri: Optional[str] = None
+    reviews_uri: Optional[str] = None
+    photos_uri: Optional[str] = None
+
+    @classmethod
+    def from_api(cls, data: dict[str, Any]) -> "GoogleMapsLinks":
+        return cls(
+            directions_uri=data.get("directionsUri"),
+            place_uri=data.get("placeUri"),
+            write_a_review_uri=data.get("writeAReviewUri"),
+            reviews_uri=data.get("reviewsUri"),
+            photos_uri=data.get("photosUri"),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class Money:
+    """An amount of money in a single currency.
+
+    Units are an int64 the wire carries as a JSON string, decoded to
+    an int here, and nanos is the sub unit component as a plain
+    number.
+    """
+
+    currency_code: str = ""
+    units: int = 0
+    nanos: int = 0
+
+    @classmethod
+    def from_api(cls, data: dict[str, Any]) -> "Money":
+        return cls(
+            currency_code=data.get("currencyCode", ""),
+            units=_as_int(data.get("units", 0), "Money", "units"),
+            nanos=_as_int(data.get("nanos", 0), "Money", "nanos"),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class PriceRange:
+    """The price range of a place.
+
+    An absent end price is an open ended range and reads None, never
+    a zero Money.
+    """
+
+    start_price: Optional[Money] = None
+    end_price: Optional[Money] = None
+
+    @classmethod
+    def from_api(cls, data: dict[str, Any]) -> "PriceRange":
+        start = data.get("startPrice")
+        end = data.get("endPrice")
+        return cls(
+            start_price=Money.from_api(start) if start else None,
+            end_price=Money.from_api(end) if end else None,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class ConnectorAggregation:
+    """One connector type inside an EV charging summary.
+
+    ``type`` is the API's own field name and is kept as is. The
+    availability timestamp stays an unparsed string, like every other
+    timestamp in the model layer.
+    """
+
+    type: str = ""
+    max_charge_rate_kw: Optional[float] = None
+    count: Optional[int] = None
+    available_count: Optional[int] = None
+    out_of_service_count: Optional[int] = None
+    availability_last_update_time: Optional[str] = None
+
+    @classmethod
+    def from_api(cls, data: dict[str, Any]) -> "ConnectorAggregation":
+        rate = data.get("maxChargeRateKw")
+        return cls(
+            type=data.get("type", ""),
+            max_charge_rate_kw=(
+                _as_float(rate, "ConnectorAggregation", "maxChargeRateKw")
+                if rate is not None
+                else None
+            ),
+            count=_optional_int(
+                data.get("count"), "ConnectorAggregation", "count"
+            ),
+            available_count=_optional_int(
+                data.get("availableCount"),
+                "ConnectorAggregation",
+                "availableCount",
+            ),
+            out_of_service_count=_optional_int(
+                data.get("outOfServiceCount"),
+                "ConnectorAggregation",
+                "outOfServiceCount",
+            ),
+            availability_last_update_time=data.get("availabilityLastUpdateTime"),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class EvChargeOptions:
+    """The electric vehicle charging summary of a place."""
+
+    connector_count: Optional[int] = None
+    connector_aggregation: list[ConnectorAggregation] = field(
+        default_factory=list
+    )
+
+    def __post_init__(self) -> None:
+        _reject_bare_string(
+            "EvChargeOptions",
+            "connector_aggregation",
+            self.connector_aggregation,
+        )
+
+    @classmethod
+    def from_api(cls, data: dict[str, Any]) -> "EvChargeOptions":
+        return cls(
+            connector_count=_optional_int(
+                data.get("connectorCount"), "EvChargeOptions", "connectorCount"
+            ),
+            connector_aggregation=[
+                ConnectorAggregation.from_api(a)
+                for a in data.get("connectorAggregation", [])
+            ],
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class Landmark:
+    """A nearby landmark inside an address descriptor."""
+
+    name: str = ""
+    place_id: str = ""
+    display_name: Optional[LocalizedText] = None
+    types: list[str] = field(default_factory=list)
+    spatial_relationship: Optional[str] = None
+    straight_line_distance_meters: Optional[float] = None
+    travel_distance_meters: Optional[float] = None
+
+    def __post_init__(self) -> None:
+        _reject_bare_string("Landmark", "types", self.types)
+
+    @classmethod
+    def from_api(cls, data: dict[str, Any]) -> "Landmark":
+        display = data.get("displayName")
+        straight = data.get("straightLineDistanceMeters")
+        travel = data.get("travelDistanceMeters")
+        return cls(
+            name=data.get("name", ""),
+            place_id=data.get("placeId", ""),
+            display_name=LocalizedText.from_api(display) if display else None,
+            types=_str_list(data.get("types", []), "Landmark", "types"),
+            spatial_relationship=data.get("spatialRelationship"),
+            straight_line_distance_meters=(
+                _as_float(straight, "Landmark", "straightLineDistanceMeters")
+                if straight is not None
+                else None
+            ),
+            travel_distance_meters=(
+                _as_float(travel, "Landmark", "travelDistanceMeters")
+                if travel is not None
+                else None
+            ),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class Area:
+    """An area containing an address, inside an address descriptor."""
+
+    name: str = ""
+    place_id: str = ""
+    display_name: Optional[LocalizedText] = None
+    containment: Optional[str] = None
+
+    @classmethod
+    def from_api(cls, data: dict[str, Any]) -> "Area":
+        display = data.get("displayName")
+        return cls(
+            name=data.get("name", ""),
+            place_id=data.get("placeId", ""),
+            display_name=LocalizedText.from_api(display) if display else None,
+            containment=data.get("containment"),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class AddressDescriptor:
+    """Landmarks and areas describing where an address sits."""
+
+    landmarks: list[Landmark] = field(default_factory=list)
+    areas: list[Area] = field(default_factory=list)
+
+    def __post_init__(self) -> None:
+        _reject_bare_string("AddressDescriptor", "landmarks", self.landmarks)
+        _reject_bare_string("AddressDescriptor", "areas", self.areas)
+
+    @classmethod
+    def from_api(cls, data: dict[str, Any]) -> "AddressDescriptor":
+        return cls(
+            landmarks=[
+                Landmark.from_api(landmark)
+                for landmark in data.get("landmarks", [])
+            ],
+            areas=[Area.from_api(area) for area in data.get("areas", [])],
         )
 
 
@@ -402,14 +845,64 @@ class Place:
     google_maps_uri: Optional[str] = None
     opening_hours: Optional[OpeningHours] = None
     current_opening_hours: Optional[OpeningHours] = None
+    current_secondary_opening_hours: list[OpeningHours] = field(
+        default_factory=list
+    )
+    regular_secondary_opening_hours: list[OpeningHours] = field(
+        default_factory=list
+    )
     address_components: list[AddressComponent] = field(default_factory=list)
     plus_code: Optional[PlusCode] = None
     viewport: Optional[Viewport] = None
     postal_address: Optional[PostalAddress] = None
     adr_format_address: Optional[str] = None
     primary_type_display_name: Optional[LocalizedText] = None
+    google_maps_type_label: Optional[LocalizedText] = None
+    editorial_summary: Optional[LocalizedText] = None
+    icon_mask_base_uri: Optional[str] = None
+    icon_background_color: Optional[str] = None
+    opening_date: Optional[Date] = None
+    utc_offset_minutes: Optional[int] = None
+    pure_service_area_business: Optional[bool] = None
+    moved_place: Optional[str] = None
+    moved_place_id: Optional[str] = None
     photos: list[Photo] = field(default_factory=list)
     attributions: list[Attribution] = field(default_factory=list)
+    reviews: list[Review] = field(default_factory=list)
+    takeout: Optional[bool] = None
+    delivery: Optional[bool] = None
+    dine_in: Optional[bool] = None
+    curbside_pickup: Optional[bool] = None
+    reservable: Optional[bool] = None
+    serves_breakfast: Optional[bool] = None
+    serves_lunch: Optional[bool] = None
+    serves_dinner: Optional[bool] = None
+    serves_beer: Optional[bool] = None
+    serves_wine: Optional[bool] = None
+    serves_brunch: Optional[bool] = None
+    serves_vegetarian_food: Optional[bool] = None
+    outdoor_seating: Optional[bool] = None
+    live_music: Optional[bool] = None
+    menu_for_children: Optional[bool] = None
+    serves_cocktails: Optional[bool] = None
+    serves_dessert: Optional[bool] = None
+    serves_coffee: Optional[bool] = None
+    good_for_children: Optional[bool] = None
+    allows_dogs: Optional[bool] = None
+    restroom: Optional[bool] = None
+    good_for_groups: Optional[bool] = None
+    good_for_watching_sports: Optional[bool] = None
+    payment_options: Optional[PaymentOptions] = None
+    parking_options: Optional[ParkingOptions] = None
+    accessibility_options: Optional[AccessibilityOptions] = None
+    time_zone: Optional[TimeZone] = None
+    generative_summary: Optional[GenerativeSummary] = None
+    review_summary: Optional[ReviewSummary] = None
+    consumer_alert: Optional[ConsumerAlert] = None
+    google_maps_links: Optional[GoogleMapsLinks] = None
+    price_range: Optional[PriceRange] = None
+    ev_charge_options: Optional[EvChargeOptions] = None
+    address_descriptor: Optional[AddressDescriptor] = None
     #: The full response payload for this place, including any fields this
     #: client version does not model yet. A deep copy of the payload, so
     #: it shares no mutable state with the caller's dict. Excluded from
@@ -421,6 +914,17 @@ class Place:
         _reject_bare_string("Place", "address_components", self.address_components)
         _reject_bare_string("Place", "photos", self.photos)
         _reject_bare_string("Place", "attributions", self.attributions)
+        _reject_bare_string(
+            "Place",
+            "current_secondary_opening_hours",
+            self.current_secondary_opening_hours,
+        )
+        _reject_bare_string(
+            "Place",
+            "regular_secondary_opening_hours",
+            self.regular_secondary_opening_hours,
+        )
+        _reject_bare_string("Place", "reviews", self.reviews)
 
     @property
     def display_text(self) -> Optional[str]:
@@ -444,6 +948,20 @@ class Place:
         viewport = data.get("viewport")
         postal = data.get("postalAddress")
         type_display = data.get("primaryTypeDisplayName")
+        type_label = data.get("googleMapsTypeLabel")
+        summary = data.get("editorialSummary")
+        opening = data.get("openingDate")
+        payment = data.get("paymentOptions")
+        parking = data.get("parkingOptions")
+        accessibility = data.get("accessibilityOptions")
+        time_zone = data.get("timeZone")
+        generative = data.get("generativeSummary")
+        review_summary = data.get("reviewSummary")
+        alert = data.get("consumerAlert")
+        links = data.get("googleMapsLinks")
+        price_range = data.get("priceRange")
+        ev = data.get("evChargeOptions")
+        descriptor = data.get("addressDescriptor")
         place_id = data.get("id") or str(data.get("name", "")).removeprefix("places/")
         if not data:
             # An empty payload is a truncated or wrong response, not a
@@ -482,6 +1000,14 @@ class Place:
             current_opening_hours=(
                 OpeningHours.from_api(current_hours) if current_hours else None
             ),
+            current_secondary_opening_hours=[
+                OpeningHours.from_api(h)
+                for h in data.get("currentSecondaryOpeningHours", [])
+            ],
+            regular_secondary_opening_hours=[
+                OpeningHours.from_api(h)
+                for h in data.get("regularSecondaryOpeningHours", [])
+            ],
             address_components=[
                 AddressComponent.from_api(c)
                 for c in data.get("addressComponents", [])
@@ -493,9 +1019,114 @@ class Place:
             primary_type_display_name=(
                 LocalizedText.from_api(type_display) if type_display else None
             ),
+            google_maps_type_label=(
+                LocalizedText.from_api(type_label) if type_label else None
+            ),
+            editorial_summary=(
+                LocalizedText.from_api(summary) if summary else None
+            ),
+            icon_mask_base_uri=data.get("iconMaskBaseUri"),
+            icon_background_color=data.get("iconBackgroundColor"),
+            opening_date=Date.from_api(opening) if opening else None,
+            utc_offset_minutes=_optional_int(
+                data.get("utcOffsetMinutes"), "Place", "utcOffsetMinutes"
+            ),
+            pure_service_area_business=data.get("pureServiceAreaBusiness"),
+            moved_place=data.get("movedPlace"),
+            moved_place_id=data.get("movedPlaceId"),
             photos=[Photo.from_api(p) for p in data.get("photos", [])],
             attributions=[Attribution.from_api(a) for a in data.get("attributions", [])],
+            reviews=[Review.from_api(r) for r in data.get("reviews", [])],
+            takeout=data.get("takeout"),
+            delivery=data.get("delivery"),
+            dine_in=data.get("dineIn"),
+            curbside_pickup=data.get("curbsidePickup"),
+            reservable=data.get("reservable"),
+            serves_breakfast=data.get("servesBreakfast"),
+            serves_lunch=data.get("servesLunch"),
+            serves_dinner=data.get("servesDinner"),
+            serves_beer=data.get("servesBeer"),
+            serves_wine=data.get("servesWine"),
+            serves_brunch=data.get("servesBrunch"),
+            serves_vegetarian_food=data.get("servesVegetarianFood"),
+            outdoor_seating=data.get("outdoorSeating"),
+            live_music=data.get("liveMusic"),
+            menu_for_children=data.get("menuForChildren"),
+            serves_cocktails=data.get("servesCocktails"),
+            serves_dessert=data.get("servesDessert"),
+            serves_coffee=data.get("servesCoffee"),
+            good_for_children=data.get("goodForChildren"),
+            allows_dogs=data.get("allowsDogs"),
+            restroom=data.get("restroom"),
+            good_for_groups=data.get("goodForGroups"),
+            good_for_watching_sports=data.get("goodForWatchingSports"),
+            payment_options=(
+                PaymentOptions.from_api(payment) if payment else None
+            ),
+            parking_options=(
+                ParkingOptions.from_api(parking) if parking else None
+            ),
+            accessibility_options=(
+                AccessibilityOptions.from_api(accessibility)
+                if accessibility
+                else None
+            ),
+            time_zone=TimeZone.from_api(time_zone) if time_zone else None,
+            generative_summary=(
+                GenerativeSummary.from_api(generative) if generative else None
+            ),
+            review_summary=(
+                ReviewSummary.from_api(review_summary) if review_summary else None
+            ),
+            consumer_alert=ConsumerAlert.from_api(alert) if alert else None,
+            google_maps_links=(
+                GoogleMapsLinks.from_api(links) if links else None
+            ),
+            price_range=PriceRange.from_api(price_range) if price_range else None,
+            ev_charge_options=EvChargeOptions.from_api(ev) if ev else None,
+            address_descriptor=(
+                AddressDescriptor.from_api(descriptor) if descriptor else None
+            ),
             raw=data,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class Leg:
+    """One leg of a routing summary.
+
+    The duration stays the wire string and is never parsed into an
+    interval, because the string carries routing semantics of its own.
+    """
+
+    duration: str = ""
+    distance_meters: Optional[int] = None
+
+    @classmethod
+    def from_api(cls, data: dict[str, Any]) -> "Leg":
+        return cls(
+            duration=data.get("duration", ""),
+            distance_meters=_optional_int(
+                data.get("distanceMeters"), "Leg", "distanceMeters"
+            ),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class RoutingSummary:
+    """A routing summary for a search result."""
+
+    legs: list[Leg] = field(default_factory=list)
+    directions_uri: Optional[str] = None
+
+    def __post_init__(self) -> None:
+        _reject_bare_string("RoutingSummary", "legs", self.legs)
+
+    @classmethod
+    def from_api(cls, data: dict[str, Any]) -> "RoutingSummary":
+        return cls(
+            legs=[Leg.from_api(leg) for leg in data.get("legs", [])],
+            directions_uri=data.get("directionsUri"),
         )
 
 
@@ -510,9 +1141,9 @@ class TextSearchResult:
     #: ``searchUri`` field was requested through the field mask.
     search_uri: Optional[str] = None
     #: Routing summaries, one per place, when requested through the field
-    #: mask and routing parameters were supplied. Unmodeled entries are
-    #: preserved as dicts.
-    routing_summaries: list[dict[str, Any]] = field(default_factory=list)
+    #: mask and routing parameters were supplied. Typed since round 6;
+    #: the untyped dict form stays reachable through ``raw``.
+    routing_summaries: list[RoutingSummary] = field(default_factory=list)
     raw: dict[str, Any] = field(default_factory=dict, repr=False, compare=False)
 
     def __post_init__(self) -> None:
@@ -528,7 +1159,10 @@ class TextSearchResult:
             places=[Place.from_api(p) for p in data.get("places", [])],
             next_page_token=data.get("nextPageToken"),
             search_uri=data.get("searchUri"),
-            routing_summaries=list(data.get("routingSummaries", [])),
+            routing_summaries=[
+                RoutingSummary.from_api(s)
+                for s in data.get("routingSummaries", [])
+            ],
             raw=data,
         )
 
@@ -546,7 +1180,7 @@ class NearbySearchResult:
     places: list[Place]
     #: Routing summaries, one per place, when requested through the field
     #: mask and routing parameters were supplied.
-    routing_summaries: list[dict[str, Any]] = field(default_factory=list)
+    routing_summaries: list[RoutingSummary] = field(default_factory=list)
     raw: dict[str, Any] = field(default_factory=dict, repr=False, compare=False)
 
     def __post_init__(self) -> None:
@@ -560,7 +1194,10 @@ class NearbySearchResult:
         data = copy.deepcopy(data)
         return cls(
             places=[Place.from_api(p) for p in data.get("places", [])],
-            routing_summaries=list(data.get("routingSummaries", [])),
+            routing_summaries=[
+                RoutingSummary.from_api(s)
+                for s in data.get("routingSummaries", [])
+            ],
             raw=data,
         )
 
@@ -742,8 +1379,20 @@ class PhotoUriResult:
     of following its redirect.
 
     Returned by ``place_photo`` when ``skip_http_redirect`` is set.
-    ``photo_uri`` is short lived; render or fetch it promptly.
+    ``photo_uri`` is short lived; render or fetch it promptly. The
+    full JSON form the endpoint returned is preserved on ``raw``,
+    including any fields this client version does not model yet.
     """
 
     photo_uri: str
     name: str = ""
+    raw: dict[str, Any] = field(default_factory=dict, repr=False, compare=False)
+
+    @classmethod
+    def from_api(cls, data: dict[str, Any]) -> "PhotoUriResult":
+        data = copy.deepcopy(data)
+        return cls(
+            photo_uri=data.get("photoUri", ""),
+            name=data.get("name", ""),
+            raw=data,
+        )
