@@ -2,6 +2,8 @@
 # the workflows), so Dependabot watches them and opens a pull request
 # when a pinned action moves.
 
+version: 2
+
 updates:
   - package-ecosystem: "github-actions"
     directory: "/"
