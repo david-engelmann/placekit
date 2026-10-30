@@ -19,6 +19,9 @@ All notable changes to placekit are recorded here. The format follows Keep a Cha
 - `scripts/check_no_emdash.py`, a codepoint scan that keeps em dashes out of tracked text files.
 - Core side validation of request coordinates, circle radii and EV charging rates, so non-finite or out-of-range values fail locally with a configuration error instead of serializing as JSON null or passing to the API unchanged.
 - `Retry-After` headers in HTTP date form are read alongside the delta seconds form, with a date in the past meaning retry now.
+- A stubtest step in `make check`, running mypy against the shipped type stubs so stub drift fails the gate instead of shipping. The dev extras now carry mypy and maturin on the same pins the build itself uses.
+- Version coherence coverage for `Cargo.lock` in `scripts/check_version.py`, with tests that copy the repo layout, mutate one carrier of the version, and watch the guard fail. The guard also accepts prerelease version headings in this changelog.
+- A Dependabot configuration proposing weekly updates for the GitHub Actions both workflows use.
 
 ### Changed
 
@@ -43,6 +46,12 @@ All notable changes to placekit are recorded here. The format follows Keep a Cha
 - `Place.opening_hours` gains the alias `Place.regular_opening_hours`, matching its wire name.
 - The README now leads with the prebuilt wheel install story, and building from source moved into a collapsed section.
 - Text Search drops its duplicate `max_results` parameter, leaving `page_size` as the one spelling for that endpoint. Nearby Search keeps `max_results`, which maps to its own endpoint's `maxResultCount` field. Passing `max_results` to `text_search` now raises a plain `TypeError`, like any unknown keyword.
+- Every GitHub Action in both workflows is pinned to a commit SHA with the resolved version in a trailing comment, including the PyPI publish action, which previously tracked a moving branch. The workflows declare per-job permissions and no longer persist checkout credentials.
+- Release builds no longer target the retired macos-13 runner image, which had left the macOS Intel wheel leg unable to start, and the macOS legs now pin their deployment targets, 10.12 for Intel and 11.0 for Apple silicon.
+- Publishing is gated on an install matrix that installs and imports every built wheel on its own platform plus the sdist, with a Python 3.10 leg exercising the abi3 floor, and every test install is hermetic, so a job can never silently test the published package instead of the artifact it just built. The publish job runs only on version tag pushes, the tag pattern accepts version tags only, and a publish in flight is never cancelled by a re-run.
+- The declared Rust floor is 1.88, the oldest toolchain that compiles the locked dependency set, up from a declared 1.74 that the locked dependencies no longer support. The pin lives in a new `rust-toolchain.toml` and in CI, and Cargo and maturin invocations in the gate and the workflows now run with `--locked` wherever the flag is accepted.
+- Package metadata uses the SPDX license expression form, carries project URLs and a Python 3.14 classifier, and aligns the keyword list with the Cargo metadata.
+- The source distribution no longer ships the CI configuration under `.github`.
 
 ### Fixed
 

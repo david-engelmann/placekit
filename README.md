@@ -6,9 +6,15 @@ A modern client for the Google Places API (New), with a Rust core and a Python s
 pip install placekit
 ```
 
-Prebuilt wheels cover CPython 3.10 and newer on Linux (x86_64 and aarch64), macOS (Intel and Apple silicon), and Windows. Installing is a single small download with zero runtime dependencies: there is nothing to compile and no Rust toolchain is needed. Only if your platform has no wheel does pip fall back to the source distribution, which builds with maturin and a Rust toolchain.
+Prebuilt wheels cover CPython 3.10 and newer on Linux (x86_64 and aarch64 with glibc 2.28 or newer), macOS (Intel on 10.12 or newer, Apple silicon on 11 or newer), and Windows (x64). Installing is a single small download with zero runtime dependencies. There is nothing to compile and no Rust toolchain is needed. Only if your platform has no wheel does pip fall back to the source distribution. That happens on musl systems such as Alpine and on anything below the floors above, and a source install has its own requirements, covered under Building from source below.
 
 Most Places libraries in Python are wrappers around the retired legacy API, or thin HTTP helpers that hand you back raw JSON. placekit targets the current Places API (New) end to end, with typed request building, field masks as a first-class feature, dataclass response models, and an exception hierarchy that tells you what actually went wrong.
+
+## Building from source
+
+When pip finds no wheel it downloads the source distribution and builds it locally. That build needs a Rust toolchain at version 1.88 or newer (rustup installs one), network access while it downloads the crate dependencies from crates.io, and the platform C toolchain. With those in place a source install just works, only slower than a wheel.
+
+Without a Rust toolchain the build backend tries to download and bootstrap one by itself, and when that fails the error talks about cargo metadata rather than the missing toolchain. If a source install fails, install Rust first and retry before debugging anything else. Wheels remain the recommended path wherever one exists.
 
 ## Quickstart
 
@@ -46,7 +52,7 @@ The sync `Client` refuses to run inside a running event loop, raising a `ConfigE
 
 ## Why a Rust core
 
-- One abi3 wheel per platform serves every Python from 3.10 up. Installs are a single small download, with no compiler, no build step, and zero runtime dependencies.
+- One abi3 wheel per platform serves every Python from 3.10 up, so installs on the platforms above are a single small download with no compiler, no build step, and zero runtime dependencies.
 - TLS comes from rustls, never OpenSSL, so wheels do not break across system library versions.
 - Requests are typed and validated in Rust before anything goes over the wire. A bad field mask or an out-of-range photo size fails locally, not at the API.
 - The sync and async clients share one core, so their behavior cannot drift apart.
@@ -117,15 +123,17 @@ client = Client("YOUR_API_KEY", base_url="http://127.0.0.1:8080/v1", timeout=5.0
 
 ## Development
 
-You need a Rust toolchain and Python 3.10 or newer. The dev loop builds in debug mode, so it stays fast:
+You need a Rust toolchain at version 1.88 or newer and Python 3.10 or newer. The dev loop builds in debug mode, so it stays fast.
 
 ```bash
 python -m venv .venv
-.venv/bin/pip install maturin pytest
+.venv/bin/pip install -e '.[dev]'
 .venv/bin/maturin develop
 .venv/bin/python -m pytest
 cargo test -p placekit-core
 ```
+
+On Windows the venv binaries live under `.venv\Scripts`, so the same steps use `.venv\Scripts\pip`, `.venv\Scripts\maturin` and `.venv\Scripts\python`.
 
 `maturin develop` compiles the Rust core without optimizations and installs it into the venv; iterate with the targeted commands above. The full gate is one command, and CI runs it word for word:
 
@@ -133,7 +141,7 @@ cargo test -p placekit-core
 make check
 ```
 
-That runs the rustfmt and clippy checks, the Rust test suite, a version coherence check across the manifests and changelog, an em dash scan, and the Python suite.
+That runs the rustfmt and clippy checks, the Rust test suite, a version coherence check across the manifests, the lockfile and the changelog, an em dash scan, a stubtest pass over the type stubs, and the Python suite.
 
 The test suites need no Google API key and no network. Python tests run against a local stub server that serves recorded fixtures, and the Rust tests decode the same fixtures.
 
@@ -141,12 +149,16 @@ The test suites need no Google API key and no network. Python tests run against 
 <summary>Build a release wheel from source</summary>
 
 ```bash
-pip install maturin
+pip install "maturin>=1.7,<2.0"
 maturin build --release
 pip install target/wheels/*.whl
 ```
 
-You normally never need this: wheels for Linux, macOS, and Windows are built by GitHub Actions inside manylinux containers and on native arm runners, and pushing a version tag publishes them to PyPI through trusted publishing from the same workflow.
+You normally never need this. The Linux wheels are built by GitHub Actions inside manylinux containers, the macOS and Windows wheels are built on native runners for their architectures, and pushing a version tag publishes them to PyPI through trusted publishing from the same workflow.
+
+A wheel built this way on a local machine is tied to that machine. On Linux it carries the local glibc as its floor, 2.34 on a current Ubuntu, not the manylinux 2_28 floor of the released wheels. A local build is for testing and is never a substitute for a released wheel.
+
+Each wheel also carries a CycloneDX SBOM from the build, roughly a tenth of the download, listing the crate dependencies compiled into the core.
 
 </details>
 
