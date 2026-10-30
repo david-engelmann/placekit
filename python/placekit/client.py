@@ -152,7 +152,59 @@ def _circle_body(
     }
 
 
-def _location_body(value: Optional[dict[str, Any]]) -> Optional[dict[str, Any]]:
+#: Wire names of the documented list-of-strings fields that can
+#: appear inside the free-form dict body parameters. A bare string in
+#: one of these slots is a list the caller forgot to write out; the
+#: generic converter iterates a string as a sequence, so it would
+#: reach the wire shredded into one-character strings (RT5-L1).
+_DICT_LIST_FIELDS = frozenset(
+    {
+        "connectorTypes",
+        "includedTypes",
+        "excludedTypes",
+        "includedPrimaryTypes",
+        "excludedPrimaryTypes",
+        "includedRegionCodes",
+        "priceLevels",
+    }
+)
+
+#: The deepest nesting accepted inside a free-form dict body
+#: parameter. Past it the structure is cyclic or absurd, and the
+#: caller gets a ConfigError instead of a RecursionError.
+_MAX_DICT_DEPTH = 128
+
+
+def _validate_dict_body(name: str, value: Any, depth: int = 0) -> None:
+    """Recursively guard one free-form dict body parameter.
+
+    Only the documented list-typed fields are checked, but they are
+    checked at any nesting depth, so a bare string can never be
+    iterated anywhere in body building. Everything else in these
+    dicts is free-form by design and passes through untouched.
+    """
+    if depth > _MAX_DICT_DEPTH:
+        raise ConfigError(
+            f"{name} is nested deeper than {_MAX_DICT_DEPTH} levels; "
+            "check for a self-referential structure"
+        )
+    if isinstance(value, Mapping):
+        for key, item in value.items():
+            if key in _DICT_LIST_FIELDS and isinstance(item, (str, bytes)):
+                raise ConfigError(
+                    f"{name} field {key!r} must be a list of strings, "
+                    f"not a single string: {item!r}"
+                )
+            _validate_dict_body(name, item, depth + 1)
+    elif isinstance(value, (list, tuple)):
+        for item in value:
+            _validate_dict_body(name, item, depth + 1)
+
+
+def _location_body(
+    value: Optional[dict[str, Any]],
+    name: str = "location bias or restriction",
+) -> Optional[dict[str, Any]]:
     """Normalize a location bias or restriction dict into wire shape.
 
     Callers may describe a circle as ``{"circle": {"center":
@@ -189,6 +241,7 @@ def _location_body(value: Optional[dict[str, Any]]) -> Optional[dict[str, Any]]:
                     point, f"rectangle {corner} corner"
                 )
         result["rectangle"] = rectangle
+    _validate_dict_body(name, result)
     return result
 
 
@@ -203,6 +256,7 @@ def _routing_body(value: Optional[dict[str, Any]]) -> Optional[dict[str, Any]]:
     origin = result.get("origin")
     if isinstance(origin, (LatLng, tuple, list, Mapping)):
         result["origin"] = _validate_lat_lng(origin, "routing origin")
+    _validate_dict_body("routing_parameters", result)
     return result
 
 
@@ -212,7 +266,9 @@ def _mapping_body(name: str, value: Optional[dict[str, Any]]) -> Optional[dict[s
         return None
     if not isinstance(value, Mapping):
         raise ConfigError(f"{name} must be a dict, got {value!r}")
-    return dict(value)
+    result = dict(value)
+    _validate_dict_body(name, result)
+    return result
 
 
 def _photo_result(tagged: tuple[str, Any, Any]) -> PhotoMedia | PhotoUriResult:
@@ -466,8 +522,10 @@ class _Base:
                     "strict_type_filtering", strict_type_filtering
                 ),
                 "includedType": included_type,
-                "locationBias": _location_body(location_bias),
-                "locationRestriction": _location_body(location_restriction),
+                "locationBias": _location_body(location_bias, "location_bias"),
+                "locationRestriction": _location_body(
+                    location_restriction, "location_restriction"
+                ),
                 "pageSize": _Base._validate_int_range(
                     "page_size", page_size, 1, 20
                 ),
@@ -560,8 +618,10 @@ class _Base:
                 "includeQueryPredictions": _validate_bool(
                     "include_query_predictions", include_query_predictions
                 ),
-                "locationBias": _location_body(location_bias),
-                "locationRestriction": _location_body(location_restriction),
+                "locationBias": _location_body(location_bias, "location_bias"),
+                "locationRestriction": _location_body(
+                    location_restriction, "location_restriction"
+                ),
                 "origin": (
                     _validate_lat_lng(origin, "origin")
                     if origin is not None

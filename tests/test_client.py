@@ -1587,3 +1587,62 @@ def test_deeply_nested_body_within_bound_still_works(client, stub_server):
         nested = {"bundles": [nested]}
     client.text_search("cafes", ev_options=nested)
     assert stub_server.last_request is not None
+
+
+def test_dict_body_bare_string_list_field_rejected_sync_and_async(
+    client, stub_server, api_key, base_url
+):
+    # Round 5 repair (RT5-L1): the red team's exact case. A bare
+    # string in the ev_options dict body used to reach the wire
+    # shredded into one-character strings, because dict parameters
+    # passed through unchecked. The error names the parameter and
+    # the field, and no request reaches the stub, sync or async.
+    stub_server.last_request = None
+    with pytest.raises(ConfigError) as excinfo:
+        client.text_search(
+            "pizza",
+            ev_options={"connectorTypes": "EV_CONNECTOR_TYPE_OTHER"},
+        )
+    assert "ev_options" in str(excinfo.value)
+    assert "connectorTypes" in str(excinfo.value)
+    assert stub_server.last_request is None
+    with pytest.raises(ConfigError):
+        client.text_search(
+            "pizza", ev_options={"connectorTypes": b"EV_CONNECTOR_TYPE_OTHER"}
+        )
+    assert stub_server.last_request is None
+    # The same guard at nesting depth, inside a list inside the dict.
+    with pytest.raises(ConfigError):
+        client.text_search(
+            "pizza",
+            ev_options={"bundles": [{"connectorTypes": "EV_CONNECTOR_TYPE_OTHER"}]},
+        )
+    assert stub_server.last_request is None
+
+    async def run():
+        async_client = AsyncClient(api_key, base_url=base_url)
+        with pytest.raises(ConfigError) as excinfo:
+            await async_client.text_search(
+                "pizza", ev_options={"connectorTypes": "AB"}
+            )
+        assert "connectorTypes" in str(excinfo.value)
+        assert stub_server.last_request is None
+
+    asyncio.run(run())
+
+
+def test_dict_body_proper_list_passes_verbatim(client, stub_server):
+    # Round 5 repair (RT5-L1), positive control: a proper list in the
+    # same slot reaches the wire exactly as given.
+    client.text_search(
+        "pizza",
+        ev_options={
+            "connectorTypes": ["EV_CONNECTOR_TYPE_OTHER"],
+            "minimumChargingRateKw": 50.0,
+        },
+    )
+    body = json.loads(stub_server.last_request["body"])
+    assert body["evOptions"] == {
+        "connectorTypes": ["EV_CONNECTOR_TYPE_OTHER"],
+        "minimumChargingRateKw": 50.0,
+    }
