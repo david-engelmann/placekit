@@ -6,7 +6,7 @@ rust-version = "1.88"
 license = "MIT"
 description = "Modern Google Places API (New) client for Python, powered by a Rust core"
 readme = "README.md"
-exclude = [".github/*"]
+exclude = [".github/*", "rust-toolchain.toml"]
 keywords = ["google-places", "places", "geocoding", "pyo3", "maps"]
 categories = ["api-bindings"]
 

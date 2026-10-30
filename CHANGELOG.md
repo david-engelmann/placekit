@@ -76,6 +76,7 @@ All notable changes to placekit are recorded here. The format follows Keep a Cha
 - Calling the sync `Client` from inside a running event loop raises `ConfigError` pointing at `AsyncClient` instead of freezing the loop for the request duration.
 - Pickling or copying a client raises a `TypeError` naming placekit and the real reason, instead of an error naming a phantom `builtins.Client` class, and shallow copy no longer silently shares the live native client.
 - The shipped type stubs match the runtime, with constructors for `Place` and `PlacePrediction`, optional `fields` on the native methods, `retry_after` as a float, the frozen `FieldMask` dataclass, and `raise_translated` declared with its `NoReturn` type.
+- The source distribution no longer ships the repo toolchain pin file, whose component list made rustup roll back its own sync and left source builds without a working cargo. Source builds now follow the manifest Rust version with the toolchain the builder already has, and the pin keeps applying to work inside the repo itself.
 
 ## [0.1.0] - 2026-10-28
 
