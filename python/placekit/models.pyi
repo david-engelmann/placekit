@@ -1,8 +1,10 @@
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, ClassVar, Optional
 
+@dataclass(frozen=True, slots=True)
 class LocalizedText:
-    __match_args__: tuple[str, ...] = ('text', 'language_code')
+    __match_args__: ClassVar[tuple[str, ...]] = ('text', 'language_code')
     text: str
     language_code: Optional[str]
     def __init__(
@@ -11,8 +13,9 @@ class LocalizedText:
     @classmethod
     def from_api(cls, data: dict[str, Any]) -> "LocalizedText": ...
 
+@dataclass(frozen=True, slots=True)
 class LatLng:
-    __match_args__: tuple[str, ...] = ('latitude', 'longitude')
+    __match_args__: ClassVar[tuple[str, ...]] = ('latitude', 'longitude')
     latitude: float
     longitude: float
     def __init__(self, latitude: float, longitude: float) -> None: ...
@@ -21,8 +24,9 @@ class LatLng:
     def from_api(cls, data: dict[str, Any]) -> "LatLng": ...
     def to_api(self) -> dict[str, float]: ...
 
+@dataclass(frozen=True, slots=True)
 class AuthorAttribution:
-    __match_args__: tuple[str, ...] = ('display_name', 'uri', 'photo_uri')
+    __match_args__: ClassVar[tuple[str, ...]] = ('display_name', 'uri', 'photo_uri')
     display_name: str
     uri: str
     photo_uri: str
@@ -32,16 +36,18 @@ class AuthorAttribution:
     @classmethod
     def from_api(cls, data: dict[str, Any]) -> "AuthorAttribution": ...
 
+@dataclass(frozen=True, slots=True)
 class Attribution:
-    __match_args__: tuple[str, ...] = ('provider', 'provider_uri')
+    __match_args__: ClassVar[tuple[str, ...]] = ('provider', 'provider_uri')
     provider: str
     provider_uri: str
     def __init__(self, provider: str = ..., provider_uri: str = ...) -> None: ...
     @classmethod
     def from_api(cls, data: dict[str, Any]) -> "Attribution": ...
 
+@dataclass(frozen=True, slots=True)
 class Photo:
-    __match_args__: tuple[str, ...] = ('name', 'width_px', 'height_px', 'author_attributions', 'flag_content_uri', 'google_maps_uri')
+    __match_args__: ClassVar[tuple[str, ...]] = ('name', 'width_px', 'height_px', 'author_attributions', 'flag_content_uri', 'google_maps_uri')
     name: str
     width_px: int
     height_px: int
@@ -60,8 +66,9 @@ class Photo:
     @classmethod
     def from_api(cls, data: dict[str, Any]) -> "Photo": ...
 
+@dataclass(frozen=True, slots=True)
 class Date:
-    __match_args__: tuple[str, ...] = ('year', 'month', 'day')
+    __match_args__: ClassVar[tuple[str, ...]] = ('year', 'month', 'day')
     year: int
     month: int
     day: int
@@ -71,8 +78,9 @@ class Date:
     @classmethod
     def from_api(cls, data: dict[str, Any]) -> "Date": ...
 
+@dataclass(frozen=True, slots=True)
 class OpeningPoint:
-    __match_args__: tuple[str, ...] = ('date', 'truncated', 'day', 'hour', 'minute')
+    __match_args__: ClassVar[tuple[str, ...]] = ('date', 'truncated', 'day', 'hour', 'minute')
     date: Optional[Date]
     truncated: Optional[bool]
     day: Optional[int]
@@ -89,8 +97,9 @@ class OpeningPoint:
     @classmethod
     def from_api(cls, data: dict[str, Any]) -> "OpeningPoint": ...
 
+@dataclass(frozen=True, slots=True)
 class Period:
-    __match_args__: tuple[str, ...] = ('open', 'close')
+    __match_args__: ClassVar[tuple[str, ...]] = ('open', 'close')
     open: Optional[OpeningPoint]
     close: Optional[OpeningPoint]
     def __init__(
@@ -101,8 +110,9 @@ class Period:
     @classmethod
     def from_api(cls, data: dict[str, Any]) -> "Period": ...
 
+@dataclass(frozen=True, slots=True)
 class OpeningHours:
-    __match_args__: tuple[str, ...] = ('open_now', 'periods', 'weekday_descriptions')
+    __match_args__: ClassVar[tuple[str, ...]] = ('open_now', 'periods', 'weekday_descriptions')
     open_now: Optional[bool]
     periods: list[Period]
     weekday_descriptions: list[str]
@@ -115,8 +125,9 @@ class OpeningHours:
     @classmethod
     def from_api(cls, data: dict[str, Any]) -> "OpeningHours": ...
 
+@dataclass(frozen=True, slots=True)
 class AddressComponent:
-    __match_args__: tuple[str, ...] = ('long_text', 'short_text', 'types', 'language_code')
+    __match_args__: ClassVar[tuple[str, ...]] = ('long_text', 'short_text', 'types', 'language_code')
     long_text: str
     short_text: str
     types: list[str]
@@ -131,8 +142,9 @@ class AddressComponent:
     @classmethod
     def from_api(cls, data: dict[str, Any]) -> "AddressComponent": ...
 
+@dataclass(frozen=True, slots=True)
 class PlusCode:
-    __match_args__: tuple[str, ...] = ('global_code', 'compound_code')
+    __match_args__: ClassVar[tuple[str, ...]] = ('global_code', 'compound_code')
     global_code: str
     compound_code: Optional[str]
     def __init__(
@@ -141,16 +153,18 @@ class PlusCode:
     @classmethod
     def from_api(cls, data: dict[str, Any]) -> "PlusCode": ...
 
+@dataclass(frozen=True, slots=True)
 class Viewport:
-    __match_args__: tuple[str, ...] = ('low', 'high')
+    __match_args__: ClassVar[tuple[str, ...]] = ('low', 'high')
     low: LatLng
     high: LatLng
     def __init__(self, low: LatLng, high: LatLng) -> None: ...
     @classmethod
     def from_api(cls, data: dict[str, Any]) -> "Viewport": ...
 
+@dataclass(frozen=True, slots=True)
 class PostalAddress:
-    __match_args__: tuple[str, ...] = ('region_code', 'language_code', 'postal_code', 'administrative_area', 'locality', 'address_lines')
+    __match_args__: ClassVar[tuple[str, ...]] = ('region_code', 'language_code', 'postal_code', 'administrative_area', 'locality', 'address_lines')
     region_code: Optional[str]
     language_code: Optional[str]
     postal_code: Optional[str]
@@ -169,8 +183,9 @@ class PostalAddress:
     @classmethod
     def from_api(cls, data: dict[str, Any]) -> "PostalAddress": ...
 
+@dataclass(frozen=True, slots=True)
 class Place:
-    __match_args__: tuple[str, ...] = ('id', 'name', 'display_name', 'formatted_address', 'short_formatted_address', 'location', 'types', 'primary_type', 'rating', 'user_rating_count', 'price_level', 'business_status', 'national_phone_number', 'international_phone_number', 'website_uri', 'google_maps_uri', 'opening_hours', 'current_opening_hours', 'address_components', 'plus_code', 'viewport', 'postal_address', 'adr_format_address', 'primary_type_display_name', 'photos', 'attributions', 'raw')
+    __match_args__: ClassVar[tuple[str, ...]] = ('id', 'name', 'display_name', 'formatted_address', 'short_formatted_address', 'location', 'types', 'primary_type', 'rating', 'user_rating_count', 'price_level', 'business_status', 'national_phone_number', 'international_phone_number', 'website_uri', 'google_maps_uri', 'opening_hours', 'current_opening_hours', 'address_components', 'plus_code', 'viewport', 'postal_address', 'adr_format_address', 'primary_type_display_name', 'photos', 'attributions', 'raw')
     id: str
     name: str
     display_name: Optional[LocalizedText]
@@ -235,8 +250,9 @@ class Place:
     @classmethod
     def from_api(cls, data: dict[str, Any]) -> "Place": ...
 
+@dataclass(frozen=True, slots=True)
 class TextSearchResult:
-    __match_args__: tuple[str, ...] = ('places', 'next_page_token', 'search_uri', 'routing_summaries', 'raw')
+    __match_args__: ClassVar[tuple[str, ...]] = ('places', 'next_page_token', 'search_uri', 'routing_summaries', 'raw')
     places: list[Place]
     next_page_token: Optional[str]
     search_uri: Optional[str]
@@ -253,8 +269,9 @@ class TextSearchResult:
     @classmethod
     def from_api(cls, data: dict[str, Any]) -> "TextSearchResult": ...
 
+@dataclass(frozen=True, slots=True)
 class NearbySearchResult:
-    __match_args__: tuple[str, ...] = ('places', 'routing_summaries', 'raw')
+    __match_args__: ClassVar[tuple[str, ...]] = ('places', 'routing_summaries', 'raw')
     places: list[Place]
     routing_summaries: list[dict[str, Any]]
     raw: dict[str, Any]
@@ -267,16 +284,18 @@ class NearbySearchResult:
     @classmethod
     def from_api(cls, data: dict[str, Any]) -> "NearbySearchResult": ...
 
+@dataclass(frozen=True, slots=True)
 class StringMatch:
-    __match_args__: tuple[str, ...] = ('start_offset', 'end_offset')
+    __match_args__: ClassVar[tuple[str, ...]] = ('start_offset', 'end_offset')
     start_offset: int
     end_offset: int
     def __init__(self, start_offset: int = ..., end_offset: int = ...) -> None: ...
     @classmethod
     def from_api(cls, data: dict[str, Any]) -> "StringMatch": ...
 
+@dataclass(frozen=True, slots=True)
 class FormattedText:
-    __match_args__: tuple[str, ...] = ('text', 'matches')
+    __match_args__: ClassVar[tuple[str, ...]] = ('text', 'matches')
     text: str
     matches: list[StringMatch]
     def __init__(
@@ -285,8 +304,9 @@ class FormattedText:
     @classmethod
     def from_api(cls, data: dict[str, Any]) -> "FormattedText": ...
 
+@dataclass(frozen=True, slots=True)
 class PlacePrediction:
-    __match_args__: tuple[str, ...] = ('place_id', 'place', 'text', 'main_text', 'secondary_text', 'types', 'distance_meters', 'raw')
+    __match_args__: ClassVar[tuple[str, ...]] = ('place_id', 'place', 'text', 'main_text', 'secondary_text', 'types', 'distance_meters', 'raw')
     place_id: str
     place: str
     text: Optional[FormattedText]
@@ -309,8 +329,9 @@ class PlacePrediction:
     @classmethod
     def from_api(cls, data: dict[str, Any]) -> "PlacePrediction": ...
 
+@dataclass(frozen=True, slots=True)
 class QueryPrediction:
-    __match_args__: tuple[str, ...] = ('text', 'main_text', 'secondary_text', 'raw')
+    __match_args__: ClassVar[tuple[str, ...]] = ('text', 'main_text', 'secondary_text', 'raw')
     text: Optional[FormattedText]
     main_text: Optional[FormattedText]
     secondary_text: Optional[FormattedText]
@@ -325,8 +346,9 @@ class QueryPrediction:
     @classmethod
     def from_api(cls, data: dict[str, Any]) -> "QueryPrediction": ...
 
+@dataclass(frozen=True, slots=True)
 class Suggestion:
-    __match_args__: tuple[str, ...] = ('place_prediction', 'query_prediction', 'raw')
+    __match_args__: ClassVar[tuple[str, ...]] = ('place_prediction', 'query_prediction', 'raw')
     place_prediction: Optional[PlacePrediction]
     query_prediction: Optional[QueryPrediction]
     raw: dict[str, Any]
@@ -339,8 +361,9 @@ class Suggestion:
     @classmethod
     def from_api(cls, data: dict[str, Any]) -> "Suggestion": ...
 
+@dataclass(frozen=True, slots=True)
 class AutocompleteResult:
-    __match_args__: tuple[str, ...] = ('suggestions', 'raw')
+    __match_args__: ClassVar[tuple[str, ...]] = ('suggestions', 'raw')
     suggestions: list[Suggestion]
     raw: dict[str, Any]
     def __init__(
@@ -353,8 +376,9 @@ class AutocompleteResult:
     @classmethod
     def from_api(cls, data: dict[str, Any]) -> "AutocompleteResult": ...
 
+@dataclass(frozen=True, slots=True)
 class PhotoMedia:
-    __match_args__: tuple[str, ...] = ('content', 'content_type')
+    __match_args__: ClassVar[tuple[str, ...]] = ('content', 'content_type')
     content: bytes
     content_type: Optional[str]
     def __init__(
@@ -362,8 +386,9 @@ class PhotoMedia:
     ) -> None: ...
     def save(self, path: str | Path) -> Path: ...
 
+@dataclass(frozen=True, slots=True)
 class PhotoUriResult:
-    __match_args__: tuple[str, ...] = ('photo_uri', 'name')
+    __match_args__: ClassVar[tuple[str, ...]] = ('photo_uri', 'name')
     photo_uri: str
     name: str
     def __init__(self, photo_uri: str, name: str = ...) -> None: ...

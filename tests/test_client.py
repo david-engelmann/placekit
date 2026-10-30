@@ -1666,3 +1666,37 @@ def test_dict_body_proper_list_passes_verbatim(client, stub_server):
         "connectorTypes": ["EV_CONNECTOR_TYPE_OTHER"],
         "minimumChargingRateKw": 50.0,
     }
+
+
+def test_async_validation_guards_match_sync(api_key, base_url, stub_server):
+    # Round 5 repair (S-9, RC-11 pairing): the guard tests were sync
+    # only, so an async method routed around a shared builder would
+    # have passed the suite unnoticed. The string guard, the bool
+    # guard (typed slot and dict hatch) and the coordinate helper now
+    # have async mirrors, each asserting no request reached the stub.
+    async def run():
+        client = AsyncClient(api_key, base_url=base_url)
+        calls = (
+            lambda: client.text_search("cafes", fields="places.id"),
+            lambda: client.text_search(
+                "cafes", price_levels="PRICE_LEVEL_FREE"
+            ),
+            lambda: client.text_search("cafes", open_now="false"),
+            lambda: client.text_search(
+                "cafes",
+                routing_parameters={
+                    "routeModifiers": {"avoidTolls": "false"}
+                },
+            ),
+            lambda: client.nearby_search((91.0, 0.0), 100.0),
+            lambda: client.nearby_search({40.0, -70.0}, 100.0),
+            lambda: client.autocomplete("par", origin=(0.0, 181.0)),
+            lambda: client.autocomplete("par", input_offset=-1),
+        )
+        for call in calls:
+            stub_server.last_request = None
+            with pytest.raises(ConfigError):
+                await call()
+            assert stub_server.last_request is None
+
+    asyncio.run(run())
