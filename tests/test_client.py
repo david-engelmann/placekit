@@ -1489,14 +1489,21 @@ def test_place_regular_opening_hours_alias():
 
 
 def test_repr_and_equality_exclude_raw():
-    # RC-19: repr stays readable (no whole-payload dump) and two
-    # decodes of the same payload compare equal on modelled fields.
+    # RC-19: repr and equality are about the modelled fields only.
+    # The two payloads differ ONLY in unmodelled raw content, so the
+    # equality assertion fails the moment raw takes part in
+    # comparison, and the repr assertions pin both halves directly:
+    # modelled fields are shown, the raw payload is not dumped.
     from placekit.models import PhotoMedia, Place
 
-    first = Place.from_api({"id": "A", "rating": 4.0})
-    second = Place.from_api({"id": "A", "rating": 4.0})
+    first = Place.from_api({"id": "A", "rating": 4.0, "unmodelled": 1})
+    second = Place.from_api({"id": "A", "rating": 4.0, "unmodelled": 2})
+    assert first.raw != second.raw
+    assert first.raw["unmodelled"] == 1
+    assert second.raw["unmodelled"] == 2
     assert first == second
-    assert "rating" not in repr(first) or "4.0" in repr(first)
+    assert "rating=4.0" in repr(first)
+    assert "'unmodelled': 1" not in repr(first)
     assert "'id': 'A'" not in repr(first)
     media = PhotoMedia(content=b"\x89PNG-long-payload", content_type="image/png")
     assert "PNG-long" not in repr(media)
