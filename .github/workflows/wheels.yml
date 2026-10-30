@@ -18,8 +18,8 @@
 # project on PyPI, with environment name "pypi". The publish job first
 # checks that the tag version matches the manifests and the changelog,
 # and refuses to publish otherwise. It can only run on a version tag
-# push: its condition requires a tag ref, so workflow_dispatch and pull
-# requests can never reach it.
+# push: its condition requires both the push event and a tag ref, so
+# workflow_dispatch and pull requests can never reach it.
 #
 # All third party actions are pinned to commit SHAs, with the version
 # each SHA resolves recorded in a trailing comment. Dependabot
@@ -254,9 +254,10 @@ jobs:
 
   publish:
     name: Publish to PyPI
-    # Only a version tag push can publish. workflow_dispatch and pull
-    # requests never satisfy this condition.
-    if: startsWith(github.ref, 'refs/tags/v')
+    # Only a version tag push can publish. The condition requires the
+    # push event as well as a tag ref, so a workflow_dispatch run
+    # started from a tag and any pull request both fail it.
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     needs: [linux, windows, macos, sdist, test-wheel]
     runs-on: ubuntu-24.04
     timeout-minutes: 30
