@@ -38,6 +38,7 @@ All notable changes to placekit are recorded here. The format follows Keep a Cha
 ### Changed
 
 - **Breaking.** StringMatch offsets are now optional. A match the API returned without a start or end offset now reports None for that offset instead of a fabricated 0, so an absent offset and a sent 0 are distinguishable again. Callers who need the old behaviour can write match.start_offset or 0. In the same release, every model class that decodes from a JSON object now carries that object on a raw attribute, matching the behaviour Place and the result classes always had. Constructor signatures gain the raw parameter last, with a default, and match args gain raw last.
+- Because every raw is a deep copy of its payload, a decoded result now holds its response payload about twice over, once across the typed fields and once across the raw attributes.
 - **Breaking.** Search result `routing_summaries` are typed `RoutingSummary` objects with `Leg` entries instead of untyped dicts, on both text and nearby results. The dict form stays reachable unchanged through the result level `raw`, so no response data is lost in the change.
 - A circle in a Text Search location restriction now raises `ConfigError`, the same type as the other local validations, instead of a bare `ValueError` outside the exception hierarchy.
 - Client construction and `FieldMask` raise `ConfigError` for empty keys, invalid timeouts and invalid mask paths instead of bare `ValueError`, so every local misuse has the one documented type.

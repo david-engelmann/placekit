@@ -26,7 +26,6 @@ from .exceptions import (
     RateLimitError,
 )
 from .fields import FieldMask
-from . import lang, ranking, types
 from .models import (
     AccessibilityOptions,
     AddressComponent,
@@ -72,6 +71,7 @@ from .models import (
     TimeZone,
     Viewport,
 )
+from . import lang, ranking, types
 
 try:
     from importlib.metadata import PackageNotFoundError, version as _metadata_version

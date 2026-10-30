@@ -118,7 +118,9 @@ class LocalizedText:
     @classmethod
     def from_api(cls, data: dict[str, Any]) -> "LocalizedText":
         data = copy.deepcopy(data)
-        return cls(text=data.get("text", ""), language_code=data.get("languageCode"), raw=data)
+        return cls(
+            text=data.get("text", ""), language_code=data.get("languageCode"), raw=data
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -195,7 +197,11 @@ class Attribution:
     @classmethod
     def from_api(cls, data: dict[str, Any]) -> "Attribution":
         data = copy.deepcopy(data)
-        return cls(provider=data.get("provider", ""), provider_uri=data.get("providerUri", ""), raw=data)
+        return cls(
+            provider=data.get("provider", ""),
+            provider_uri=data.get("providerUri", ""),
+            raw=data,
+        )
 
 
 @dataclass(frozen=True, slots=True)
