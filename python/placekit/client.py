@@ -275,10 +275,15 @@ def _mapping_body(name: str, value: Optional[dict[str, Any]]) -> Optional[dict[s
 
 
 def _photo_result(tagged: tuple[str, Any, Any]) -> PhotoMedia | PhotoUriResult:
-    """Turn the core's tagged photo tuple into a public model."""
+    """Turn the core's tagged photo tuple into a public model.
+
+    The uri arm's third element is the whole JSON form the endpoint
+    returned, as a dict; the model is built from it so the full form
+    is preserved on the result's ``raw``.
+    """
     tag, first, second = tagged
     if tag == "uri":
-        return PhotoUriResult(photo_uri=first, name=second or "")
+        return PhotoUriResult.from_api(second)
     if tag == "bytes":
         return PhotoMedia(content=first, content_type=second)
     raise DecodeError(f"photo result carried an unknown tag: {tag!r}")
@@ -878,7 +883,8 @@ class Client(_Base):
         By default this follows the endpoint's redirect and returns a
         ``PhotoMedia`` with the image bytes. With
         ``skip_http_redirect=True`` it returns a ``PhotoUriResult``
-        carrying the photo's short lived URI instead.
+        carrying the photo's short lived URI instead, with the full
+        JSON form the endpoint returned preserved on its ``raw``.
         """
         context = f"place_photo name={photo_name}"
         self._ensure_open("place_photo")

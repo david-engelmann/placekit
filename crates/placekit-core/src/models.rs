@@ -975,12 +975,20 @@ mod tests {
 
     #[test]
     fn unknown_fields_are_preserved_in_extra() {
-        let mut place: Place = serde_json::from_str(PLACE_DETAILS_JSON).unwrap();
-        // `editorialSummary` is not modeled by this client version.
-        assert!(place.extra.contains_key("editorialSummary"));
+        // `zzUnmodelled` stands for any field no layer of this client
+        // models. It is injected into the fixture payload so the
+        // example cannot quietly become a modelled field later (the
+        // previous example, editorialSummary, was typed in Round 6).
+        let mut payload: Value = serde_json::from_str(PLACE_DETAILS_JSON).unwrap();
+        payload.as_object_mut().unwrap().insert(
+            "zzUnmodelled".to_owned(),
+            serde_json::json!({"text": "unmodelled"}),
+        );
+        let mut place: Place = serde_json::from_value(payload).unwrap();
+        assert!(place.extra.contains_key("zzUnmodelled"));
         // And it survives a re-serialization round trip.
         let value = serde_json::to_value(&place).unwrap();
-        assert!(value.get("editorialSummary").is_some());
+        assert!(value.get("zzUnmodelled").is_some());
         place.extra.clear();
     }
 

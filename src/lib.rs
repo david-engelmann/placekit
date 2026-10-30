@@ -299,8 +299,11 @@ where
 
 /// Photo results cross the boundary as a tagged 3-tuple so the Python
 /// layer can tell the two wire forms apart: `("bytes", content, content
-/// type)` for the downloaded image, `("uri", photo_uri, name)` when the
-/// redirect was skipped and the endpoint answered with JSON.
+/// type)` for the downloaded image, `("uri", photo_uri, body)` when the
+/// redirect was skipped and the endpoint answered with JSON, where the
+/// body is the whole JSON form (typed fields plus anything the core
+/// preserved unmodelled) as a dict, so the Python layer can build its
+/// model, raw included, from the one value.
 /// A photo result conversion failure is a decode failure of this
 /// layer (R4-22), reported inside the exception hierarchy like every
 /// other conversion failure here, never as a bare PyValueError.
@@ -343,20 +346,24 @@ fn photo_to_py(
                 .map_err(|e| photo_conversion_err(py, e))?
                 .unbind()
                 .into_any();
+            // The whole JSON form crosses, not just the two typed
+            // fields: PhotoMediaJson flattens what the core does not
+            // type into its extra map, and the Python model's raw is
+            // built from this dict. Passing only name and photo_uri
+            // here dropped the extra fields at this boundary, the one
+            // outright loss in the response path. The serialization
+            // borrows media, so it runs before the uri conversion
+            // below moves the field out.
+            let json = serde_json::to_value(&media).map_err(|e| photo_conversion_err(py, e))?;
+            let body = value_to_py(py, &json).map_err(|e| photo_conversion_err(py, e))?;
             let uri = media
                 .photo_uri
                 .into_pyobject(py)
                 .map_err(|e| photo_conversion_err(py, e))?
                 .unbind()
                 .into_any();
-            let name = media
-                .name
-                .into_pyobject(py)
-                .map_err(|e| photo_conversion_err(py, e))?
-                .unbind()
-                .into_any();
             let tuple =
-                PyTuple::new(py, [tag, uri, name]).map_err(|e| photo_conversion_err(py, e))?;
+                PyTuple::new(py, [tag, uri, body]).map_err(|e| photo_conversion_err(py, e))?;
             Ok(tuple.unbind().into_any())
         }
         Err(e) => Err(to_pyerr(py, e)),
