@@ -8,6 +8,7 @@ each one fails if the behavior it covers breaks.
 from __future__ import annotations
 
 import asyncio
+import copy
 import json
 from pathlib import Path
 
@@ -32,7 +33,44 @@ from placekit.exceptions import (
     PlacesError,
     RateLimitError,
 )
-from placekit.models import Place, TextSearchResult
+from placekit.models import (
+    AccessibilityOptions,
+    AddressComponent,
+    AddressDescriptor,
+    Area,
+    Attribution,
+    AuthorAttribution,
+    ConnectorAggregation,
+    ConsumerAlert,
+    Date,
+    EvChargeOptions,
+    FormattedText,
+    GenerativeSummary,
+    GoogleMapsLinks,
+    Landmark,
+    LatLng,
+    Leg,
+    LocalizedText,
+    Money,
+    OpeningHours,
+    OpeningPoint,
+    PaymentOptions,
+    ParkingOptions,
+    Period,
+    Photo,
+    Place,
+    PlusCode,
+    PostalAddress,
+    PriceRange,
+    Review,
+    ReviewSummary,
+    RoutingSummary,
+    SpecialDay,
+    StringMatch,
+    TextSearchResult,
+    TimeZone,
+    Viewport,
+)
 
 
 @pytest.fixture()
@@ -2704,3 +2742,169 @@ def test_round6_repair_money_units_infinity_is_decode_error():
 
     with pytest.raises(DecodeError):
         Money.from_api({"currencyCode": "USD", "units": float("inf"), "nanos": 0})
+
+
+# ---------------------------------------------------------------------------
+# Round 7: child raw and StringMatch offsets
+# ---------------------------------------------------------------------------
+
+_SENTINEL = {"unmodelledSentinel": {"nested": [1, 2, 3]}}
+
+_CHILD_RAW_CASES = [
+    (LocalizedText, {"text": "Cafe", "languageCode": "en"}),
+    (LatLng, {"latitude": -33.86, "longitude": 151.2}),
+    (AuthorAttribution, {"displayName": "A", "uri": "u", "photoUri": "p"}),
+    (Attribution, {"provider": "x", "providerUri": "y"}),
+    (Photo, {"name": "places/x/photos/y", "widthPx": 100, "heightPx": 80}),
+    (Date, {"year": 2026, "month": 10, "day": 30}),
+    (OpeningPoint, {"day": 5, "hour": 9, "minute": 30}),
+    (
+        Period,
+        {"open": {"day": 5, "hour": 9}, "close": {"day": 5, "hour": 17}},
+    ),
+    (SpecialDay, {"date": {"year": 2026, "month": 12, "day": 25}}),
+    (
+        OpeningHours,
+        {"openNow": True, "weekdayDescriptions": ["Friday: 9 AM to 5 PM"]},
+    ),
+    (
+        AddressComponent,
+        {"longText": "George Street", "shortText": "George St", "types": ["route"]},
+    ),
+    (PlusCode, {"globalCode": "4RRH46J5+JV", "compoundCode": "46J5+JV Sydney"}),
+    (
+        Viewport,
+        {
+            "low": {"latitude": -33.87, "longitude": 151.2},
+            "high": {"latitude": -33.86, "longitude": 151.21},
+        },
+    ),
+    (
+        PostalAddress,
+        {"regionCode": "AU", "locality": "Sydney", "addressLines": ["1 George St"]},
+    ),
+    (
+        Review,
+        {
+            "name": "places/x/reviews/y",
+            "rating": 5,
+            "text": {"text": "Great", "languageCode": "en"},
+        },
+    ),
+    (PaymentOptions, {"acceptsCreditCards": True, "acceptsNfc": False}),
+    (ParkingOptions, {"freeParkingLot": True}),
+    (AccessibilityOptions, {"wheelchairAccessibleEntrance": True}),
+    (TimeZone, {"id": "Australia/Sydney"}),
+    (GenerativeSummary, {"overview": {"text": "Nice", "languageCode": "en"}}),
+    (ReviewSummary, {"text": {"text": "Loved", "languageCode": "en"}}),
+    (ConsumerAlert, {"overview": "Alert", "languageCode": "en"}),
+    (GoogleMapsLinks, {"directionsUri": "https://example.com/dir"}),
+    (Money, {"currencyCode": "AUD", "units": "12", "nanos": 500000000}),
+    (PriceRange, {"startPrice": {"currencyCode": "AUD", "units": "10"}}),
+    (ConnectorAggregation, {"type": "CCS", "count": 4}),
+    (
+        EvChargeOptions,
+        {"connectorCount": 4, "connectorAggregation": [{"type": "CCS", "count": 4}]},
+    ),
+    (Landmark, {"name": "places/a", "placeId": "a", "types": ["park"]}),
+    (Area, {"name": "places/b", "placeId": "b", "containment": "WITHIN"}),
+    (
+        AddressDescriptor,
+        {
+            "landmarks": [{"name": "places/a", "placeId": "a"}],
+            "areas": [{"name": "places/b", "placeId": "b"}],
+        },
+    ),
+    (Leg, {"duration": "601s", "distanceMeters": 5587}),
+    (
+        RoutingSummary,
+        {
+            "legs": [{"duration": "601s", "distanceMeters": 5587}],
+            "directionsUri": "https://example.com",
+        },
+    ),
+    (
+        FormattedText,
+        {"text": "Bianco", "matches": [{"startOffset": 0, "endOffset": 6}]},
+    ),
+    (StringMatch, {"startOffset": 0, "endOffset": 6}),
+]
+
+
+@pytest.mark.parametrize(
+    "model,payload",
+    _CHILD_RAW_CASES,
+    ids=[model.__name__ for model, _ in _CHILD_RAW_CASES],
+)
+def test_child_raw_carries_the_child_payload(model, payload):
+    # Every JSON child class preserves its own payload slice on raw,
+    # sentinel included, so a child passed on alone has shed nothing.
+    data = copy.deepcopy(payload)
+    data.update(copy.deepcopy(_SENTINEL))
+    decoded = model.from_api(data)
+    assert decoded.raw == data
+    assert decoded.raw["unmodelledSentinel"] == {"nested": [1, 2, 3]}
+    # The raw is a deep copy, so mutating the caller dict afterwards
+    # does not move it.
+    data["unmodelledSentinel"]["nested"].append(4)
+    assert decoded.raw["unmodelledSentinel"] == {"nested": [1, 2, 3]}
+
+
+def test_child_raw_excluded_from_equality_and_repr():
+    first = LocalizedText.from_api({"text": "Cafe", "sentinel": 1})
+    second = LocalizedText.from_api({"text": "Cafe", "sentinel": 2})
+    assert first.raw != second.raw
+    assert first == second
+    assert "sentinel" not in repr(first)
+
+
+def test_latlng_hash_survives_child_raw():
+    point = LatLng.from_api(
+        {"latitude": -33.86, "longitude": 151.2, "sentinel": 1}
+    )
+    assert len({point, point}) == 1
+    assert hash(point) == hash(LatLng(latitude=-33.86, longitude=151.2))
+
+
+def test_child_raw_deep_copy_nested_through_place():
+    # The nested form of the deep copy rule, where a shallow copy
+    # would hide: mutating the opening hours object inside a decoded
+    # Place payload must not move the OpeningHours raw on the place.
+    payload = {
+        "id": "ChIJx",
+        "regularOpeningHours": {
+            "openNow": True,
+            "weekdayDescriptions": ["Friday: 9 AM to 5 PM"],
+        },
+    }
+    place = Place.from_api(payload)
+    payload["regularOpeningHours"]["openNow"] = False
+    payload["regularOpeningHours"]["weekdayDescriptions"].append(
+        "Saturday: closed"
+    )
+    hours = place.opening_hours
+    assert hours is not None
+    assert hours.raw["openNow"] is True
+    assert hours.raw["weekdayDescriptions"] == ["Friday: 9 AM to 5 PM"]
+
+
+def test_string_match_missing_start_offset_is_none_not_zero():
+    # Cut from cassette 04 of the live recording, whose matches carry
+    # only endOffset. The absent start offset must read None, never a
+    # fabricated 0.
+    formatted = FormattedText.from_api(
+        {"text": "Williamsburg Bridge", "matches": [{"endOffset": 19}]}
+    )
+    match = formatted.matches[0]
+    assert match.end_offset == 19
+    assert match.start_offset is None
+
+
+def test_string_match_explicit_zero_start_offset_survives():
+    formatted = FormattedText.from_api(
+        {"text": "Bianco Latte", "matches": [{"startOffset": 0, "endOffset": 6}]}
+    )
+    match = formatted.matches[0]
+    assert match.start_offset == 0
+    assert match.start_offset is not None
+    assert match.end_offset == 6

@@ -1,13 +1,13 @@
 """Typed response models for placekit.
 
 Responses arrive as dataclasses with attribute access, never raw dicts.
-Fields this client version does not model yet are preserved verbatim on
-``Place.raw`` and on the result level ``raw`` dicts, so nothing the API
-returns is silently lost at those levels. A typed child object carries
-only its modelled fields, though. An unmodelled field nested inside a
-child (a ``Photo``, an ``OpeningHours``) survives only in the ancestor
-``raw``, not on the child itself, so a caller who needs an unmodelled
-leaf must read it from the ancestor raw before passing the child on.
+Fields this client version does not model yet are preserved verbatim
+on ``raw``. Every model object that decodes from a JSON object
+preserves that object on its ``raw``, so nothing the API returns is
+silently lost at any level of the tree. ``raw`` is a deep copy
+sharing no mutable state with any other copy. ``PhotoMedia`` is the
+one class with no ``raw``, because its payload is bytes rather than
+a JSON object.
 
 The models are frozen value objects. Attribute assignment on a
 parsed result raises instead of silently rewriting it, so a result
@@ -113,10 +113,12 @@ class LocalizedText:
 
     text: str
     language_code: Optional[str] = None
+    raw: dict[str, Any] = field(default_factory=dict, repr=False, compare=False)
 
     @classmethod
     def from_api(cls, data: dict[str, Any]) -> "LocalizedText":
-        return cls(text=data.get("text", ""), language_code=data.get("languageCode"))
+        data = copy.deepcopy(data)
+        return cls(text=data.get("text", ""), language_code=data.get("languageCode"), raw=data)
 
 
 @dataclass(frozen=True, slots=True)
@@ -131,6 +133,7 @@ class LatLng:
 
     latitude: float
     longitude: float
+    raw: dict[str, Any] = field(default_factory=dict, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         for name, value in (
@@ -148,11 +151,13 @@ class LatLng:
 
     @classmethod
     def from_api(cls, data: dict[str, Any]) -> "LatLng":
+        data = copy.deepcopy(data)
         return cls(
             latitude=_as_float(_require(data, "latitude", "LatLng"), "LatLng", "latitude"),
             longitude=_as_float(
                 _require(data, "longitude", "LatLng"), "LatLng", "longitude"
             ),
+            raw=data,
         )
 
     def to_api(self) -> dict[str, float]:
@@ -166,13 +171,16 @@ class AuthorAttribution:
     display_name: str = ""
     uri: str = ""
     photo_uri: str = ""
+    raw: dict[str, Any] = field(default_factory=dict, repr=False, compare=False)
 
     @classmethod
     def from_api(cls, data: dict[str, Any]) -> "AuthorAttribution":
+        data = copy.deepcopy(data)
         return cls(
             display_name=data.get("displayName", ""),
             uri=data.get("uri", ""),
             photo_uri=data.get("photoUri", ""),
+            raw=data,
         )
 
 
@@ -182,10 +190,12 @@ class Attribution:
 
     provider: str = ""
     provider_uri: str = ""
+    raw: dict[str, Any] = field(default_factory=dict, repr=False, compare=False)
 
     @classmethod
     def from_api(cls, data: dict[str, Any]) -> "Attribution":
-        return cls(provider=data.get("provider", ""), provider_uri=data.get("providerUri", ""))
+        data = copy.deepcopy(data)
+        return cls(provider=data.get("provider", ""), provider_uri=data.get("providerUri", ""), raw=data)
 
 
 @dataclass(frozen=True, slots=True)
@@ -203,12 +213,14 @@ class Photo:
     flag_content_uri: Optional[str] = None
     #: Link to view this photo on Google Maps.
     google_maps_uri: Optional[str] = None
+    raw: dict[str, Any] = field(default_factory=dict, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         _reject_bare_string("Photo", "author_attributions", self.author_attributions)
 
     @classmethod
     def from_api(cls, data: dict[str, Any]) -> "Photo":
+        data = copy.deepcopy(data)
         return cls(
             name=data.get("name", ""),
             width_px=_as_int(data.get("widthPx", 0), "Photo", "widthPx"),
@@ -218,6 +230,7 @@ class Photo:
             ],
             flag_content_uri=data.get("flagContentUri"),
             google_maps_uri=data.get("googleMapsUri"),
+            raw=data,
         )
 
 
@@ -228,13 +241,16 @@ class Date:
     year: int = 0
     month: int = 0
     day: int = 0
+    raw: dict[str, Any] = field(default_factory=dict, repr=False, compare=False)
 
     @classmethod
     def from_api(cls, data: dict[str, Any]) -> "Date":
+        data = copy.deepcopy(data)
         return cls(
             year=_as_int(data.get("year", 0), "Date", "year"),
             month=_as_int(data.get("month", 0), "Date", "month"),
             day=_as_int(data.get("day", 0), "Date", "day"),
+            raw=data,
         )
 
 
@@ -252,9 +268,11 @@ class OpeningPoint:
     day: Optional[int] = None
     hour: Optional[int] = None
     minute: Optional[int] = None
+    raw: dict[str, Any] = field(default_factory=dict, repr=False, compare=False)
 
     @classmethod
     def from_api(cls, data: dict[str, Any]) -> "OpeningPoint":
+        data = copy.deepcopy(data)
         date = data.get("date")
         return cls(
             date=Date.from_api(date) if date else None,
@@ -262,6 +280,7 @@ class OpeningPoint:
             day=_optional_int(data.get("day"), "OpeningPoint", "day"),
             hour=_optional_int(data.get("hour"), "OpeningPoint", "hour"),
             minute=_optional_int(data.get("minute"), "OpeningPoint", "minute"),
+            raw=data,
         )
 
 
@@ -271,14 +290,17 @@ class Period:
 
     open: Optional[OpeningPoint] = None
     close: Optional[OpeningPoint] = None
+    raw: dict[str, Any] = field(default_factory=dict, repr=False, compare=False)
 
     @classmethod
     def from_api(cls, data: dict[str, Any]) -> "Period":
+        data = copy.deepcopy(data)
         open_point = data.get("open")
         close_point = data.get("close")
         return cls(
             open=OpeningPoint.from_api(open_point) if open_point else None,
             close=OpeningPoint.from_api(close_point) if close_point else None,
+            raw=data,
         )
 
 
@@ -288,11 +310,13 @@ class SpecialDay:
     carried inside current opening hours."""
 
     date: Optional[Date] = None
+    raw: dict[str, Any] = field(default_factory=dict, repr=False, compare=False)
 
     @classmethod
     def from_api(cls, data: dict[str, Any]) -> "SpecialDay":
+        data = copy.deepcopy(data)
         date = data.get("date")
-        return cls(date=Date.from_api(date) if date else None)
+        return cls(date=Date.from_api(date) if date else None, raw=data)
 
 
 @dataclass(frozen=True, slots=True)
@@ -312,6 +336,7 @@ class OpeningHours:
     #: drive through or delivery hours). Set on the secondary opening
     #: hours lists of a place, absent on regular and current hours.
     secondary_hours_type: Optional[str] = None
+    raw: dict[str, Any] = field(default_factory=dict, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         _reject_bare_string("OpeningHours", "periods", self.periods)
@@ -322,6 +347,7 @@ class OpeningHours:
 
     @classmethod
     def from_api(cls, data: dict[str, Any]) -> "OpeningHours":
+        data = copy.deepcopy(data)
         return cls(
             open_now=_optional_bool(data.get("openNow"), "OpeningHours", "openNow"),
             periods=[Period.from_api(p) for p in data.get("periods", [])],
@@ -336,6 +362,7 @@ class OpeningHours:
                 SpecialDay.from_api(d) for d in data.get("specialDays", [])
             ],
             secondary_hours_type=data.get("secondaryHoursType"),
+            raw=data,
         )
 
 
@@ -347,17 +374,20 @@ class AddressComponent:
     short_text: str = ""
     types: list[str] = field(default_factory=list)
     language_code: Optional[str] = None
+    raw: dict[str, Any] = field(default_factory=dict, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         _reject_bare_string("AddressComponent", "types", self.types)
 
     @classmethod
     def from_api(cls, data: dict[str, Any]) -> "AddressComponent":
+        data = copy.deepcopy(data)
         return cls(
             long_text=data.get("longText", ""),
             short_text=data.get("shortText", ""),
             types=_str_list(data.get("types", []), "AddressComponent", "types"),
             language_code=data.get("languageCode"),
+            raw=data,
         )
 
 
@@ -367,12 +397,15 @@ class PlusCode:
 
     global_code: str = ""
     compound_code: Optional[str] = None
+    raw: dict[str, Any] = field(default_factory=dict, repr=False, compare=False)
 
     @classmethod
     def from_api(cls, data: dict[str, Any]) -> "PlusCode":
+        data = copy.deepcopy(data)
         return cls(
             global_code=data.get("globalCode", ""),
             compound_code=data.get("compoundCode"),
+            raw=data,
         )
 
 
@@ -382,12 +415,15 @@ class Viewport:
 
     low: LatLng
     high: LatLng
+    raw: dict[str, Any] = field(default_factory=dict, repr=False, compare=False)
 
     @classmethod
     def from_api(cls, data: dict[str, Any]) -> "Viewport":
+        data = copy.deepcopy(data)
         return cls(
             low=LatLng.from_api(_require(data, "low", "Viewport")),
             high=LatLng.from_api(_require(data, "high", "Viewport")),
+            raw=data,
         )
 
 
@@ -404,6 +440,7 @@ class PostalAddress:
     sublocality: Optional[str] = None
     organization: Optional[str] = None
     recipients: list[str] = field(default_factory=list)
+    raw: dict[str, Any] = field(default_factory=dict, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         _reject_bare_string("PostalAddress", "address_lines", self.address_lines)
@@ -411,6 +448,7 @@ class PostalAddress:
 
     @classmethod
     def from_api(cls, data: dict[str, Any]) -> "PostalAddress":
+        data = copy.deepcopy(data)
         return cls(
             region_code=data.get("regionCode"),
             language_code=data.get("languageCode"),
@@ -425,6 +463,7 @@ class PostalAddress:
             recipients=_str_list(
                 data.get("recipients", []), "PostalAddress", "recipients"
             ),
+            raw=data,
         )
 
 
@@ -443,9 +482,11 @@ class Review:
     flag_content_uri: Optional[str] = None
     google_maps_uri: Optional[str] = None
     visit_date: Optional[Date] = None
+    raw: dict[str, Any] = field(default_factory=dict, repr=False, compare=False)
 
     @classmethod
     def from_api(cls, data: dict[str, Any]) -> "Review":
+        data = copy.deepcopy(data)
         text = data.get("text")
         original = data.get("originalText")
         rating = data.get("rating")
@@ -470,6 +511,7 @@ class Review:
             flag_content_uri=data.get("flagContentUri"),
             google_maps_uri=data.get("googleMapsUri"),
             visit_date=Date.from_api(visit) if visit else None,
+            raw=data,
         )
 
 
@@ -481,9 +523,11 @@ class PaymentOptions:
     accepts_debit_cards: Optional[bool] = None
     accepts_cash_only: Optional[bool] = None
     accepts_nfc: Optional[bool] = None
+    raw: dict[str, Any] = field(default_factory=dict, repr=False, compare=False)
 
     @classmethod
     def from_api(cls, data: dict[str, Any]) -> "PaymentOptions":
+        data = copy.deepcopy(data)
         return cls(
             accepts_credit_cards=_optional_bool(
                 data.get("acceptsCreditCards"), "PaymentOptions", "acceptsCreditCards"
@@ -497,6 +541,7 @@ class PaymentOptions:
             accepts_nfc=_optional_bool(
                 data.get("acceptsNfc"), "PaymentOptions", "acceptsNfc"
             ),
+            raw=data,
         )
 
 
@@ -511,9 +556,11 @@ class ParkingOptions:
     valet_parking: Optional[bool] = None
     free_garage_parking: Optional[bool] = None
     paid_garage_parking: Optional[bool] = None
+    raw: dict[str, Any] = field(default_factory=dict, repr=False, compare=False)
 
     @classmethod
     def from_api(cls, data: dict[str, Any]) -> "ParkingOptions":
+        data = copy.deepcopy(data)
         return cls(
             free_parking_lot=_optional_bool(
                 data.get("freeParkingLot"), "ParkingOptions", "freeParkingLot"
@@ -536,6 +583,7 @@ class ParkingOptions:
             paid_garage_parking=_optional_bool(
                 data.get("paidGarageParking"), "ParkingOptions", "paidGarageParking"
             ),
+            raw=data,
         )
 
 
@@ -547,9 +595,11 @@ class AccessibilityOptions:
     wheelchair_accessible_entrance: Optional[bool] = None
     wheelchair_accessible_restroom: Optional[bool] = None
     wheelchair_accessible_seating: Optional[bool] = None
+    raw: dict[str, Any] = field(default_factory=dict, repr=False, compare=False)
 
     @classmethod
     def from_api(cls, data: dict[str, Any]) -> "AccessibilityOptions":
+        data = copy.deepcopy(data)
         return cls(
             wheelchair_accessible_parking=_optional_bool(
                 data.get("wheelchairAccessibleParking"),
@@ -571,6 +621,7 @@ class AccessibilityOptions:
                 "AccessibilityOptions",
                 "wheelchairAccessibleSeating",
             ),
+            raw=data,
         )
 
 
@@ -583,10 +634,12 @@ class TimeZone:
     """
 
     id: str = ""
+    raw: dict[str, Any] = field(default_factory=dict, repr=False, compare=False)
 
     @classmethod
     def from_api(cls, data: dict[str, Any]) -> "TimeZone":
-        return cls(id=data.get("id", ""))
+        data = copy.deepcopy(data)
+        return cls(id=data.get("id", ""), raw=data)
 
 
 @dataclass(frozen=True, slots=True)
@@ -598,12 +651,15 @@ class GenerativeSummary:
     """
 
     overview: Optional[LocalizedText] = None
+    raw: dict[str, Any] = field(default_factory=dict, repr=False, compare=False)
 
     @classmethod
     def from_api(cls, data: dict[str, Any]) -> "GenerativeSummary":
+        data = copy.deepcopy(data)
         overview = data.get("overview")
         return cls(
-            overview=LocalizedText.from_api(overview) if overview else None
+            overview=LocalizedText.from_api(overview) if overview else None,
+            raw=data,
         )
 
 
@@ -616,11 +672,13 @@ class ReviewSummary:
     """
 
     text: Optional[LocalizedText] = None
+    raw: dict[str, Any] = field(default_factory=dict, repr=False, compare=False)
 
     @classmethod
     def from_api(cls, data: dict[str, Any]) -> "ReviewSummary":
+        data = copy.deepcopy(data)
         text = data.get("text")
-        return cls(text=LocalizedText.from_api(text) if text else None)
+        return cls(text=LocalizedText.from_api(text) if text else None, raw=data)
 
 
 @dataclass(frozen=True, slots=True)
@@ -634,12 +692,15 @@ class ConsumerAlert:
 
     overview: str = ""
     language_code: Optional[str] = None
+    raw: dict[str, Any] = field(default_factory=dict, repr=False, compare=False)
 
     @classmethod
     def from_api(cls, data: dict[str, Any]) -> "ConsumerAlert":
+        data = copy.deepcopy(data)
         return cls(
             overview=data.get("overview", ""),
             language_code=data.get("languageCode"),
+            raw=data,
         )
 
 
@@ -653,15 +714,18 @@ class GoogleMapsLinks:
     write_a_review_uri: Optional[str] = None
     reviews_uri: Optional[str] = None
     photos_uri: Optional[str] = None
+    raw: dict[str, Any] = field(default_factory=dict, repr=False, compare=False)
 
     @classmethod
     def from_api(cls, data: dict[str, Any]) -> "GoogleMapsLinks":
+        data = copy.deepcopy(data)
         return cls(
             directions_uri=data.get("directionsUri"),
             place_uri=data.get("placeUri"),
             write_a_review_uri=data.get("writeAReviewUri"),
             reviews_uri=data.get("reviewsUri"),
             photos_uri=data.get("photosUri"),
+            raw=data,
         )
 
 
@@ -677,13 +741,16 @@ class Money:
     currency_code: str = ""
     units: int = 0
     nanos: int = 0
+    raw: dict[str, Any] = field(default_factory=dict, repr=False, compare=False)
 
     @classmethod
     def from_api(cls, data: dict[str, Any]) -> "Money":
+        data = copy.deepcopy(data)
         return cls(
             currency_code=data.get("currencyCode", ""),
             units=_as_int(data.get("units", 0), "Money", "units"),
             nanos=_as_int(data.get("nanos", 0), "Money", "nanos"),
+            raw=data,
         )
 
 
@@ -697,14 +764,17 @@ class PriceRange:
 
     start_price: Optional[Money] = None
     end_price: Optional[Money] = None
+    raw: dict[str, Any] = field(default_factory=dict, repr=False, compare=False)
 
     @classmethod
     def from_api(cls, data: dict[str, Any]) -> "PriceRange":
+        data = copy.deepcopy(data)
         start = data.get("startPrice")
         end = data.get("endPrice")
         return cls(
             start_price=Money.from_api(start) if start else None,
             end_price=Money.from_api(end) if end else None,
+            raw=data,
         )
 
 
@@ -723,9 +793,11 @@ class ConnectorAggregation:
     available_count: Optional[int] = None
     out_of_service_count: Optional[int] = None
     availability_last_update_time: Optional[str] = None
+    raw: dict[str, Any] = field(default_factory=dict, repr=False, compare=False)
 
     @classmethod
     def from_api(cls, data: dict[str, Any]) -> "ConnectorAggregation":
+        data = copy.deepcopy(data)
         rate = data.get("maxChargeRateKw")
         return cls(
             type=data.get("type", ""),
@@ -748,6 +820,7 @@ class ConnectorAggregation:
                 "outOfServiceCount",
             ),
             availability_last_update_time=data.get("availabilityLastUpdateTime"),
+            raw=data,
         )
 
 
@@ -759,6 +832,7 @@ class EvChargeOptions:
     connector_aggregation: list[ConnectorAggregation] = field(
         default_factory=list
     )
+    raw: dict[str, Any] = field(default_factory=dict, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         _reject_bare_string(
@@ -769,6 +843,7 @@ class EvChargeOptions:
 
     @classmethod
     def from_api(cls, data: dict[str, Any]) -> "EvChargeOptions":
+        data = copy.deepcopy(data)
         return cls(
             connector_count=_optional_int(
                 data.get("connectorCount"), "EvChargeOptions", "connectorCount"
@@ -777,6 +852,7 @@ class EvChargeOptions:
                 ConnectorAggregation.from_api(a)
                 for a in data.get("connectorAggregation", [])
             ],
+            raw=data,
         )
 
 
@@ -791,12 +867,14 @@ class Landmark:
     spatial_relationship: Optional[str] = None
     straight_line_distance_meters: Optional[float] = None
     travel_distance_meters: Optional[float] = None
+    raw: dict[str, Any] = field(default_factory=dict, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         _reject_bare_string("Landmark", "types", self.types)
 
     @classmethod
     def from_api(cls, data: dict[str, Any]) -> "Landmark":
+        data = copy.deepcopy(data)
         display = data.get("displayName")
         straight = data.get("straightLineDistanceMeters")
         travel = data.get("travelDistanceMeters")
@@ -816,6 +894,7 @@ class Landmark:
                 if travel is not None
                 else None
             ),
+            raw=data,
         )
 
 
@@ -827,15 +906,18 @@ class Area:
     place_id: str = ""
     display_name: Optional[LocalizedText] = None
     containment: Optional[str] = None
+    raw: dict[str, Any] = field(default_factory=dict, repr=False, compare=False)
 
     @classmethod
     def from_api(cls, data: dict[str, Any]) -> "Area":
+        data = copy.deepcopy(data)
         display = data.get("displayName")
         return cls(
             name=data.get("name", ""),
             place_id=data.get("placeId", ""),
             display_name=LocalizedText.from_api(display) if display else None,
             containment=data.get("containment"),
+            raw=data,
         )
 
 
@@ -845,6 +927,7 @@ class AddressDescriptor:
 
     landmarks: list[Landmark] = field(default_factory=list)
     areas: list[Area] = field(default_factory=list)
+    raw: dict[str, Any] = field(default_factory=dict, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         _reject_bare_string("AddressDescriptor", "landmarks", self.landmarks)
@@ -852,12 +935,14 @@ class AddressDescriptor:
 
     @classmethod
     def from_api(cls, data: dict[str, Any]) -> "AddressDescriptor":
+        data = copy.deepcopy(data)
         return cls(
             landmarks=[
                 Landmark.from_api(landmark)
                 for landmark in data.get("landmarks", [])
             ],
             areas=[Area.from_api(area) for area in data.get("areas", [])],
+            raw=data,
         )
 
 
@@ -1187,14 +1272,17 @@ class Leg:
 
     duration: str = ""
     distance_meters: Optional[int] = None
+    raw: dict[str, Any] = field(default_factory=dict, repr=False, compare=False)
 
     @classmethod
     def from_api(cls, data: dict[str, Any]) -> "Leg":
+        data = copy.deepcopy(data)
         return cls(
             duration=data.get("duration", ""),
             distance_meters=_optional_int(
                 data.get("distanceMeters"), "Leg", "distanceMeters"
             ),
+            raw=data,
         )
 
 
@@ -1204,15 +1292,18 @@ class RoutingSummary:
 
     legs: list[Leg] = field(default_factory=list)
     directions_uri: Optional[str] = None
+    raw: dict[str, Any] = field(default_factory=dict, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         _reject_bare_string("RoutingSummary", "legs", self.legs)
 
     @classmethod
     def from_api(cls, data: dict[str, Any]) -> "RoutingSummary":
+        data = copy.deepcopy(data)
         return cls(
             legs=[Leg.from_api(leg) for leg in data.get("legs", [])],
             directions_uri=data.get("directionsUri"),
+            raw=data,
         )
 
 
@@ -1292,14 +1383,17 @@ class NearbySearchResult:
 class StringMatch:
     """A substring match range inside an autocomplete text."""
 
-    start_offset: int = 0
-    end_offset: int = 0
+    start_offset: Optional[int] = None
+    end_offset: Optional[int] = None
+    raw: dict[str, Any] = field(default_factory=dict, repr=False, compare=False)
 
     @classmethod
     def from_api(cls, data: dict[str, Any]) -> "StringMatch":
+        data = copy.deepcopy(data)
         return cls(
-            start_offset=_as_int(data.get("startOffset", 0), "StringMatch", "startOffset"),
-            end_offset=_as_int(data.get("endOffset", 0), "StringMatch", "endOffset"),
+            start_offset=_optional_int(data.get("startOffset"), "StringMatch", "startOffset"),
+            end_offset=_optional_int(data.get("endOffset"), "StringMatch", "endOffset"),
+            raw=data,
         )
 
 
@@ -1309,15 +1403,18 @@ class FormattedText:
 
     text: str = ""
     matches: list[StringMatch] = field(default_factory=list)
+    raw: dict[str, Any] = field(default_factory=dict, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         _reject_bare_string("FormattedText", "matches", self.matches)
 
     @classmethod
     def from_api(cls, data: dict[str, Any]) -> "FormattedText":
+        data = copy.deepcopy(data)
         return cls(
             text=data.get("text", ""),
             matches=[StringMatch.from_api(m) for m in data.get("matches", [])],
+            raw=data,
         )
 
 
