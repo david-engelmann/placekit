@@ -1,0 +1,13 @@
+# The Rust floor for this repo. 1.88 is the oldest toolchain that
+# compiles the locked dependency set in Cargo.lock, proven by running
+# the workspace check with it. Older toolchains fail on the locked
+# dependencies, not on this code: cargo 1.74 cannot parse an edition
+# 2024 dependency manifest, 1.85 is refused by idna_adapter, and 1.86
+# is refused by the icu crates, which declare 1.88.
+# CI installs exactly this toolchain, and rustup selects it
+# automatically for cargo commands run in this tree.
+
+[toolchain]
+channel = "1.88.0"
+profile = "minimal"
+components = ["rustfmt", "clippy"]

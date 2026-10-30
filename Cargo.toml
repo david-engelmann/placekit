@@ -2,10 +2,11 @@
 name = "placekit"
 version = "0.1.0"
 edition = "2021"
-rust-version = "1.74"
+rust-version = "1.88"
 license = "MIT"
 description = "Modern Google Places API (New) client for Python, powered by a Rust core"
 readme = "README.md"
+exclude = [".github/*"]
 keywords = ["google-places", "places", "geocoding", "pyo3", "maps"]
 categories = ["api-bindings"]
 

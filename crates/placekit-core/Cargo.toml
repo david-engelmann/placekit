@@ -2,7 +2,7 @@
 name = "placekit-core"
 version = "0.1.0"
 edition = "2021"
-rust-version = "1.74"
+rust-version = "1.88"
 license = "MIT"
 description = "Rust core for placekit, a Google Places API (New) client"
 
