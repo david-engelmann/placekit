@@ -923,10 +923,23 @@ def test_header_unfriendly_api_key_is_config_error(base_url):
 
 @pytest.mark.parametrize("bad", [-1, 0, 2**32, True])
 def test_max_results_range_validated(client, bad):
-    with pytest.raises(ConfigError):
-        client.text_search("cafes", max_results=bad)
+    # max_results is Nearby Search's spelling; its range guard stands.
     with pytest.raises(ConfigError):
         client.nearby_search((-33.8668, 151.2071), 800.0, max_results=bad)
+
+
+def test_text_search_rejects_the_removed_max_results_spelling(
+    client, stub_server
+):
+    # RC-24 (parent decision): text_search keeps page_size only. The
+    # removed duplicate spelling is a plain TypeError now, exactly
+    # like any other unknown keyword, and nothing is sent.
+    stub_server.last_request = None
+    with pytest.raises(TypeError):
+        client.text_search("cafes", max_results=5)
+    assert stub_server.last_request is None
+    result = client.text_search("cafes", page_size=5)
+    assert len(result.places) == 2
 
 
 @pytest.mark.parametrize("bad", [-1, 0, 21, 999999, 2**32, True])

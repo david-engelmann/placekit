@@ -487,7 +487,6 @@ class _Base:
     def _text_search_body(
         query: str,
         *,
-        max_results: Optional[int],
         page_token: Optional[str],
         language: Optional[str],
         region: Optional[str],
@@ -509,9 +508,6 @@ class _Base:
         return _drop_none(
             {
                 "textQuery": query,
-                "maxResultCount": _Base._validate_int_range(
-                    "max_results", max_results, 1, 20
-                ),
                 "pageToken": page_token,
                 "languageCode": language,
                 "regionCode": region,
@@ -664,7 +660,6 @@ class Client(_Base):
         query: str,
         *,
         fields: FieldsLike = None,
-        max_results: Optional[int] = None,
         page_token: Optional[str] = None,
         language: Optional[str] = None,
         region: Optional[str] = None,
@@ -687,8 +682,8 @@ class Client(_Base):
 
         ``rank_preference`` is ``"RELEVANCE"`` or ``"DISTANCE"``.
         ``price_levels`` takes API values such as ``"PRICE_LEVEL_MODERATE"``.
-        ``page_size`` is the current spelling of the page size limit and
-        supersedes ``max_results`` when both are given. ``min_rating``
+        ``page_size`` caps how many results one page carries (1 to 20).
+        ``min_rating``
         filters out places rated below it (0 to 5). ``ev_options`` and
         ``search_along_route`` take the API's camelCase dict shapes.
         ``routing_parameters`` takes a dict whose ``origin`` may be a
@@ -700,7 +695,6 @@ class Client(_Base):
         try:
             body = self._text_search_body(
                 query,
-                max_results=max_results,
                 page_token=page_token,
                 language=language,
                 region=region,
@@ -916,7 +910,6 @@ class AsyncClient(_Base):
         query: str,
         *,
         fields: FieldsLike = None,
-        max_results: Optional[int] = None,
         page_token: Optional[str] = None,
         language: Optional[str] = None,
         region: Optional[str] = None,
@@ -941,7 +934,6 @@ class AsyncClient(_Base):
         try:
             body = self._text_search_body(
                 query,
-                max_results=max_results,
                 page_token=page_token,
                 language=language,
                 region=region,

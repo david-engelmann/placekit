@@ -42,6 +42,7 @@ All notable changes to placekit are recorded here. The format follows Keep a Cha
 - Printing a `PlacesError` now shows the context the type collects (the failed call, the status code, the Google status and the retry delay) alongside the message.
 - `Place.opening_hours` gains the alias `Place.regular_opening_hours`, matching its wire name.
 - The README now leads with the prebuilt wheel install story; building from source moved into a collapsed section.
+- Text Search drops its duplicate `max_results` parameter, leaving `page_size` as the one spelling for that endpoint. Nearby Search keeps `max_results`, which maps to its own endpoint's `maxResultCount` field. Passing `max_results` to `text_search` now raises a plain `TypeError`, like any unknown keyword.
 
 ### Fixed
 
