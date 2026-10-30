@@ -1700,3 +1700,22 @@ def test_async_validation_guards_match_sync(api_key, base_url, stub_server):
             assert stub_server.last_request is None
 
     asyncio.run(run())
+
+
+def test_empty_and_exhausted_iterables_omit_the_filter(client, stub_server):
+    # Round 5 repair (RT5-L2), semantics pinned: iterables are
+    # materialized once, and an empty result for an optional filter
+    # slot means the filter is omitted. An already exhausted
+    # generator is indistinguishable from an empty one, so the second
+    # use of a consumed generator sends the search unfiltered rather
+    # than sending an empty list, uniformly across slots.
+    gen = (t for t in ["cafe"])
+    client.nearby_search((40.0, -70.0), 100.0, included_types=gen)
+    body = json.loads(stub_server.last_request["body"])
+    assert body["includedTypes"] == ["cafe"]
+    client.nearby_search((40.0, -70.0), 100.0, included_types=gen)
+    body = json.loads(stub_server.last_request["body"])
+    assert "includedTypes" not in body
+    client.text_search("cafes", price_levels=[])
+    body = json.loads(stub_server.last_request["body"])
+    assert "priceLevels" not in body

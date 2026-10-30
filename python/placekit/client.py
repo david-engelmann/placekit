@@ -41,7 +41,10 @@ def _string_list(
     it is rejected with a ConfigError naming the parameter instead of
     being shredded into one-character items and sent. Every item must
     be a string. An empty result means the parameter is omitted,
-    uniformly for every slot.
+    uniformly for every slot. That includes an already exhausted
+    generator, which is indistinguishable from an empty one: the
+    filter is omitted rather than sent as an empty list, and the
+    behavior is the same in every slot (RT5-L2).
     """
     if value is None:
         return None
