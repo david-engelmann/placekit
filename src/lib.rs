@@ -138,8 +138,12 @@ fn mask_from(py: Python<'_>, fields: Option<Vec<String>>) -> PyResult<Option<Fie
 /// The generic converter below applies Python truthiness to these,
 /// so the string "false" used to reach the API as true (R5-R2). The
 /// conversion layer now accepts only a real bool (or None) for them,
-/// at any nesting depth, which also covers dict-shaped parameters
-/// such as routing parameters that the Python layer passes through.
+/// which also covers dict-shaped parameters such as routing
+/// parameters that the Python layer passes through. The walker
+/// descends through dicts, lists and tuples up to a hard depth
+/// bound (MAX_BODY_DEPTH); anything deeper, including the infinite
+/// descent of a self-referential structure, is a config error
+/// instead of a stack overflow in the host interpreter.
 const BOOL_BODY_FIELDS: &[&str] = &[
     "openNow",
     "strictTypeFiltering",
@@ -151,7 +155,23 @@ const BOOL_BODY_FIELDS: &[&str] = &[
     "avoidFerries",
 ];
 
-fn check_body_bools(value: &Bound<'_, PyAny>) -> Result<(), String> {
+/// The deepest body nesting the conversion layer walks. Real Places
+/// bodies nest a handful of levels; the bound exists so a cyclic or
+/// absurdly deep caller structure fails as a typed error. The
+/// generic converter in body_to_request only runs after this walk
+/// passes, so it never sees a cycle either. (The other recursion in
+/// this file, value_to_py, walks serde_json values built from the
+/// core's own typed results, which are acyclic by construction and
+/// not caller shaped.)
+const MAX_BODY_DEPTH: usize = 128;
+
+fn check_body_bools(value: &Bound<'_, PyAny>, depth: usize) -> Result<(), String> {
+    if depth > MAX_BODY_DEPTH {
+        return Err(format!(
+            "request body is nested deeper than {MAX_BODY_DEPTH} levels; \
+             check for a self-referential structure"
+        ));
+    }
     if let Ok(map) = value.downcast::<PyDict>() {
         for (key, item) in map.iter() {
             if let Ok(name) = key.extract::<String>() {
@@ -159,14 +179,25 @@ fn check_body_bools(value: &Bound<'_, PyAny>) -> Result<(), String> {
                     && !item.is_none()
                     && !item.is_instance_of::<PyBool>()
                 {
-                    return Err(format!("{name} must be a bool, got {}", item.get_type()));
+                    // Same dialect as the Python layer's
+                    // _validate_bool: the field name and the
+                    // offending value's repr.
+                    let shown = item
+                        .repr()
+                        .map(|repr| repr.to_string())
+                        .unwrap_or_else(|_| item.get_type().to_string());
+                    return Err(format!("{name} must be a bool, got {shown}"));
                 }
             }
-            check_body_bools(&item)?;
+            check_body_bools(&item, depth + 1)?;
         }
     } else if let Ok(list) = value.downcast::<PyList>() {
         for item in list.iter() {
-            check_body_bools(&item)?;
+            check_body_bools(&item, depth + 1)?;
+        }
+    } else if let Ok(tuple) = value.downcast::<PyTuple>() {
+        for item in tuple.iter() {
+            check_body_bools(&item, depth + 1)?;
         }
     }
     Ok(())
@@ -176,7 +207,7 @@ fn body_to_request<T>(body: &Bound<'_, PyDict>) -> PyResult<T>
 where
     T: serde::de::DeserializeOwned,
 {
-    if let Err(detail) = check_body_bools(body.as_any()) {
+    if let Err(detail) = check_body_bools(body.as_any(), 0) {
         return Err(to_pyerr(body.py(), CoreError::Config { detail }));
     }
     // A body that does not fit the typed request shape is a local call

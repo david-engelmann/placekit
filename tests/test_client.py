@@ -1543,3 +1543,47 @@ def test_routing_parameter_bools_rejected_in_conversion_layer(
         "cafes", routing_parameters={"travelMode": "DRIVE"}
     )
     assert stub_server.last_request is not None
+
+
+def test_self_referential_body_dict_raises_typed_error(client, stub_server):
+    # Round 5 repair (S-1): the conversion layer's bool walker used to
+    # recurse into a self-referential dict body with no bound and
+    # segfault the interpreter (exit 139, reproduced against the
+    # landed build). It must now surface as a ConfigError, with the
+    # process alive and no request sent.
+    cyclic = {}
+    cyclic["self"] = cyclic
+    stub_server.last_request = None
+    with pytest.raises(ConfigError):
+        client.text_search("cafes", routing_parameters=cyclic)
+    assert stub_server.last_request is None
+    with pytest.raises(ConfigError):
+        client.text_search("cafes", ev_options=cyclic)
+    assert stub_server.last_request is None
+
+
+def test_tuple_nested_body_bools_rejected_in_conversion_layer(
+    client, stub_server
+):
+    # Round 5 repair (S-5): the walker promised any nesting depth but
+    # skipped tuples, so a bool field inside a tuple slipped through
+    # to a network attempt. Tuples are traversed now.
+    stub_server.last_request = None
+    with pytest.raises(ConfigError) as excinfo:
+        client.text_search(
+            "cafes",
+            routing_parameters={"routeModifiers": ({"avoidTolls": "false"},)},
+        )
+    assert "avoidTolls must be a bool, got 'false'" in str(excinfo.value)
+    assert stub_server.last_request is None
+
+
+def test_deeply_nested_body_within_bound_still_works(client, stub_server):
+    # Round 5 repair (S-1): the depth bound must not reject deep but
+    # legitimate nesting. Forty levels of dicts carrying a real bool
+    # at the bottom pass the walker and the request is sent.
+    nested = {"avoidTolls": False}
+    for _ in range(40):
+        nested = {"bundles": [nested]}
+    client.text_search("cafes", ev_options=nested)
+    assert stub_server.last_request is not None
