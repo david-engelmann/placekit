@@ -424,11 +424,11 @@ where
 // and is omitted from the body instead of sent as an empty value whose
 // meaning differs from absence at the API.
 fn none_or_empty_string(value: &Option<String>) -> bool {
-    value.as_ref().map_or(true, |s| s.is_empty())
+    value.as_ref().is_none_or(|s| s.is_empty())
 }
 
 fn none_or_empty_vec(value: &Option<Vec<String>>) -> bool {
-    value.as_ref().map_or(true, |v| v.is_empty())
+    value.as_ref().is_none_or(|v| v.is_empty())
 }
 
 /// A photo attached to a place.
