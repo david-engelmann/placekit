@@ -11,6 +11,16 @@ All notable changes to placekit are recorded here. The format follows Keep a Cha
 - `QueryPrediction`, modelled alongside `PlacePrediction` and exposed as `AutocompleteResult.query_predictions`, so query predictions are no longer dropped by the autocomplete surface.
 - A lifecycle API on both clients, with `close()`, `with` on `Client` and `async with` on `AsyncClient`. Calls after close raise `ConfigError`.
 - Typed response coverage for opening hour periods, address components, plus code, viewport, postal address, primary type display name and current opening hours on `Place`, the flag and maps URIs on `Photo`, the resource name on `PlacePrediction`, and `search_uri` plus `routing_summaries` on the search results.
+- Typed opening hours completion on `OpeningHours`, with `next_close_time` and `next_open_time` as unparsed timestamp strings, `special_days` carrying a new `SpecialDay` model, and `secondary_hours_type` naming the kind of a secondary hours entry. `Place` gains `current_secondary_opening_hours` and `regular_secondary_opening_hours` as lists of `OpeningHours`, and both join the Place Details default mask.
+- `PostalAddress` completion with `sublocality`, `organization` and `recipients`, so the structured address carries the delivery names the API returns beside the locality fields.
+- Nine more typed `Place` fields. `editorial_summary` and `google_maps_type_label` reuse `LocalizedText`, `opening_date` reuses `Date`, and `icon_mask_base_uri`, `icon_background_color`, `utc_offset_minutes`, `pure_service_area_business`, `moved_place` and `moved_place_id` land as scalars whose absence reads None rather than a fabricated value. All nine join the Place Details default mask.
+- `Place.reviews` with a new `Review` model reusing `LocalizedText`, `AuthorAttribution` and `Date`, carrying the review text and its original language form, the rating as a float, the author, the publish time and the visit date. Reviews join the Place Details default mask and stay out of the search defaults, whose field tier for them is unchecked.
+- The 23 dine, service and amenity flags on `Place`, from `takeout` and `delivery` through `serves_breakfast` to `good_for_watching_sports`, as optional booleans whose absence reads None and never a fabricated false. All 23 join the Place Details default mask.
+- Three boolean option objects on `Place` with new `PaymentOptions`, `ParkingOptions` and `AccessibilityOptions` models, every leaf an optional boolean whose absence reads None. The three parents join the Place Details default mask.
+- Four wrapper models on `Place`. `TimeZone` types only its id, `GenerativeSummary` and `ReviewSummary` type only their `LocalizedText` payload, and `ConsumerAlert` types its plain string overview and language, with the flag, disclosure, link and detail leaves beside them staying in raw. All four parents join the Place Details default mask.
+- `GoogleMapsLinks` and `PriceRange` on `Place`, with a new `Money` model shared with the price range endpoints. Money units decode from the JSON string form the wire uses for int64 values to a real int, and an open ended price range keeps its absent end as None. Both parents join the Place Details default mask.
+- The EV charging summary on `Place` as `EvChargeOptions` with `ConnectorAggregation`, typing the connector count, the per type charge rate and counts, and the availability counts with their last update time. The parent joins the Place Details default mask.
+- `AddressDescriptor` on `Place` with new `Landmark` and `Area` models, typing the paired resource names and place ids, the display names, the landmark types and distances, and the area containment. The parent joins the Place Details default mask.
 - Parsed error envelope details on every API exception, as `error_code`, `details`, `field_violations` and `quota_violations`.
 - A configurable response size cap on the Rust core builder, defaulting to 32 MiB.
 - Client side validation for `min_rating`, Nearby Search result counts, session token format, and mutually exclusive location bias and restriction values. Location values are now typed shapes end to end, so a circle in a Text Search restriction fails locally instead of at the API.
@@ -25,6 +35,7 @@ All notable changes to placekit are recorded here. The format follows Keep a Cha
 
 ### Changed
 
+- **Breaking.** Search result `routing_summaries` are typed `RoutingSummary` objects with `Leg` entries instead of untyped dicts, on both text and nearby results. The dict form stays reachable unchanged through the result level `raw`, so no response data is lost in the change.
 - A circle in a Text Search location restriction now raises `ConfigError`, the same type as the other local validations, instead of a bare `ValueError` outside the exception hierarchy.
 - Client construction and `FieldMask` raise `ConfigError` for empty keys, invalid timeouts and invalid mask paths instead of bare `ValueError`, so every local misuse has the one documented type.
 - Default field masks now include the place resource name on every endpoint, and the README and fields docs state plainly that the defaults reach the Enterprise billing tier.
@@ -77,6 +88,7 @@ All notable changes to placekit are recorded here. The format follows Keep a Cha
 - Pickling or copying a client raises a `TypeError` naming placekit and the real reason, instead of an error naming a phantom `builtins.Client` class, and shallow copy no longer silently shares the live native client.
 - The shipped type stubs match the runtime, with constructors for `Place` and `PlacePrediction`, optional `fields` on the native methods, `retry_after` as a float, the frozen `FieldMask` dataclass, and `raise_translated` declared with its `NoReturn` type.
 - The source distribution no longer ships the repo toolchain pin file, whose component list made rustup roll back its own sync and left source builds without a working cargo. Source builds now follow the manifest Rust version with the toolchain the builder already has, and the pin keeps applying to work inside the repo itself.
+- `PhotoUriResult` now carries the full JSON form the photo media endpoint returned on its `raw`, deep copied like the other result raws. The binding previously crossed only the name and the URI, so any field Google adds to that form was dropped outright instead of surviving unmodelled.
 
 ## [0.1.0] - 2026-10-28
 
