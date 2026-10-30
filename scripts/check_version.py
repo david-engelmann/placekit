@@ -2,9 +2,10 @@
 """Fail unless every place the version lives agrees.
 
 The version is carried in the root Cargo.toml (the source maturin reads
-for the Python package), in the placekit-core crate manifest, in the top
-released entry of CHANGELOG.md, and in the __version__ fallback literal
-in python/placekit/__init__.py. pyproject.toml declares its version
+for the Python package), in the placekit-core crate manifest, in
+Cargo.lock's entry for the placekit package, in the top released entry
+of CHANGELOG.md, and in the __version__ fallback literal in
+python/placekit/__init__.py. pyproject.toml declares its version
 dynamic, so maturin derives it from Cargo.toml and the two cannot drift;
 if a static version ever appears in pyproject.toml it is checked too.
 
@@ -62,9 +63,33 @@ def pyproject_version() -> str | None:
     return None
 
 
+def cargo_lock_version() -> str:
+    text = (ROOT / "Cargo.lock").read_text(encoding="utf-8")
+    try:
+        import tomllib
+
+        packages = tomllib.loads(text)["package"]
+    except ModuleNotFoundError:
+        packages = None
+    if packages is not None:
+        for package in packages:
+            if package.get("name") == "placekit":
+                return package["version"]
+        fail("no package entry named placekit found in Cargo.lock")
+    for block in text.split("[[package]]"):
+        name = re.search(r'^name\s*=\s*"([^"]+)"', block, flags=re.MULTILINE)
+        version = re.search(r'^version\s*=\s*"([^"]+)"', block, flags=re.MULTILINE)
+        if name and version and name.group(1) == "placekit":
+            return version.group(1)
+    fail("no package entry named placekit found in Cargo.lock")
+    return ""
+
+
 def changelog_version() -> str:
     text = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
-    match = re.search(r"^## \[(\d+\.\d+\.\d+)\]", text, flags=re.MULTILINE)
+    match = re.search(
+        r"^## \[(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)\]", text, flags=re.MULTILINE
+    )
     if not match:
         fail("no released version entry (## [x.y.z]) found in CHANGELOG.md")
     return match.group(1)
@@ -84,6 +109,7 @@ def main() -> None:
         "crates/placekit-core/Cargo.toml": cargo_version(
             ROOT / "crates" / "placekit-core" / "Cargo.toml"
         ),
+        "Cargo.lock": cargo_lock_version(),
         "CHANGELOG.md": changelog_version(),
         "python/placekit/__init__.py": package_fallback_version(),
     }
