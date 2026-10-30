@@ -1,0 +1,1641 @@
+"""Place type vocabulary for the Places API (New).
+
+Snapshot of the official Place Types page for the Places API (New)
+at https://developers.google.com/maps/documentation/places/web-service/place-types
+as fetched on 2026-10-30. The page defines three tables and two
+type collections, and this module mirrors that shape.
+
+Table A values may filter Nearby Search and Text Search requests
+and may serve as Autocomplete primary types. Table B values may
+appear in any response and may filter only Autocomplete primary
+types. The two collections may appear only as a sole Autocomplete
+primary type value and never mixed with other values. Address
+component values describe AddressComponent.types entries and are
+not search filters.
+
+The API adds place types over time, and any string remains
+acceptable to the client whether or not a constant exists for it.
+The sets in this module describe what this version knows and must
+not be used to reject values, because future values remain valid
+input to the client.
+"""
+
+from __future__ import annotations
+
+# Table A, Automotive
+TYPE_CAR_DEALER = "car_dealer"
+TYPE_CAR_RENTAL = "car_rental"
+TYPE_CAR_REPAIR = "car_repair"
+TYPE_CAR_WASH = "car_wash"
+TYPE_EBIKE_CHARGING_STATION = "ebike_charging_station"
+TYPE_ELECTRIC_VEHICLE_CHARGING_STATION = "electric_vehicle_charging_station"
+TYPE_GAS_STATION = "gas_station"
+TYPE_PARKING = "parking"
+TYPE_PARKING_GARAGE = "parking_garage"
+TYPE_PARKING_LOT = "parking_lot"
+TYPE_REST_STOP = "rest_stop"
+TYPE_TIRE_SHOP = "tire_shop"
+TYPE_TRUCK_DEALER = "truck_dealer"
+
+# Table A, Business
+TYPE_BUSINESS_CENTER = "business_center"
+TYPE_CORPORATE_OFFICE = "corporate_office"
+TYPE_COWORKING_SPACE = "coworking_space"
+TYPE_FARM = "farm"
+TYPE_MANUFACTURER = "manufacturer"
+TYPE_RANCH = "ranch"
+TYPE_SUPPLIER = "supplier"
+TYPE_TELEVISION_STUDIO = "television_studio"
+
+# Table A, Culture
+TYPE_ART_GALLERY = "art_gallery"
+TYPE_ART_MUSEUM = "art_museum"
+TYPE_ART_STUDIO = "art_studio"
+TYPE_AUDITORIUM = "auditorium"
+TYPE_CASTLE = "castle"
+TYPE_CULTURAL_LANDMARK = "cultural_landmark"
+TYPE_FOUNTAIN = "fountain"
+TYPE_HISTORICAL_PLACE = "historical_place"
+TYPE_HISTORY_MUSEUM = "history_museum"
+TYPE_MONUMENT = "monument"
+TYPE_MUSEUM = "museum"
+TYPE_PERFORMING_ARTS_THEATER = "performing_arts_theater"
+TYPE_SCULPTURE = "sculpture"
+
+# Table A, Education
+TYPE_ACADEMIC_DEPARTMENT = "academic_department"
+TYPE_EDUCATIONAL_INSTITUTION = "educational_institution"
+TYPE_LIBRARY = "library"
+TYPE_PRESCHOOL = "preschool"
+TYPE_PRIMARY_SCHOOL = "primary_school"
+TYPE_RESEARCH_INSTITUTE = "research_institute"
+TYPE_SCHOOL = "school"
+TYPE_SECONDARY_SCHOOL = "secondary_school"
+TYPE_UNIVERSITY = "university"
+
+# Table A, Entertainment and Recreation
+TYPE_ADVENTURE_SPORTS_CENTER = "adventure_sports_center"
+TYPE_AMPHITHEATRE = "amphitheatre"
+TYPE_AMUSEMENT_CENTER = "amusement_center"
+TYPE_AMUSEMENT_PARK = "amusement_park"
+TYPE_AQUARIUM = "aquarium"
+TYPE_BANQUET_HALL = "banquet_hall"
+TYPE_BARBECUE_AREA = "barbecue_area"
+TYPE_BOTANICAL_GARDEN = "botanical_garden"
+TYPE_BOWLING_ALLEY = "bowling_alley"
+TYPE_CASINO = "casino"
+TYPE_CHILDRENS_CAMP = "childrens_camp"
+TYPE_CITY_PARK = "city_park"
+TYPE_COMEDY_CLUB = "comedy_club"
+TYPE_COMMUNITY_CENTER = "community_center"
+TYPE_CONCERT_HALL = "concert_hall"
+TYPE_CONVENTION_CENTER = "convention_center"
+TYPE_CULTURAL_CENTER = "cultural_center"
+TYPE_CYCLING_PARK = "cycling_park"
+TYPE_DANCE_HALL = "dance_hall"
+TYPE_DOG_PARK = "dog_park"
+TYPE_EVENT_VENUE = "event_venue"
+TYPE_FERRIS_WHEEL = "ferris_wheel"
+TYPE_GARDEN = "garden"
+TYPE_GO_KARTING_VENUE = "go_karting_venue"
+TYPE_HIKING_AREA = "hiking_area"
+TYPE_HISTORICAL_LANDMARK = "historical_landmark"
+TYPE_INDOOR_PLAYGROUND = "indoor_playground"
+TYPE_INTERNET_CAFE = "internet_cafe"
+TYPE_KARAOKE = "karaoke"
+TYPE_LIVE_MUSIC_VENUE = "live_music_venue"
+TYPE_MARINA = "marina"
+TYPE_MINIATURE_GOLF_COURSE = "miniature_golf_course"
+TYPE_MOVIE_RENTAL = "movie_rental"
+TYPE_MOVIE_THEATER = "movie_theater"
+TYPE_NATIONAL_PARK = "national_park"
+TYPE_NIGHT_CLUB = "night_club"
+TYPE_OBSERVATION_DECK = "observation_deck"
+TYPE_OFF_ROADING_AREA = "off_roading_area"
+TYPE_OPERA_HOUSE = "opera_house"
+TYPE_PAINTBALL_CENTER = "paintball_center"
+TYPE_PARK = "park"
+TYPE_PHILHARMONIC_HALL = "philharmonic_hall"
+TYPE_PICNIC_GROUND = "picnic_ground"
+TYPE_PLANETARIUM = "planetarium"
+TYPE_PLAZA = "plaza"
+TYPE_ROLLER_COASTER = "roller_coaster"
+TYPE_SKATEBOARD_PARK = "skateboard_park"
+TYPE_STATE_PARK = "state_park"
+TYPE_TOURIST_ATTRACTION = "tourist_attraction"
+TYPE_VIDEO_ARCADE = "video_arcade"
+TYPE_VINEYARD = "vineyard"
+TYPE_VISITOR_CENTER = "visitor_center"
+TYPE_WATER_PARK = "water_park"
+TYPE_WEDDING_VENUE = "wedding_venue"
+TYPE_WILDLIFE_PARK = "wildlife_park"
+TYPE_WILDLIFE_REFUGE = "wildlife_refuge"
+TYPE_ZOO = "zoo"
+
+# Table A, Facilities
+TYPE_PUBLIC_BATH = "public_bath"
+TYPE_PUBLIC_BATHROOM = "public_bathroom"
+TYPE_STABLE = "stable"
+
+# Table A, Finance
+TYPE_ACCOUNTING = "accounting"
+TYPE_ATM = "atm"
+TYPE_BANK = "bank"
+
+# Table A, Food and Drink
+TYPE_ACAI_SHOP = "acai_shop"
+TYPE_AFGHANI_RESTAURANT = "afghani_restaurant"
+TYPE_AFRICAN_RESTAURANT = "african_restaurant"
+TYPE_AMERICAN_RESTAURANT = "american_restaurant"
+TYPE_ARGENTINIAN_RESTAURANT = "argentinian_restaurant"
+TYPE_ASIAN_FUSION_RESTAURANT = "asian_fusion_restaurant"
+TYPE_ASIAN_RESTAURANT = "asian_restaurant"
+TYPE_AUSTRALIAN_RESTAURANT = "australian_restaurant"
+TYPE_AUSTRIAN_RESTAURANT = "austrian_restaurant"
+TYPE_BAGEL_SHOP = "bagel_shop"
+TYPE_BAKERY = "bakery"
+TYPE_BANGLADESHI_RESTAURANT = "bangladeshi_restaurant"
+TYPE_BAR = "bar"
+TYPE_BAR_AND_GRILL = "bar_and_grill"
+TYPE_BARBECUE_RESTAURANT = "barbecue_restaurant"
+TYPE_BASQUE_RESTAURANT = "basque_restaurant"
+TYPE_BAVARIAN_RESTAURANT = "bavarian_restaurant"
+TYPE_BEER_GARDEN = "beer_garden"
+TYPE_BELGIAN_RESTAURANT = "belgian_restaurant"
+TYPE_BISTRO = "bistro"
+TYPE_BRAZILIAN_RESTAURANT = "brazilian_restaurant"
+TYPE_BREAKFAST_RESTAURANT = "breakfast_restaurant"
+TYPE_BREWERY = "brewery"
+TYPE_BREWPUB = "brewpub"
+TYPE_BRITISH_RESTAURANT = "british_restaurant"
+TYPE_BRUNCH_RESTAURANT = "brunch_restaurant"
+TYPE_BUFFET_RESTAURANT = "buffet_restaurant"
+TYPE_BURMESE_RESTAURANT = "burmese_restaurant"
+TYPE_BURRITO_RESTAURANT = "burrito_restaurant"
+TYPE_CAFE = "cafe"
+TYPE_CAFETERIA = "cafeteria"
+TYPE_CAJUN_RESTAURANT = "cajun_restaurant"
+TYPE_CAKE_SHOP = "cake_shop"
+TYPE_CALIFORNIAN_RESTAURANT = "californian_restaurant"
+TYPE_CAMBODIAN_RESTAURANT = "cambodian_restaurant"
+TYPE_CANDY_STORE = "candy_store"
+TYPE_CANTONESE_RESTAURANT = "cantonese_restaurant"
+TYPE_CARIBBEAN_RESTAURANT = "caribbean_restaurant"
+TYPE_CAT_CAFE = "cat_cafe"
+TYPE_CHICKEN_RESTAURANT = "chicken_restaurant"
+TYPE_CHICKEN_WINGS_RESTAURANT = "chicken_wings_restaurant"
+TYPE_CHILEAN_RESTAURANT = "chilean_restaurant"
+TYPE_CHINESE_NOODLE_RESTAURANT = "chinese_noodle_restaurant"
+TYPE_CHINESE_RESTAURANT = "chinese_restaurant"
+TYPE_CHOCOLATE_FACTORY = "chocolate_factory"
+TYPE_CHOCOLATE_SHOP = "chocolate_shop"
+TYPE_COCKTAIL_BAR = "cocktail_bar"
+TYPE_COFFEE_ROASTERY = "coffee_roastery"
+TYPE_COFFEE_SHOP = "coffee_shop"
+TYPE_COFFEE_STAND = "coffee_stand"
+TYPE_COLOMBIAN_RESTAURANT = "colombian_restaurant"
+TYPE_CONFECTIONERY = "confectionery"
+TYPE_CROATIAN_RESTAURANT = "croatian_restaurant"
+TYPE_CUBAN_RESTAURANT = "cuban_restaurant"
+TYPE_CZECH_RESTAURANT = "czech_restaurant"
+TYPE_DANISH_RESTAURANT = "danish_restaurant"
+TYPE_DELI = "deli"
+TYPE_DESSERT_RESTAURANT = "dessert_restaurant"
+TYPE_DESSERT_SHOP = "dessert_shop"
+TYPE_DIM_SUM_RESTAURANT = "dim_sum_restaurant"
+TYPE_DINER = "diner"
+TYPE_DOG_CAFE = "dog_cafe"
+TYPE_DONUT_SHOP = "donut_shop"
+TYPE_DUMPLING_RESTAURANT = "dumpling_restaurant"
+TYPE_DUTCH_RESTAURANT = "dutch_restaurant"
+TYPE_EASTERN_EUROPEAN_RESTAURANT = "eastern_european_restaurant"
+TYPE_ETHIOPIAN_RESTAURANT = "ethiopian_restaurant"
+TYPE_EUROPEAN_RESTAURANT = "european_restaurant"
+TYPE_FALAFEL_RESTAURANT = "falafel_restaurant"
+TYPE_FAMILY_RESTAURANT = "family_restaurant"
+TYPE_FAST_FOOD_RESTAURANT = "fast_food_restaurant"
+TYPE_FILIPINO_RESTAURANT = "filipino_restaurant"
+TYPE_FINE_DINING_RESTAURANT = "fine_dining_restaurant"
+TYPE_FISH_AND_CHIPS_RESTAURANT = "fish_and_chips_restaurant"
+TYPE_FONDUE_RESTAURANT = "fondue_restaurant"
+TYPE_FOOD_COURT = "food_court"
+TYPE_FRENCH_RESTAURANT = "french_restaurant"
+TYPE_FUSION_RESTAURANT = "fusion_restaurant"
+TYPE_GASTROPUB = "gastropub"
+TYPE_GERMAN_RESTAURANT = "german_restaurant"
+TYPE_GREEK_RESTAURANT = "greek_restaurant"
+TYPE_GYRO_RESTAURANT = "gyro_restaurant"
+TYPE_HALAL_RESTAURANT = "halal_restaurant"
+TYPE_HAMBURGER_RESTAURANT = "hamburger_restaurant"
+TYPE_HAWAIIAN_RESTAURANT = "hawaiian_restaurant"
+TYPE_HOOKAH_BAR = "hookah_bar"
+TYPE_HOT_DOG_RESTAURANT = "hot_dog_restaurant"
+TYPE_HOT_DOG_STAND = "hot_dog_stand"
+TYPE_HOT_POT_RESTAURANT = "hot_pot_restaurant"
+TYPE_HUNGARIAN_RESTAURANT = "hungarian_restaurant"
+TYPE_ICE_CREAM_SHOP = "ice_cream_shop"
+TYPE_INDIAN_RESTAURANT = "indian_restaurant"
+TYPE_INDONESIAN_RESTAURANT = "indonesian_restaurant"
+TYPE_IRISH_PUB = "irish_pub"
+TYPE_IRISH_RESTAURANT = "irish_restaurant"
+TYPE_ISRAELI_RESTAURANT = "israeli_restaurant"
+TYPE_ITALIAN_RESTAURANT = "italian_restaurant"
+TYPE_JAPANESE_CURRY_RESTAURANT = "japanese_curry_restaurant"
+TYPE_JAPANESE_IZAKAYA_RESTAURANT = "japanese_izakaya_restaurant"
+TYPE_JAPANESE_RESTAURANT = "japanese_restaurant"
+TYPE_JUICE_SHOP = "juice_shop"
+TYPE_KEBAB_SHOP = "kebab_shop"
+TYPE_KOREAN_BARBECUE_RESTAURANT = "korean_barbecue_restaurant"
+TYPE_KOREAN_RESTAURANT = "korean_restaurant"
+TYPE_LATIN_AMERICAN_RESTAURANT = "latin_american_restaurant"
+TYPE_LEBANESE_RESTAURANT = "lebanese_restaurant"
+TYPE_LOUNGE_BAR = "lounge_bar"
+TYPE_MALAYSIAN_RESTAURANT = "malaysian_restaurant"
+TYPE_MEAL_DELIVERY = "meal_delivery"
+TYPE_MEAL_TAKEAWAY = "meal_takeaway"
+TYPE_MEDITERRANEAN_RESTAURANT = "mediterranean_restaurant"
+TYPE_MEXICAN_RESTAURANT = "mexican_restaurant"
+TYPE_MIDDLE_EASTERN_RESTAURANT = "middle_eastern_restaurant"
+TYPE_MONGOLIAN_BARBECUE_RESTAURANT = "mongolian_barbecue_restaurant"
+TYPE_MOROCCAN_RESTAURANT = "moroccan_restaurant"
+TYPE_NOODLE_SHOP = "noodle_shop"
+TYPE_NORTH_INDIAN_RESTAURANT = "north_indian_restaurant"
+TYPE_OYSTER_BAR_RESTAURANT = "oyster_bar_restaurant"
+TYPE_PAKISTANI_RESTAURANT = "pakistani_restaurant"
+TYPE_PASTRY_SHOP = "pastry_shop"
+TYPE_PERSIAN_RESTAURANT = "persian_restaurant"
+TYPE_PERUVIAN_RESTAURANT = "peruvian_restaurant"
+TYPE_PIZZA_DELIVERY = "pizza_delivery"
+TYPE_PIZZA_RESTAURANT = "pizza_restaurant"
+TYPE_POLISH_RESTAURANT = "polish_restaurant"
+TYPE_PORTUGUESE_RESTAURANT = "portuguese_restaurant"
+TYPE_PUB = "pub"
+TYPE_RAMEN_RESTAURANT = "ramen_restaurant"
+TYPE_RESTAURANT = "restaurant"
+TYPE_ROMANIAN_RESTAURANT = "romanian_restaurant"
+TYPE_RUSSIAN_RESTAURANT = "russian_restaurant"
+TYPE_SALAD_SHOP = "salad_shop"
+TYPE_SANDWICH_SHOP = "sandwich_shop"
+TYPE_SCANDINAVIAN_RESTAURANT = "scandinavian_restaurant"
+TYPE_SEAFOOD_RESTAURANT = "seafood_restaurant"
+TYPE_SHAWARMA_RESTAURANT = "shawarma_restaurant"
+TYPE_SNACK_BAR = "snack_bar"
+TYPE_SOUL_FOOD_RESTAURANT = "soul_food_restaurant"
+TYPE_SOUP_RESTAURANT = "soup_restaurant"
+TYPE_SOUTH_AMERICAN_RESTAURANT = "south_american_restaurant"
+TYPE_SOUTH_INDIAN_RESTAURANT = "south_indian_restaurant"
+TYPE_SOUTHWESTERN_US_RESTAURANT = "southwestern_us_restaurant"
+TYPE_SPANISH_RESTAURANT = "spanish_restaurant"
+TYPE_SPORTS_BAR = "sports_bar"
+TYPE_SRI_LANKAN_RESTAURANT = "sri_lankan_restaurant"
+TYPE_STEAK_HOUSE = "steak_house"
+TYPE_SUSHI_RESTAURANT = "sushi_restaurant"
+TYPE_SWISS_RESTAURANT = "swiss_restaurant"
+TYPE_TACO_RESTAURANT = "taco_restaurant"
+TYPE_TAIWANESE_RESTAURANT = "taiwanese_restaurant"
+TYPE_TAPAS_RESTAURANT = "tapas_restaurant"
+TYPE_TEA_HOUSE = "tea_house"
+TYPE_TEX_MEX_RESTAURANT = "tex_mex_restaurant"
+TYPE_THAI_RESTAURANT = "thai_restaurant"
+TYPE_TIBETAN_RESTAURANT = "tibetan_restaurant"
+TYPE_TONKATSU_RESTAURANT = "tonkatsu_restaurant"
+TYPE_TURKISH_RESTAURANT = "turkish_restaurant"
+TYPE_UKRAINIAN_RESTAURANT = "ukrainian_restaurant"
+TYPE_VEGAN_RESTAURANT = "vegan_restaurant"
+TYPE_VEGETARIAN_RESTAURANT = "vegetarian_restaurant"
+TYPE_VIETNAMESE_RESTAURANT = "vietnamese_restaurant"
+TYPE_WESTERN_RESTAURANT = "western_restaurant"
+TYPE_WINE_BAR = "wine_bar"
+TYPE_WINERY = "winery"
+TYPE_YAKINIKU_RESTAURANT = "yakiniku_restaurant"
+TYPE_YAKITORI_RESTAURANT = "yakitori_restaurant"
+
+# Table A, Geographical Areas
+TYPE_ADMINISTRATIVE_AREA_LEVEL_1 = "administrative_area_level_1"
+TYPE_ADMINISTRATIVE_AREA_LEVEL_2 = "administrative_area_level_2"
+TYPE_COUNTRY = "country"
+TYPE_LOCALITY = "locality"
+TYPE_POSTAL_CODE = "postal_code"
+TYPE_SCHOOL_DISTRICT = "school_district"
+
+# Table A, Government
+TYPE_CITY_HALL = "city_hall"
+TYPE_COURTHOUSE = "courthouse"
+TYPE_EMBASSY = "embassy"
+TYPE_FIRE_STATION = "fire_station"
+TYPE_GOVERNMENT_OFFICE = "government_office"
+TYPE_LOCAL_GOVERNMENT_OFFICE = "local_government_office"
+TYPE_NEIGHBORHOOD_POLICE_STATION = "neighborhood_police_station"
+TYPE_POLICE = "police"
+TYPE_POST_OFFICE = "post_office"
+
+# Table A, Health and Wellness
+TYPE_CHIROPRACTOR = "chiropractor"
+TYPE_DENTAL_CLINIC = "dental_clinic"
+TYPE_DENTIST = "dentist"
+TYPE_DOCTOR = "doctor"
+TYPE_DRUGSTORE = "drugstore"
+TYPE_GENERAL_HOSPITAL = "general_hospital"
+TYPE_HOSPITAL = "hospital"
+TYPE_MASSAGE = "massage"
+TYPE_MASSAGE_SPA = "massage_spa"
+TYPE_MEDICAL_CENTER = "medical_center"
+TYPE_MEDICAL_CLINIC = "medical_clinic"
+TYPE_MEDICAL_LAB = "medical_lab"
+TYPE_PHARMACY = "pharmacy"
+TYPE_PHYSIOTHERAPIST = "physiotherapist"
+TYPE_SAUNA = "sauna"
+TYPE_SKIN_CARE_CLINIC = "skin_care_clinic"
+TYPE_SPA = "spa"
+TYPE_TANNING_STUDIO = "tanning_studio"
+TYPE_WELLNESS_CENTER = "wellness_center"
+TYPE_YOGA_STUDIO = "yoga_studio"
+
+# Table A, Housing
+TYPE_APARTMENT_BUILDING = "apartment_building"
+TYPE_APARTMENT_COMPLEX = "apartment_complex"
+TYPE_CONDOMINIUM_COMPLEX = "condominium_complex"
+TYPE_HOUSING_COMPLEX = "housing_complex"
+
+# Table A, Lodging
+TYPE_BED_AND_BREAKFAST = "bed_and_breakfast"
+TYPE_BUDGET_JAPANESE_INN = "budget_japanese_inn"
+TYPE_CAMPGROUND = "campground"
+TYPE_CAMPING_CABIN = "camping_cabin"
+TYPE_COTTAGE = "cottage"
+TYPE_EXTENDED_STAY_HOTEL = "extended_stay_hotel"
+TYPE_FARMSTAY = "farmstay"
+TYPE_GUEST_HOUSE = "guest_house"
+TYPE_HOSTEL = "hostel"
+TYPE_HOTEL = "hotel"
+TYPE_INN = "inn"
+TYPE_JAPANESE_INN = "japanese_inn"
+TYPE_LODGING = "lodging"
+TYPE_MOBILE_HOME_PARK = "mobile_home_park"
+TYPE_MOTEL = "motel"
+TYPE_PRIVATE_GUEST_ROOM = "private_guest_room"
+TYPE_RESORT_HOTEL = "resort_hotel"
+TYPE_RV_PARK = "rv_park"
+
+# Table A, Natural Features
+TYPE_BEACH = "beach"
+TYPE_ISLAND = "island"
+TYPE_LAKE = "lake"
+TYPE_MOUNTAIN_PEAK = "mountain_peak"
+TYPE_NATURE_PRESERVE = "nature_preserve"
+TYPE_RIVER = "river"
+TYPE_SCENIC_SPOT = "scenic_spot"
+TYPE_WOODS = "woods"
+
+# Table A, Places of Worship
+TYPE_BUDDHIST_TEMPLE = "buddhist_temple"
+TYPE_CHURCH = "church"
+TYPE_HINDU_TEMPLE = "hindu_temple"
+TYPE_MOSQUE = "mosque"
+TYPE_SHINTO_SHRINE = "shinto_shrine"
+TYPE_SYNAGOGUE = "synagogue"
+
+# Table A, Services
+TYPE_AIRCRAFT_RENTAL_SERVICE = "aircraft_rental_service"
+TYPE_ASSOCIATION_OR_ORGANIZATION = "association_or_organization"
+TYPE_ASTROLOGER = "astrologer"
+TYPE_BARBER_SHOP = "barber_shop"
+TYPE_BEAUTICIAN = "beautician"
+TYPE_BEAUTY_SALON = "beauty_salon"
+TYPE_BODY_ART_SERVICE = "body_art_service"
+TYPE_CATERING_SERVICE = "catering_service"
+TYPE_CEMETERY = "cemetery"
+TYPE_CHAUFFEUR_SERVICE = "chauffeur_service"
+TYPE_CHILD_CARE_AGENCY = "child_care_agency"
+TYPE_CONSULTANT = "consultant"
+TYPE_COURIER_SERVICE = "courier_service"
+TYPE_ELECTRICIAN = "electrician"
+TYPE_EMPLOYMENT_AGENCY = "employment_agency"
+TYPE_FLORIST = "florist"
+TYPE_FOOD_DELIVERY = "food_delivery"
+TYPE_FOOT_CARE = "foot_care"
+TYPE_FUNERAL_HOME = "funeral_home"
+TYPE_HAIR_CARE = "hair_care"
+TYPE_HAIR_SALON = "hair_salon"
+TYPE_INSURANCE_AGENCY = "insurance_agency"
+TYPE_LAUNDRY = "laundry"
+TYPE_LAWYER = "lawyer"
+TYPE_LOCKSMITH = "locksmith"
+TYPE_MAKEUP_ARTIST = "makeup_artist"
+TYPE_MARKETING_CONSULTANT = "marketing_consultant"
+TYPE_MOVING_COMPANY = "moving_company"
+TYPE_NAIL_SALON = "nail_salon"
+TYPE_NON_PROFIT_ORGANIZATION = "non_profit_organization"
+TYPE_PAINTER = "painter"
+TYPE_PET_BOARDING_SERVICE = "pet_boarding_service"
+TYPE_PET_CARE = "pet_care"
+TYPE_PLUMBER = "plumber"
+TYPE_PSYCHIC = "psychic"
+TYPE_REAL_ESTATE_AGENCY = "real_estate_agency"
+TYPE_ROOFING_CONTRACTOR = "roofing_contractor"
+TYPE_SERVICE = "service"
+TYPE_SHIPPING_SERVICE = "shipping_service"
+TYPE_STORAGE = "storage"
+TYPE_SUMMER_CAMP_ORGANIZER = "summer_camp_organizer"
+TYPE_TAILOR = "tailor"
+TYPE_TELECOMMUNICATIONS_SERVICE_PROVIDER = "telecommunications_service_provider"
+TYPE_TOUR_AGENCY = "tour_agency"
+TYPE_TOURIST_INFORMATION_CENTER = "tourist_information_center"
+TYPE_TRAVEL_AGENCY = "travel_agency"
+TYPE_VETERINARY_CARE = "veterinary_care"
+
+# Table A, Shopping
+TYPE_ASIAN_GROCERY_STORE = "asian_grocery_store"
+TYPE_AUTO_PARTS_STORE = "auto_parts_store"
+TYPE_BICYCLE_STORE = "bicycle_store"
+TYPE_BOOK_STORE = "book_store"
+TYPE_BUILDING_MATERIALS_STORE = "building_materials_store"
+TYPE_BUTCHER_SHOP = "butcher_shop"
+TYPE_CELL_PHONE_STORE = "cell_phone_store"
+TYPE_CLOTHING_STORE = "clothing_store"
+TYPE_CONVENIENCE_STORE = "convenience_store"
+TYPE_COSMETICS_STORE = "cosmetics_store"
+TYPE_DEPARTMENT_STORE = "department_store"
+TYPE_DISCOUNT_STORE = "discount_store"
+TYPE_DISCOUNT_SUPERMARKET = "discount_supermarket"
+TYPE_ELECTRONICS_STORE = "electronics_store"
+TYPE_FARMERS_MARKET = "farmers_market"
+TYPE_FLEA_MARKET = "flea_market"
+TYPE_FOOD_STORE = "food_store"
+TYPE_FURNITURE_STORE = "furniture_store"
+TYPE_GARDEN_CENTER = "garden_center"
+TYPE_GENERAL_STORE = "general_store"
+TYPE_GIFT_SHOP = "gift_shop"
+TYPE_GROCERY_STORE = "grocery_store"
+TYPE_HARDWARE_STORE = "hardware_store"
+TYPE_HEALTH_FOOD_STORE = "health_food_store"
+TYPE_HOME_GOODS_STORE = "home_goods_store"
+TYPE_HOME_IMPROVEMENT_STORE = "home_improvement_store"
+TYPE_HYPERMARKET = "hypermarket"
+TYPE_JEWELRY_STORE = "jewelry_store"
+TYPE_LIQUOR_STORE = "liquor_store"
+TYPE_MARKET = "market"
+TYPE_PET_STORE = "pet_store"
+TYPE_SHOE_STORE = "shoe_store"
+TYPE_SHOPPING_MALL = "shopping_mall"
+TYPE_SPORTING_GOODS_STORE = "sporting_goods_store"
+TYPE_SPORTSWEAR_STORE = "sportswear_store"
+TYPE_STORE = "store"
+TYPE_SUPERMARKET = "supermarket"
+TYPE_TEA_STORE = "tea_store"
+TYPE_THRIFT_STORE = "thrift_store"
+TYPE_TOY_STORE = "toy_store"
+TYPE_WAREHOUSE_STORE = "warehouse_store"
+TYPE_WHOLESALER = "wholesaler"
+TYPE_WOMENS_CLOTHING_STORE = "womens_clothing_store"
+
+# Table A, Sports
+TYPE_ARENA = "arena"
+TYPE_ATHLETIC_FIELD = "athletic_field"
+TYPE_FISHING_CHARTER = "fishing_charter"
+TYPE_FISHING_PIER = "fishing_pier"
+TYPE_FISHING_POND = "fishing_pond"
+TYPE_FITNESS_CENTER = "fitness_center"
+TYPE_GOLF_COURSE = "golf_course"
+TYPE_GYM = "gym"
+TYPE_ICE_SKATING_RINK = "ice_skating_rink"
+TYPE_INDOOR_GOLF_COURSE = "indoor_golf_course"
+TYPE_PLAYGROUND = "playground"
+TYPE_RACE_COURSE = "race_course"
+TYPE_SKI_RESORT = "ski_resort"
+TYPE_SPORTS_ACTIVITY_LOCATION = "sports_activity_location"
+TYPE_SPORTS_CLUB = "sports_club"
+TYPE_SPORTS_COACHING = "sports_coaching"
+TYPE_SPORTS_COMPLEX = "sports_complex"
+TYPE_SPORTS_SCHOOL = "sports_school"
+TYPE_STADIUM = "stadium"
+TYPE_SWIMMING_POOL = "swimming_pool"
+TYPE_TENNIS_COURT = "tennis_court"
+
+# Table A, Transportation
+TYPE_AIRPORT = "airport"
+TYPE_AIRSTRIP = "airstrip"
+TYPE_BIKE_SHARING_STATION = "bike_sharing_station"
+TYPE_BRIDGE = "bridge"
+TYPE_BUS_STATION = "bus_station"
+TYPE_BUS_STOP = "bus_stop"
+TYPE_FERRY_SERVICE = "ferry_service"
+TYPE_FERRY_TERMINAL = "ferry_terminal"
+TYPE_HELIPORT = "heliport"
+TYPE_INTERNATIONAL_AIRPORT = "international_airport"
+TYPE_LIGHT_RAIL_STATION = "light_rail_station"
+TYPE_PARK_AND_RIDE = "park_and_ride"
+TYPE_SUBWAY_STATION = "subway_station"
+TYPE_TAXI_SERVICE = "taxi_service"
+TYPE_TAXI_STAND = "taxi_stand"
+TYPE_TOLL_STATION = "toll_station"
+TYPE_TRAIN_STATION = "train_station"
+TYPE_TRAIN_TICKET_OFFICE = "train_ticket_office"
+TYPE_TRAM_STOP = "tram_stop"
+TYPE_TRANSIT_DEPOT = "transit_depot"
+TYPE_TRANSIT_STATION = "transit_station"
+TYPE_TRANSIT_STOP = "transit_stop"
+TYPE_TRANSPORTATION_SERVICE = "transportation_service"
+TYPE_TRUCK_STOP = "truck_stop"
+
+# Table B
+TYPE_ADMINISTRATIVE_AREA_LEVEL_3 = "administrative_area_level_3"
+TYPE_ADMINISTRATIVE_AREA_LEVEL_4 = "administrative_area_level_4"
+TYPE_ADMINISTRATIVE_AREA_LEVEL_5 = "administrative_area_level_5"
+TYPE_ADMINISTRATIVE_AREA_LEVEL_6 = "administrative_area_level_6"
+TYPE_ADMINISTRATIVE_AREA_LEVEL_7 = "administrative_area_level_7"
+TYPE_ARCHIPELAGO = "archipelago"
+TYPE_COLLOQUIAL_AREA = "colloquial_area"
+TYPE_CONTINENT = "continent"
+TYPE_ESTABLISHMENT = "establishment"
+TYPE_FINANCE = "finance"
+TYPE_FOOD = "food"
+TYPE_GENERAL_CONTRACTOR = "general_contractor"
+TYPE_GEOCODE = "geocode"
+TYPE_HEALTH = "health"
+TYPE_INTERSECTION = "intersection"
+TYPE_LANDMARK = "landmark"
+TYPE_NATURAL_FEATURE = "natural_feature"
+TYPE_NEIGHBORHOOD = "neighborhood"
+TYPE_PLACE_OF_WORSHIP = "place_of_worship"
+TYPE_PLUS_CODE = "plus_code"
+TYPE_POINT_OF_INTEREST = "point_of_interest"
+TYPE_POLITICAL = "political"
+TYPE_POSTAL_CODE_PREFIX = "postal_code_prefix"
+TYPE_POSTAL_CODE_SUFFIX = "postal_code_suffix"
+TYPE_POSTAL_TOWN = "postal_town"
+TYPE_PREMISE = "premise"
+TYPE_ROUTE = "route"
+TYPE_STREET_ADDRESS = "street_address"
+TYPE_SUBLOCALITY = "sublocality"
+TYPE_SUBLOCALITY_LEVEL_1 = "sublocality_level_1"
+TYPE_SUBLOCALITY_LEVEL_2 = "sublocality_level_2"
+TYPE_SUBLOCALITY_LEVEL_3 = "sublocality_level_3"
+TYPE_SUBLOCALITY_LEVEL_4 = "sublocality_level_4"
+TYPE_SUBLOCALITY_LEVEL_5 = "sublocality_level_5"
+TYPE_SUBPREMISE = "subpremise"
+TYPE_TOWN_SQUARE = "town_square"
+
+# Address component only values
+TYPE_FLOOR = "floor"
+TYPE_POST_BOX = "post_box"
+TYPE_ROOM = "room"
+TYPE_STREET_NUMBER = "street_number"
+
+# Type collections for Autocomplete. A collection is not a type
+# and stays out of ALL_TYPES below.
+COLLECTION_REGIONS = "(regions)"
+COLLECTION_CITIES = "(cities)"
+
+TABLE_A_TYPES: frozenset[str] = frozenset({
+    "car_dealer",
+    "car_rental",
+    "car_repair",
+    "car_wash",
+    "ebike_charging_station",
+    "electric_vehicle_charging_station",
+    "gas_station",
+    "parking",
+    "parking_garage",
+    "parking_lot",
+    "rest_stop",
+    "tire_shop",
+    "truck_dealer",
+    "business_center",
+    "corporate_office",
+    "coworking_space",
+    "farm",
+    "manufacturer",
+    "ranch",
+    "supplier",
+    "television_studio",
+    "art_gallery",
+    "art_museum",
+    "art_studio",
+    "auditorium",
+    "castle",
+    "cultural_landmark",
+    "fountain",
+    "historical_place",
+    "history_museum",
+    "monument",
+    "museum",
+    "performing_arts_theater",
+    "sculpture",
+    "academic_department",
+    "educational_institution",
+    "library",
+    "preschool",
+    "primary_school",
+    "research_institute",
+    "school",
+    "secondary_school",
+    "university",
+    "adventure_sports_center",
+    "amphitheatre",
+    "amusement_center",
+    "amusement_park",
+    "aquarium",
+    "banquet_hall",
+    "barbecue_area",
+    "botanical_garden",
+    "bowling_alley",
+    "casino",
+    "childrens_camp",
+    "city_park",
+    "comedy_club",
+    "community_center",
+    "concert_hall",
+    "convention_center",
+    "cultural_center",
+    "cycling_park",
+    "dance_hall",
+    "dog_park",
+    "event_venue",
+    "ferris_wheel",
+    "garden",
+    "go_karting_venue",
+    "hiking_area",
+    "historical_landmark",
+    "indoor_playground",
+    "internet_cafe",
+    "karaoke",
+    "live_music_venue",
+    "marina",
+    "miniature_golf_course",
+    "movie_rental",
+    "movie_theater",
+    "national_park",
+    "night_club",
+    "observation_deck",
+    "off_roading_area",
+    "opera_house",
+    "paintball_center",
+    "park",
+    "philharmonic_hall",
+    "picnic_ground",
+    "planetarium",
+    "plaza",
+    "roller_coaster",
+    "skateboard_park",
+    "state_park",
+    "tourist_attraction",
+    "video_arcade",
+    "vineyard",
+    "visitor_center",
+    "water_park",
+    "wedding_venue",
+    "wildlife_park",
+    "wildlife_refuge",
+    "zoo",
+    "public_bath",
+    "public_bathroom",
+    "stable",
+    "accounting",
+    "atm",
+    "bank",
+    "acai_shop",
+    "afghani_restaurant",
+    "african_restaurant",
+    "american_restaurant",
+    "argentinian_restaurant",
+    "asian_fusion_restaurant",
+    "asian_restaurant",
+    "australian_restaurant",
+    "austrian_restaurant",
+    "bagel_shop",
+    "bakery",
+    "bangladeshi_restaurant",
+    "bar",
+    "bar_and_grill",
+    "barbecue_restaurant",
+    "basque_restaurant",
+    "bavarian_restaurant",
+    "beer_garden",
+    "belgian_restaurant",
+    "bistro",
+    "brazilian_restaurant",
+    "breakfast_restaurant",
+    "brewery",
+    "brewpub",
+    "british_restaurant",
+    "brunch_restaurant",
+    "buffet_restaurant",
+    "burmese_restaurant",
+    "burrito_restaurant",
+    "cafe",
+    "cafeteria",
+    "cajun_restaurant",
+    "cake_shop",
+    "californian_restaurant",
+    "cambodian_restaurant",
+    "candy_store",
+    "cantonese_restaurant",
+    "caribbean_restaurant",
+    "cat_cafe",
+    "chicken_restaurant",
+    "chicken_wings_restaurant",
+    "chilean_restaurant",
+    "chinese_noodle_restaurant",
+    "chinese_restaurant",
+    "chocolate_factory",
+    "chocolate_shop",
+    "cocktail_bar",
+    "coffee_roastery",
+    "coffee_shop",
+    "coffee_stand",
+    "colombian_restaurant",
+    "confectionery",
+    "croatian_restaurant",
+    "cuban_restaurant",
+    "czech_restaurant",
+    "danish_restaurant",
+    "deli",
+    "dessert_restaurant",
+    "dessert_shop",
+    "dim_sum_restaurant",
+    "diner",
+    "dog_cafe",
+    "donut_shop",
+    "dumpling_restaurant",
+    "dutch_restaurant",
+    "eastern_european_restaurant",
+    "ethiopian_restaurant",
+    "european_restaurant",
+    "falafel_restaurant",
+    "family_restaurant",
+    "fast_food_restaurant",
+    "filipino_restaurant",
+    "fine_dining_restaurant",
+    "fish_and_chips_restaurant",
+    "fondue_restaurant",
+    "food_court",
+    "french_restaurant",
+    "fusion_restaurant",
+    "gastropub",
+    "german_restaurant",
+    "greek_restaurant",
+    "gyro_restaurant",
+    "halal_restaurant",
+    "hamburger_restaurant",
+    "hawaiian_restaurant",
+    "hookah_bar",
+    "hot_dog_restaurant",
+    "hot_dog_stand",
+    "hot_pot_restaurant",
+    "hungarian_restaurant",
+    "ice_cream_shop",
+    "indian_restaurant",
+    "indonesian_restaurant",
+    "irish_pub",
+    "irish_restaurant",
+    "israeli_restaurant",
+    "italian_restaurant",
+    "japanese_curry_restaurant",
+    "japanese_izakaya_restaurant",
+    "japanese_restaurant",
+    "juice_shop",
+    "kebab_shop",
+    "korean_barbecue_restaurant",
+    "korean_restaurant",
+    "latin_american_restaurant",
+    "lebanese_restaurant",
+    "lounge_bar",
+    "malaysian_restaurant",
+    "meal_delivery",
+    "meal_takeaway",
+    "mediterranean_restaurant",
+    "mexican_restaurant",
+    "middle_eastern_restaurant",
+    "mongolian_barbecue_restaurant",
+    "moroccan_restaurant",
+    "noodle_shop",
+    "north_indian_restaurant",
+    "oyster_bar_restaurant",
+    "pakistani_restaurant",
+    "pastry_shop",
+    "persian_restaurant",
+    "peruvian_restaurant",
+    "pizza_delivery",
+    "pizza_restaurant",
+    "polish_restaurant",
+    "portuguese_restaurant",
+    "pub",
+    "ramen_restaurant",
+    "restaurant",
+    "romanian_restaurant",
+    "russian_restaurant",
+    "salad_shop",
+    "sandwich_shop",
+    "scandinavian_restaurant",
+    "seafood_restaurant",
+    "shawarma_restaurant",
+    "snack_bar",
+    "soul_food_restaurant",
+    "soup_restaurant",
+    "south_american_restaurant",
+    "south_indian_restaurant",
+    "southwestern_us_restaurant",
+    "spanish_restaurant",
+    "sports_bar",
+    "sri_lankan_restaurant",
+    "steak_house",
+    "sushi_restaurant",
+    "swiss_restaurant",
+    "taco_restaurant",
+    "taiwanese_restaurant",
+    "tapas_restaurant",
+    "tea_house",
+    "tex_mex_restaurant",
+    "thai_restaurant",
+    "tibetan_restaurant",
+    "tonkatsu_restaurant",
+    "turkish_restaurant",
+    "ukrainian_restaurant",
+    "vegan_restaurant",
+    "vegetarian_restaurant",
+    "vietnamese_restaurant",
+    "western_restaurant",
+    "wine_bar",
+    "winery",
+    "yakiniku_restaurant",
+    "yakitori_restaurant",
+    "administrative_area_level_1",
+    "administrative_area_level_2",
+    "country",
+    "locality",
+    "postal_code",
+    "school_district",
+    "city_hall",
+    "courthouse",
+    "embassy",
+    "fire_station",
+    "government_office",
+    "local_government_office",
+    "neighborhood_police_station",
+    "police",
+    "post_office",
+    "chiropractor",
+    "dental_clinic",
+    "dentist",
+    "doctor",
+    "drugstore",
+    "general_hospital",
+    "hospital",
+    "massage",
+    "massage_spa",
+    "medical_center",
+    "medical_clinic",
+    "medical_lab",
+    "pharmacy",
+    "physiotherapist",
+    "sauna",
+    "skin_care_clinic",
+    "spa",
+    "tanning_studio",
+    "wellness_center",
+    "yoga_studio",
+    "apartment_building",
+    "apartment_complex",
+    "condominium_complex",
+    "housing_complex",
+    "bed_and_breakfast",
+    "budget_japanese_inn",
+    "campground",
+    "camping_cabin",
+    "cottage",
+    "extended_stay_hotel",
+    "farmstay",
+    "guest_house",
+    "hostel",
+    "hotel",
+    "inn",
+    "japanese_inn",
+    "lodging",
+    "mobile_home_park",
+    "motel",
+    "private_guest_room",
+    "resort_hotel",
+    "rv_park",
+    "beach",
+    "island",
+    "lake",
+    "mountain_peak",
+    "nature_preserve",
+    "river",
+    "scenic_spot",
+    "woods",
+    "buddhist_temple",
+    "church",
+    "hindu_temple",
+    "mosque",
+    "shinto_shrine",
+    "synagogue",
+    "aircraft_rental_service",
+    "association_or_organization",
+    "astrologer",
+    "barber_shop",
+    "beautician",
+    "beauty_salon",
+    "body_art_service",
+    "catering_service",
+    "cemetery",
+    "chauffeur_service",
+    "child_care_agency",
+    "consultant",
+    "courier_service",
+    "electrician",
+    "employment_agency",
+    "florist",
+    "food_delivery",
+    "foot_care",
+    "funeral_home",
+    "hair_care",
+    "hair_salon",
+    "insurance_agency",
+    "laundry",
+    "lawyer",
+    "locksmith",
+    "makeup_artist",
+    "marketing_consultant",
+    "moving_company",
+    "nail_salon",
+    "non_profit_organization",
+    "painter",
+    "pet_boarding_service",
+    "pet_care",
+    "plumber",
+    "psychic",
+    "real_estate_agency",
+    "roofing_contractor",
+    "service",
+    "shipping_service",
+    "storage",
+    "summer_camp_organizer",
+    "tailor",
+    "telecommunications_service_provider",
+    "tour_agency",
+    "tourist_information_center",
+    "travel_agency",
+    "veterinary_care",
+    "asian_grocery_store",
+    "auto_parts_store",
+    "bicycle_store",
+    "book_store",
+    "building_materials_store",
+    "butcher_shop",
+    "cell_phone_store",
+    "clothing_store",
+    "convenience_store",
+    "cosmetics_store",
+    "department_store",
+    "discount_store",
+    "discount_supermarket",
+    "electronics_store",
+    "farmers_market",
+    "flea_market",
+    "food_store",
+    "furniture_store",
+    "garden_center",
+    "general_store",
+    "gift_shop",
+    "grocery_store",
+    "hardware_store",
+    "health_food_store",
+    "home_goods_store",
+    "home_improvement_store",
+    "hypermarket",
+    "jewelry_store",
+    "liquor_store",
+    "market",
+    "pet_store",
+    "shoe_store",
+    "shopping_mall",
+    "sporting_goods_store",
+    "sportswear_store",
+    "store",
+    "supermarket",
+    "tea_store",
+    "thrift_store",
+    "toy_store",
+    "warehouse_store",
+    "wholesaler",
+    "womens_clothing_store",
+    "arena",
+    "athletic_field",
+    "fishing_charter",
+    "fishing_pier",
+    "fishing_pond",
+    "fitness_center",
+    "golf_course",
+    "gym",
+    "ice_skating_rink",
+    "indoor_golf_course",
+    "playground",
+    "race_course",
+    "ski_resort",
+    "sports_activity_location",
+    "sports_club",
+    "sports_coaching",
+    "sports_complex",
+    "sports_school",
+    "stadium",
+    "swimming_pool",
+    "tennis_court",
+    "airport",
+    "airstrip",
+    "bike_sharing_station",
+    "bridge",
+    "bus_station",
+    "bus_stop",
+    "ferry_service",
+    "ferry_terminal",
+    "heliport",
+    "international_airport",
+    "light_rail_station",
+    "park_and_ride",
+    "subway_station",
+    "taxi_service",
+    "taxi_stand",
+    "toll_station",
+    "train_station",
+    "train_ticket_office",
+    "tram_stop",
+    "transit_depot",
+    "transit_station",
+    "transit_stop",
+    "transportation_service",
+    "truck_stop",
+})
+TABLE_B_TYPES: frozenset[str] = frozenset({
+    "administrative_area_level_3",
+    "administrative_area_level_4",
+    "administrative_area_level_5",
+    "administrative_area_level_6",
+    "administrative_area_level_7",
+    "archipelago",
+    "colloquial_area",
+    "continent",
+    "establishment",
+    "finance",
+    "food",
+    "general_contractor",
+    "geocode",
+    "health",
+    "intersection",
+    "landmark",
+    "natural_feature",
+    "neighborhood",
+    "place_of_worship",
+    "plus_code",
+    "point_of_interest",
+    "political",
+    "postal_code_prefix",
+    "postal_code_suffix",
+    "postal_town",
+    "premise",
+    "route",
+    "street_address",
+    "sublocality",
+    "sublocality_level_1",
+    "sublocality_level_2",
+    "sublocality_level_3",
+    "sublocality_level_4",
+    "sublocality_level_5",
+    "subpremise",
+    "town_square",
+})
+ADDRESS_COMPONENT_TYPES: frozenset[str] = frozenset({
+    "floor",
+    "post_box",
+    "room",
+    "street_number",
+})
+ALL_TYPES: frozenset[str] = TABLE_A_TYPES | TABLE_B_TYPES | ADDRESS_COMPONENT_TYPES
+
+__all__ = [
+    "TYPE_CAR_DEALER",
+    "TYPE_CAR_RENTAL",
+    "TYPE_CAR_REPAIR",
+    "TYPE_CAR_WASH",
+    "TYPE_EBIKE_CHARGING_STATION",
+    "TYPE_ELECTRIC_VEHICLE_CHARGING_STATION",
+    "TYPE_GAS_STATION",
+    "TYPE_PARKING",
+    "TYPE_PARKING_GARAGE",
+    "TYPE_PARKING_LOT",
+    "TYPE_REST_STOP",
+    "TYPE_TIRE_SHOP",
+    "TYPE_TRUCK_DEALER",
+    "TYPE_BUSINESS_CENTER",
+    "TYPE_CORPORATE_OFFICE",
+    "TYPE_COWORKING_SPACE",
+    "TYPE_FARM",
+    "TYPE_MANUFACTURER",
+    "TYPE_RANCH",
+    "TYPE_SUPPLIER",
+    "TYPE_TELEVISION_STUDIO",
+    "TYPE_ART_GALLERY",
+    "TYPE_ART_MUSEUM",
+    "TYPE_ART_STUDIO",
+    "TYPE_AUDITORIUM",
+    "TYPE_CASTLE",
+    "TYPE_CULTURAL_LANDMARK",
+    "TYPE_FOUNTAIN",
+    "TYPE_HISTORICAL_PLACE",
+    "TYPE_HISTORY_MUSEUM",
+    "TYPE_MONUMENT",
+    "TYPE_MUSEUM",
+    "TYPE_PERFORMING_ARTS_THEATER",
+    "TYPE_SCULPTURE",
+    "TYPE_ACADEMIC_DEPARTMENT",
+    "TYPE_EDUCATIONAL_INSTITUTION",
+    "TYPE_LIBRARY",
+    "TYPE_PRESCHOOL",
+    "TYPE_PRIMARY_SCHOOL",
+    "TYPE_RESEARCH_INSTITUTE",
+    "TYPE_SCHOOL",
+    "TYPE_SECONDARY_SCHOOL",
+    "TYPE_UNIVERSITY",
+    "TYPE_ADVENTURE_SPORTS_CENTER",
+    "TYPE_AMPHITHEATRE",
+    "TYPE_AMUSEMENT_CENTER",
+    "TYPE_AMUSEMENT_PARK",
+    "TYPE_AQUARIUM",
+    "TYPE_BANQUET_HALL",
+    "TYPE_BARBECUE_AREA",
+    "TYPE_BOTANICAL_GARDEN",
+    "TYPE_BOWLING_ALLEY",
+    "TYPE_CASINO",
+    "TYPE_CHILDRENS_CAMP",
+    "TYPE_CITY_PARK",
+    "TYPE_COMEDY_CLUB",
+    "TYPE_COMMUNITY_CENTER",
+    "TYPE_CONCERT_HALL",
+    "TYPE_CONVENTION_CENTER",
+    "TYPE_CULTURAL_CENTER",
+    "TYPE_CYCLING_PARK",
+    "TYPE_DANCE_HALL",
+    "TYPE_DOG_PARK",
+    "TYPE_EVENT_VENUE",
+    "TYPE_FERRIS_WHEEL",
+    "TYPE_GARDEN",
+    "TYPE_GO_KARTING_VENUE",
+    "TYPE_HIKING_AREA",
+    "TYPE_HISTORICAL_LANDMARK",
+    "TYPE_INDOOR_PLAYGROUND",
+    "TYPE_INTERNET_CAFE",
+    "TYPE_KARAOKE",
+    "TYPE_LIVE_MUSIC_VENUE",
+    "TYPE_MARINA",
+    "TYPE_MINIATURE_GOLF_COURSE",
+    "TYPE_MOVIE_RENTAL",
+    "TYPE_MOVIE_THEATER",
+    "TYPE_NATIONAL_PARK",
+    "TYPE_NIGHT_CLUB",
+    "TYPE_OBSERVATION_DECK",
+    "TYPE_OFF_ROADING_AREA",
+    "TYPE_OPERA_HOUSE",
+    "TYPE_PAINTBALL_CENTER",
+    "TYPE_PARK",
+    "TYPE_PHILHARMONIC_HALL",
+    "TYPE_PICNIC_GROUND",
+    "TYPE_PLANETARIUM",
+    "TYPE_PLAZA",
+    "TYPE_ROLLER_COASTER",
+    "TYPE_SKATEBOARD_PARK",
+    "TYPE_STATE_PARK",
+    "TYPE_TOURIST_ATTRACTION",
+    "TYPE_VIDEO_ARCADE",
+    "TYPE_VINEYARD",
+    "TYPE_VISITOR_CENTER",
+    "TYPE_WATER_PARK",
+    "TYPE_WEDDING_VENUE",
+    "TYPE_WILDLIFE_PARK",
+    "TYPE_WILDLIFE_REFUGE",
+    "TYPE_ZOO",
+    "TYPE_PUBLIC_BATH",
+    "TYPE_PUBLIC_BATHROOM",
+    "TYPE_STABLE",
+    "TYPE_ACCOUNTING",
+    "TYPE_ATM",
+    "TYPE_BANK",
+    "TYPE_ACAI_SHOP",
+    "TYPE_AFGHANI_RESTAURANT",
+    "TYPE_AFRICAN_RESTAURANT",
+    "TYPE_AMERICAN_RESTAURANT",
+    "TYPE_ARGENTINIAN_RESTAURANT",
+    "TYPE_ASIAN_FUSION_RESTAURANT",
+    "TYPE_ASIAN_RESTAURANT",
+    "TYPE_AUSTRALIAN_RESTAURANT",
+    "TYPE_AUSTRIAN_RESTAURANT",
+    "TYPE_BAGEL_SHOP",
+    "TYPE_BAKERY",
+    "TYPE_BANGLADESHI_RESTAURANT",
+    "TYPE_BAR",
+    "TYPE_BAR_AND_GRILL",
+    "TYPE_BARBECUE_RESTAURANT",
+    "TYPE_BASQUE_RESTAURANT",
+    "TYPE_BAVARIAN_RESTAURANT",
+    "TYPE_BEER_GARDEN",
+    "TYPE_BELGIAN_RESTAURANT",
+    "TYPE_BISTRO",
+    "TYPE_BRAZILIAN_RESTAURANT",
+    "TYPE_BREAKFAST_RESTAURANT",
+    "TYPE_BREWERY",
+    "TYPE_BREWPUB",
+    "TYPE_BRITISH_RESTAURANT",
+    "TYPE_BRUNCH_RESTAURANT",
+    "TYPE_BUFFET_RESTAURANT",
+    "TYPE_BURMESE_RESTAURANT",
+    "TYPE_BURRITO_RESTAURANT",
+    "TYPE_CAFE",
+    "TYPE_CAFETERIA",
+    "TYPE_CAJUN_RESTAURANT",
+    "TYPE_CAKE_SHOP",
+    "TYPE_CALIFORNIAN_RESTAURANT",
+    "TYPE_CAMBODIAN_RESTAURANT",
+    "TYPE_CANDY_STORE",
+    "TYPE_CANTONESE_RESTAURANT",
+    "TYPE_CARIBBEAN_RESTAURANT",
+    "TYPE_CAT_CAFE",
+    "TYPE_CHICKEN_RESTAURANT",
+    "TYPE_CHICKEN_WINGS_RESTAURANT",
+    "TYPE_CHILEAN_RESTAURANT",
+    "TYPE_CHINESE_NOODLE_RESTAURANT",
+    "TYPE_CHINESE_RESTAURANT",
+    "TYPE_CHOCOLATE_FACTORY",
+    "TYPE_CHOCOLATE_SHOP",
+    "TYPE_COCKTAIL_BAR",
+    "TYPE_COFFEE_ROASTERY",
+    "TYPE_COFFEE_SHOP",
+    "TYPE_COFFEE_STAND",
+    "TYPE_COLOMBIAN_RESTAURANT",
+    "TYPE_CONFECTIONERY",
+    "TYPE_CROATIAN_RESTAURANT",
+    "TYPE_CUBAN_RESTAURANT",
+    "TYPE_CZECH_RESTAURANT",
+    "TYPE_DANISH_RESTAURANT",
+    "TYPE_DELI",
+    "TYPE_DESSERT_RESTAURANT",
+    "TYPE_DESSERT_SHOP",
+    "TYPE_DIM_SUM_RESTAURANT",
+    "TYPE_DINER",
+    "TYPE_DOG_CAFE",
+    "TYPE_DONUT_SHOP",
+    "TYPE_DUMPLING_RESTAURANT",
+    "TYPE_DUTCH_RESTAURANT",
+    "TYPE_EASTERN_EUROPEAN_RESTAURANT",
+    "TYPE_ETHIOPIAN_RESTAURANT",
+    "TYPE_EUROPEAN_RESTAURANT",
+    "TYPE_FALAFEL_RESTAURANT",
+    "TYPE_FAMILY_RESTAURANT",
+    "TYPE_FAST_FOOD_RESTAURANT",
+    "TYPE_FILIPINO_RESTAURANT",
+    "TYPE_FINE_DINING_RESTAURANT",
+    "TYPE_FISH_AND_CHIPS_RESTAURANT",
+    "TYPE_FONDUE_RESTAURANT",
+    "TYPE_FOOD_COURT",
+    "TYPE_FRENCH_RESTAURANT",
+    "TYPE_FUSION_RESTAURANT",
+    "TYPE_GASTROPUB",
+    "TYPE_GERMAN_RESTAURANT",
+    "TYPE_GREEK_RESTAURANT",
+    "TYPE_GYRO_RESTAURANT",
+    "TYPE_HALAL_RESTAURANT",
+    "TYPE_HAMBURGER_RESTAURANT",
+    "TYPE_HAWAIIAN_RESTAURANT",
+    "TYPE_HOOKAH_BAR",
+    "TYPE_HOT_DOG_RESTAURANT",
+    "TYPE_HOT_DOG_STAND",
+    "TYPE_HOT_POT_RESTAURANT",
+    "TYPE_HUNGARIAN_RESTAURANT",
+    "TYPE_ICE_CREAM_SHOP",
+    "TYPE_INDIAN_RESTAURANT",
+    "TYPE_INDONESIAN_RESTAURANT",
+    "TYPE_IRISH_PUB",
+    "TYPE_IRISH_RESTAURANT",
+    "TYPE_ISRAELI_RESTAURANT",
+    "TYPE_ITALIAN_RESTAURANT",
+    "TYPE_JAPANESE_CURRY_RESTAURANT",
+    "TYPE_JAPANESE_IZAKAYA_RESTAURANT",
+    "TYPE_JAPANESE_RESTAURANT",
+    "TYPE_JUICE_SHOP",
+    "TYPE_KEBAB_SHOP",
+    "TYPE_KOREAN_BARBECUE_RESTAURANT",
+    "TYPE_KOREAN_RESTAURANT",
+    "TYPE_LATIN_AMERICAN_RESTAURANT",
+    "TYPE_LEBANESE_RESTAURANT",
+    "TYPE_LOUNGE_BAR",
+    "TYPE_MALAYSIAN_RESTAURANT",
+    "TYPE_MEAL_DELIVERY",
+    "TYPE_MEAL_TAKEAWAY",
+    "TYPE_MEDITERRANEAN_RESTAURANT",
+    "TYPE_MEXICAN_RESTAURANT",
+    "TYPE_MIDDLE_EASTERN_RESTAURANT",
+    "TYPE_MONGOLIAN_BARBECUE_RESTAURANT",
+    "TYPE_MOROCCAN_RESTAURANT",
+    "TYPE_NOODLE_SHOP",
+    "TYPE_NORTH_INDIAN_RESTAURANT",
+    "TYPE_OYSTER_BAR_RESTAURANT",
+    "TYPE_PAKISTANI_RESTAURANT",
+    "TYPE_PASTRY_SHOP",
+    "TYPE_PERSIAN_RESTAURANT",
+    "TYPE_PERUVIAN_RESTAURANT",
+    "TYPE_PIZZA_DELIVERY",
+    "TYPE_PIZZA_RESTAURANT",
+    "TYPE_POLISH_RESTAURANT",
+    "TYPE_PORTUGUESE_RESTAURANT",
+    "TYPE_PUB",
+    "TYPE_RAMEN_RESTAURANT",
+    "TYPE_RESTAURANT",
+    "TYPE_ROMANIAN_RESTAURANT",
+    "TYPE_RUSSIAN_RESTAURANT",
+    "TYPE_SALAD_SHOP",
+    "TYPE_SANDWICH_SHOP",
+    "TYPE_SCANDINAVIAN_RESTAURANT",
+    "TYPE_SEAFOOD_RESTAURANT",
+    "TYPE_SHAWARMA_RESTAURANT",
+    "TYPE_SNACK_BAR",
+    "TYPE_SOUL_FOOD_RESTAURANT",
+    "TYPE_SOUP_RESTAURANT",
+    "TYPE_SOUTH_AMERICAN_RESTAURANT",
+    "TYPE_SOUTH_INDIAN_RESTAURANT",
+    "TYPE_SOUTHWESTERN_US_RESTAURANT",
+    "TYPE_SPANISH_RESTAURANT",
+    "TYPE_SPORTS_BAR",
+    "TYPE_SRI_LANKAN_RESTAURANT",
+    "TYPE_STEAK_HOUSE",
+    "TYPE_SUSHI_RESTAURANT",
+    "TYPE_SWISS_RESTAURANT",
+    "TYPE_TACO_RESTAURANT",
+    "TYPE_TAIWANESE_RESTAURANT",
+    "TYPE_TAPAS_RESTAURANT",
+    "TYPE_TEA_HOUSE",
+    "TYPE_TEX_MEX_RESTAURANT",
+    "TYPE_THAI_RESTAURANT",
+    "TYPE_TIBETAN_RESTAURANT",
+    "TYPE_TONKATSU_RESTAURANT",
+    "TYPE_TURKISH_RESTAURANT",
+    "TYPE_UKRAINIAN_RESTAURANT",
+    "TYPE_VEGAN_RESTAURANT",
+    "TYPE_VEGETARIAN_RESTAURANT",
+    "TYPE_VIETNAMESE_RESTAURANT",
+    "TYPE_WESTERN_RESTAURANT",
+    "TYPE_WINE_BAR",
+    "TYPE_WINERY",
+    "TYPE_YAKINIKU_RESTAURANT",
+    "TYPE_YAKITORI_RESTAURANT",
+    "TYPE_ADMINISTRATIVE_AREA_LEVEL_1",
+    "TYPE_ADMINISTRATIVE_AREA_LEVEL_2",
+    "TYPE_COUNTRY",
+    "TYPE_LOCALITY",
+    "TYPE_POSTAL_CODE",
+    "TYPE_SCHOOL_DISTRICT",
+    "TYPE_CITY_HALL",
+    "TYPE_COURTHOUSE",
+    "TYPE_EMBASSY",
+    "TYPE_FIRE_STATION",
+    "TYPE_GOVERNMENT_OFFICE",
+    "TYPE_LOCAL_GOVERNMENT_OFFICE",
+    "TYPE_NEIGHBORHOOD_POLICE_STATION",
+    "TYPE_POLICE",
+    "TYPE_POST_OFFICE",
+    "TYPE_CHIROPRACTOR",
+    "TYPE_DENTAL_CLINIC",
+    "TYPE_DENTIST",
+    "TYPE_DOCTOR",
+    "TYPE_DRUGSTORE",
+    "TYPE_GENERAL_HOSPITAL",
+    "TYPE_HOSPITAL",
+    "TYPE_MASSAGE",
+    "TYPE_MASSAGE_SPA",
+    "TYPE_MEDICAL_CENTER",
+    "TYPE_MEDICAL_CLINIC",
+    "TYPE_MEDICAL_LAB",
+    "TYPE_PHARMACY",
+    "TYPE_PHYSIOTHERAPIST",
+    "TYPE_SAUNA",
+    "TYPE_SKIN_CARE_CLINIC",
+    "TYPE_SPA",
+    "TYPE_TANNING_STUDIO",
+    "TYPE_WELLNESS_CENTER",
+    "TYPE_YOGA_STUDIO",
+    "TYPE_APARTMENT_BUILDING",
+    "TYPE_APARTMENT_COMPLEX",
+    "TYPE_CONDOMINIUM_COMPLEX",
+    "TYPE_HOUSING_COMPLEX",
+    "TYPE_BED_AND_BREAKFAST",
+    "TYPE_BUDGET_JAPANESE_INN",
+    "TYPE_CAMPGROUND",
+    "TYPE_CAMPING_CABIN",
+    "TYPE_COTTAGE",
+    "TYPE_EXTENDED_STAY_HOTEL",
+    "TYPE_FARMSTAY",
+    "TYPE_GUEST_HOUSE",
+    "TYPE_HOSTEL",
+    "TYPE_HOTEL",
+    "TYPE_INN",
+    "TYPE_JAPANESE_INN",
+    "TYPE_LODGING",
+    "TYPE_MOBILE_HOME_PARK",
+    "TYPE_MOTEL",
+    "TYPE_PRIVATE_GUEST_ROOM",
+    "TYPE_RESORT_HOTEL",
+    "TYPE_RV_PARK",
+    "TYPE_BEACH",
+    "TYPE_ISLAND",
+    "TYPE_LAKE",
+    "TYPE_MOUNTAIN_PEAK",
+    "TYPE_NATURE_PRESERVE",
+    "TYPE_RIVER",
+    "TYPE_SCENIC_SPOT",
+    "TYPE_WOODS",
+    "TYPE_BUDDHIST_TEMPLE",
+    "TYPE_CHURCH",
+    "TYPE_HINDU_TEMPLE",
+    "TYPE_MOSQUE",
+    "TYPE_SHINTO_SHRINE",
+    "TYPE_SYNAGOGUE",
+    "TYPE_AIRCRAFT_RENTAL_SERVICE",
+    "TYPE_ASSOCIATION_OR_ORGANIZATION",
+    "TYPE_ASTROLOGER",
+    "TYPE_BARBER_SHOP",
+    "TYPE_BEAUTICIAN",
+    "TYPE_BEAUTY_SALON",
+    "TYPE_BODY_ART_SERVICE",
+    "TYPE_CATERING_SERVICE",
+    "TYPE_CEMETERY",
+    "TYPE_CHAUFFEUR_SERVICE",
+    "TYPE_CHILD_CARE_AGENCY",
+    "TYPE_CONSULTANT",
+    "TYPE_COURIER_SERVICE",
+    "TYPE_ELECTRICIAN",
+    "TYPE_EMPLOYMENT_AGENCY",
+    "TYPE_FLORIST",
+    "TYPE_FOOD_DELIVERY",
+    "TYPE_FOOT_CARE",
+    "TYPE_FUNERAL_HOME",
+    "TYPE_HAIR_CARE",
+    "TYPE_HAIR_SALON",
+    "TYPE_INSURANCE_AGENCY",
+    "TYPE_LAUNDRY",
+    "TYPE_LAWYER",
+    "TYPE_LOCKSMITH",
+    "TYPE_MAKEUP_ARTIST",
+    "TYPE_MARKETING_CONSULTANT",
+    "TYPE_MOVING_COMPANY",
+    "TYPE_NAIL_SALON",
+    "TYPE_NON_PROFIT_ORGANIZATION",
+    "TYPE_PAINTER",
+    "TYPE_PET_BOARDING_SERVICE",
+    "TYPE_PET_CARE",
+    "TYPE_PLUMBER",
+    "TYPE_PSYCHIC",
+    "TYPE_REAL_ESTATE_AGENCY",
+    "TYPE_ROOFING_CONTRACTOR",
+    "TYPE_SERVICE",
+    "TYPE_SHIPPING_SERVICE",
+    "TYPE_STORAGE",
+    "TYPE_SUMMER_CAMP_ORGANIZER",
+    "TYPE_TAILOR",
+    "TYPE_TELECOMMUNICATIONS_SERVICE_PROVIDER",
+    "TYPE_TOUR_AGENCY",
+    "TYPE_TOURIST_INFORMATION_CENTER",
+    "TYPE_TRAVEL_AGENCY",
+    "TYPE_VETERINARY_CARE",
+    "TYPE_ASIAN_GROCERY_STORE",
+    "TYPE_AUTO_PARTS_STORE",
+    "TYPE_BICYCLE_STORE",
+    "TYPE_BOOK_STORE",
+    "TYPE_BUILDING_MATERIALS_STORE",
+    "TYPE_BUTCHER_SHOP",
+    "TYPE_CELL_PHONE_STORE",
+    "TYPE_CLOTHING_STORE",
+    "TYPE_CONVENIENCE_STORE",
+    "TYPE_COSMETICS_STORE",
+    "TYPE_DEPARTMENT_STORE",
+    "TYPE_DISCOUNT_STORE",
+    "TYPE_DISCOUNT_SUPERMARKET",
+    "TYPE_ELECTRONICS_STORE",
+    "TYPE_FARMERS_MARKET",
+    "TYPE_FLEA_MARKET",
+    "TYPE_FOOD_STORE",
+    "TYPE_FURNITURE_STORE",
+    "TYPE_GARDEN_CENTER",
+    "TYPE_GENERAL_STORE",
+    "TYPE_GIFT_SHOP",
+    "TYPE_GROCERY_STORE",
+    "TYPE_HARDWARE_STORE",
+    "TYPE_HEALTH_FOOD_STORE",
+    "TYPE_HOME_GOODS_STORE",
+    "TYPE_HOME_IMPROVEMENT_STORE",
+    "TYPE_HYPERMARKET",
+    "TYPE_JEWELRY_STORE",
+    "TYPE_LIQUOR_STORE",
+    "TYPE_MARKET",
+    "TYPE_PET_STORE",
+    "TYPE_SHOE_STORE",
+    "TYPE_SHOPPING_MALL",
+    "TYPE_SPORTING_GOODS_STORE",
+    "TYPE_SPORTSWEAR_STORE",
+    "TYPE_STORE",
+    "TYPE_SUPERMARKET",
+    "TYPE_TEA_STORE",
+    "TYPE_THRIFT_STORE",
+    "TYPE_TOY_STORE",
+    "TYPE_WAREHOUSE_STORE",
+    "TYPE_WHOLESALER",
+    "TYPE_WOMENS_CLOTHING_STORE",
+    "TYPE_ARENA",
+    "TYPE_ATHLETIC_FIELD",
+    "TYPE_FISHING_CHARTER",
+    "TYPE_FISHING_PIER",
+    "TYPE_FISHING_POND",
+    "TYPE_FITNESS_CENTER",
+    "TYPE_GOLF_COURSE",
+    "TYPE_GYM",
+    "TYPE_ICE_SKATING_RINK",
+    "TYPE_INDOOR_GOLF_COURSE",
+    "TYPE_PLAYGROUND",
+    "TYPE_RACE_COURSE",
+    "TYPE_SKI_RESORT",
+    "TYPE_SPORTS_ACTIVITY_LOCATION",
+    "TYPE_SPORTS_CLUB",
+    "TYPE_SPORTS_COACHING",
+    "TYPE_SPORTS_COMPLEX",
+    "TYPE_SPORTS_SCHOOL",
+    "TYPE_STADIUM",
+    "TYPE_SWIMMING_POOL",
+    "TYPE_TENNIS_COURT",
+    "TYPE_AIRPORT",
+    "TYPE_AIRSTRIP",
+    "TYPE_BIKE_SHARING_STATION",
+    "TYPE_BRIDGE",
+    "TYPE_BUS_STATION",
+    "TYPE_BUS_STOP",
+    "TYPE_FERRY_SERVICE",
+    "TYPE_FERRY_TERMINAL",
+    "TYPE_HELIPORT",
+    "TYPE_INTERNATIONAL_AIRPORT",
+    "TYPE_LIGHT_RAIL_STATION",
+    "TYPE_PARK_AND_RIDE",
+    "TYPE_SUBWAY_STATION",
+    "TYPE_TAXI_SERVICE",
+    "TYPE_TAXI_STAND",
+    "TYPE_TOLL_STATION",
+    "TYPE_TRAIN_STATION",
+    "TYPE_TRAIN_TICKET_OFFICE",
+    "TYPE_TRAM_STOP",
+    "TYPE_TRANSIT_DEPOT",
+    "TYPE_TRANSIT_STATION",
+    "TYPE_TRANSIT_STOP",
+    "TYPE_TRANSPORTATION_SERVICE",
+    "TYPE_TRUCK_STOP",
+    "TYPE_ADMINISTRATIVE_AREA_LEVEL_3",
+    "TYPE_ADMINISTRATIVE_AREA_LEVEL_4",
+    "TYPE_ADMINISTRATIVE_AREA_LEVEL_5",
+    "TYPE_ADMINISTRATIVE_AREA_LEVEL_6",
+    "TYPE_ADMINISTRATIVE_AREA_LEVEL_7",
+    "TYPE_ARCHIPELAGO",
+    "TYPE_COLLOQUIAL_AREA",
+    "TYPE_CONTINENT",
+    "TYPE_ESTABLISHMENT",
+    "TYPE_FINANCE",
+    "TYPE_FOOD",
+    "TYPE_GENERAL_CONTRACTOR",
+    "TYPE_GEOCODE",
+    "TYPE_HEALTH",
+    "TYPE_INTERSECTION",
+    "TYPE_LANDMARK",
+    "TYPE_NATURAL_FEATURE",
+    "TYPE_NEIGHBORHOOD",
+    "TYPE_PLACE_OF_WORSHIP",
+    "TYPE_PLUS_CODE",
+    "TYPE_POINT_OF_INTEREST",
+    "TYPE_POLITICAL",
+    "TYPE_POSTAL_CODE_PREFIX",
+    "TYPE_POSTAL_CODE_SUFFIX",
+    "TYPE_POSTAL_TOWN",
+    "TYPE_PREMISE",
+    "TYPE_ROUTE",
+    "TYPE_STREET_ADDRESS",
+    "TYPE_SUBLOCALITY",
+    "TYPE_SUBLOCALITY_LEVEL_1",
+    "TYPE_SUBLOCALITY_LEVEL_2",
+    "TYPE_SUBLOCALITY_LEVEL_3",
+    "TYPE_SUBLOCALITY_LEVEL_4",
+    "TYPE_SUBLOCALITY_LEVEL_5",
+    "TYPE_SUBPREMISE",
+    "TYPE_TOWN_SQUARE",
+    "TYPE_FLOOR",
+    "TYPE_POST_BOX",
+    "TYPE_ROOM",
+    "TYPE_STREET_NUMBER",
+    "COLLECTION_REGIONS",
+    "COLLECTION_CITIES",
+    "TABLE_A_TYPES",
+    "TABLE_B_TYPES",
+    "ADDRESS_COMPONENT_TYPES",
+    "ALL_TYPES",
+]

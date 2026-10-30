@@ -1,0 +1,13 @@
+RELEVANCE: str
+DISTANCE: str
+POPULARITY: str
+TEXT_SEARCH_VALUES: frozenset[str]
+NEARBY_SEARCH_VALUES: frozenset[str]
+
+__all__ = [
+    "RELEVANCE",
+    "DISTANCE",
+    "POPULARITY",
+    "TEXT_SEARCH_VALUES",
+    "NEARBY_SEARCH_VALUES",
+]

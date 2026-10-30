@@ -12,6 +12,7 @@ from .exceptions import (
     RateLimitError,
 )
 from .fields import FieldMask
+from . import lang, ranking, types
 from .models import (
     AccessibilityOptions,
     AddressComponent,
@@ -117,5 +118,8 @@ __all__ = [
     "TextSearchResult",
     "TimeZone",
     "Viewport",
+    "lang",
+    "ranking",
+    "types",
     "__version__",
 ]

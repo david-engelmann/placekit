@@ -33,6 +33,7 @@ All notable changes to placekit are recorded here. The format follows Keep a Cha
 - A stubtest step in `make check`, running mypy against the shipped type stubs so stub drift fails the gate instead of shipping. The dev extras now carry mypy and maturin on the same pins the build itself uses.
 - Version coherence coverage for `Cargo.lock` in `scripts/check_version.py`, with tests that copy the repo layout, mutate one carrier of the version, and watch the guard fail. The guard also accepts prerelease version headings in this changelog.
 - A Dependabot configuration proposing weekly updates for the GitHub Actions both workflows use.
+- Three constants modules carrying the vocabularies callers pass most often, as plain string constants that drop into the existing client slots with no adapter. `placekit.types` holds the place type vocabulary from the official Place Types page (478 Table A values, 36 Table B values, 4 address component only values and the 2 Autocomplete collections), `placekit.lang` holds the 82 supported language codes from the Google Maps Platform FAQ table, and `placekit.ranking` holds the ranking preferences split by method, since Text Search and Nearby Search accept different sets. The modules are vocabularies only. The client keeps accepting any string in the slots they describe, including values this version has never heard of.
 
 ### Changed
 
