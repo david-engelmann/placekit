@@ -1,0 +1,9 @@
+# Dependency update proposals. GitHub Actions pins are commit SHAs (see
+# the workflows), so Dependabot watches them and opens a pull request
+# when a pinned action moves.
+
+updates:
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"

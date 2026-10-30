@@ -1,6 +1,6 @@
 # Builds abi3 wheels for Linux, macOS and Windows with maturin, plus an
-# sdist. Pull requests only build. Pushing a version tag (v*) also
-# publishes to PyPI.
+# sdist. Pull requests only build. Pushing a version tag (v[0-9]*)
+# also publishes to PyPI.
 #
 # Every wheel is built inside a manylinux container (Linux) or on a
 # native runner for its architecture. The aarch64 Linux and arm64 macOS
@@ -8,18 +8,29 @@
 # under QEMU emulation: an emulated Rust release compile is the slowest
 # possible way to make a wheel.
 #
+# Every built artifact is installed and imported on its own platform by
+# the test-wheel matrix before anything can publish, and every install
+# is hermetic (--no-index --find-links), so a job can never silently
+# test a package that came from PyPI instead of this run.
+#
 # Publishing uses PyPI trusted publishing (OIDC, no stored token):
 # configure this repository as a trusted publisher for the "placekit"
 # project on PyPI, with environment name "pypi". The publish job first
 # checks that the tag version matches the manifests and the changelog,
-# and refuses to publish otherwise.
+# and refuses to publish otherwise. It can only run on a version tag
+# push: its condition requires a tag ref, so workflow_dispatch and pull
+# requests can never reach it.
+#
+# All third party actions are pinned to commit SHAs, with the version
+# each SHA resolves recorded in a trailing comment. Dependabot
+# (.github/dependabot.yml) proposes updates to the pins weekly.
 
 name: Wheels
 
 on:
   push:
     tags:
-      - "v*"
+      - "v[0-9]*"
   pull_request:
   workflow_dispatch:
 
@@ -28,12 +39,17 @@ permissions:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  # A publish in flight must never be cancelled by a re-run of the same
+  # tag, so tag refs keep running. Pull requests still cancel.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   linux:
     name: linux ${{ matrix.platform.target }}
     runs-on: ${{ matrix.platform.runner }}
+    timeout-minutes: 60
+    permissions:
+      contents: read
     strategy:
       fail-fast: false
       matrix:
@@ -43,126 +59,227 @@ jobs:
           - runner: ubuntu-24.04-arm
             target: aarch64
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
       - name: Build wheels
-        uses: PyO3/maturin-action@v1
+        uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1
         with:
           target: ${{ matrix.platform.target }}
-          args: --release --out dist --find-interpreter
+          args: --release --locked --out dist --find-interpreter
           sccache: "true"
           manylinux: "2_28"
       - name: Upload wheels
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: wheels-linux-${{ matrix.platform.target }}
           path: dist
+          if-no-files-found: error
+          retention-days: 90
 
   windows:
     name: windows ${{ matrix.platform.target }}
-    runs-on: windows-latest
+    runs-on: windows-2025
+    timeout-minutes: 60
+    permissions:
+      contents: read
     strategy:
       fail-fast: false
       matrix:
         platform:
           - target: x64
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
       - name: Build wheels
-        uses: PyO3/maturin-action@v1
+        uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1
         with:
           target: ${{ matrix.platform.target }}
-          args: --release --out dist --find-interpreter
+          args: --release --locked --out dist --find-interpreter
           sccache: "true"
       - name: Upload wheels
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: wheels-windows-${{ matrix.platform.target }}
           path: dist
+          if-no-files-found: error
+          retention-days: 90
 
   macos:
     name: macos ${{ matrix.platform.target }}
     runs-on: ${{ matrix.platform.runner }}
+    timeout-minutes: 60
+    permissions:
+      contents: read
     strategy:
       fail-fast: false
       matrix:
         platform:
-          - runner: macos-13
+          - runner: macos-15-intel
             target: x86_64
+            deployment_target: "10.12"
           - runner: macos-14
             target: aarch64
+            deployment_target: "11.0"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
       - name: Build wheels
-        uses: PyO3/maturin-action@v1
+        uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1
+        env:
+          MACOSX_DEPLOYMENT_TARGET: ${{ matrix.platform.deployment_target }}
         with:
           target: ${{ matrix.platform.target }}
-          args: --release --out dist --find-interpreter
+          args: --release --locked --out dist --find-interpreter
           sccache: "true"
       - name: Upload wheels
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: wheels-macos-${{ matrix.platform.target }}
           path: dist
+          if-no-files-found: error
+          retention-days: 90
 
   sdist:
     name: sdist
     runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
       - name: Build sdist
-        uses: PyO3/maturin-action@v1
+        uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1
         with:
           command: sdist
           args: --out dist
       - name: Upload sdist
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: wheels-sdist
           path: dist
+          if-no-files-found: error
+          retention-days: 90
 
   test-wheel:
-    name: test wheel (linux x86_64)
-    needs: [linux]
-    runs-on: ubuntu-24.04
+    name: test wheel (${{ matrix.label }})
+    needs: [linux, windows, macos, sdist]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: linux x86_64, Python 3.12, full suite
+            runner: ubuntu-24.04
+            artifact: wheels-linux-x86_64
+            python-version: "3.12"
+            suite: true
+            sdist: false
+          - label: linux x86_64, Python 3.10 abi3 floor
+            runner: ubuntu-24.04
+            artifact: wheels-linux-x86_64
+            python-version: "3.10"
+            suite: false
+            sdist: false
+          - label: linux aarch64
+            runner: ubuntu-24.04-arm
+            artifact: wheels-linux-aarch64
+            python-version: "3.12"
+            suite: false
+            sdist: false
+          - label: macos x86_64
+            runner: macos-15-intel
+            artifact: wheels-macos-x86_64
+            python-version: "3.12"
+            suite: false
+            sdist: false
+          - label: macos aarch64
+            runner: macos-14
+            artifact: wheels-macos-aarch64
+            python-version: "3.12"
+            suite: false
+            sdist: false
+          - label: windows x64
+            runner: windows-2025
+            artifact: wheels-windows-x64
+            python-version: "3.12"
+            suite: false
+            sdist: false
+          - label: sdist
+            runner: ubuntu-24.04
+            artifact: wheels-sdist
+            python-version: "3.12"
+            suite: false
+            sdist: true
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          python-version: "3.12"
-      - name: Download wheels
-        uses: actions/download-artifact@v4
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
-          name: wheels-linux-x86_64
+          python-version: ${{ matrix.python-version }}
+      - name: Install Rust for the sdist build
+        if: ${{ matrix.sdist }}
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+        with:
+          toolchain: "1.88.0"
+      - name: Download the artifact for this platform
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: ${{ matrix.artifact }}
           path: dist
-      - name: Install wheel and run the offline test suite
+      - name: Install the build backend for the sdist
+        if: ${{ matrix.sdist }}
+        run: pip install "maturin>=1.7,<2.0"
+      - name: Install the wheel hermetically
+        if: ${{ !matrix.sdist }}
+        run: pip install --no-index --find-links dist placekit
+      - name: Install the sdist hermetically
+        if: ${{ matrix.sdist }}
+        run: pip install --no-index --no-build-isolation --find-links dist placekit
+      - name: Import placekit and construct a client
+        run: python -c "import placekit; client = placekit.Client('test-key'); print(placekit.__version__)"
+      - name: Run the offline test suite
+        if: ${{ matrix.suite }}
         run: |
-          pip install --find-links dist placekit
           pip install pytest
           python -m pytest tests -q
 
   publish:
     name: Publish to PyPI
+    # Only a version tag push can publish. workflow_dispatch and pull
+    # requests never satisfy this condition.
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [linux, windows, macos, sdist]
+    needs: [linux, windows, macos, sdist, test-wheel]
     runs-on: ubuntu-24.04
+    timeout-minutes: 30
     environment: pypi
     permissions:
       contents: read
       id-token: write
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: "3.12"
       - name: Check the tag matches the manifests and changelog
         run: python3 scripts/check_version.py "${GITHUB_REF_NAME}"
       - name: Download all artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           pattern: wheels-*
           path: dist
           merge-multiple: true
       - name: Publish
-        uses: pypa/gh-action-pypi-publish@release/v1
+        uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086 # release/v1
         with:
           packages-dir: dist
