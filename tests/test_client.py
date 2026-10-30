@@ -1887,20 +1887,28 @@ def test_secondary_opening_hours_decode_with_type():
     assert plain.regular_secondary_opening_hours == []
 
 
-def test_round6_group1_mask_paths():
-    # The secondary hours join the details default only; the search
-    # defaults are unchanged, so the fields stay requestable in search
-    # through a custom mask and nothing else.
+def _assert_details_only_paths(paths):
     from placekit.fields import (
         NEARBY_SEARCH_FIELDS,
         PLACE_DETAILS_FIELDS,
         TEXT_SEARCH_FIELDS,
     )
 
-    for path in ("currentSecondaryOpeningHours", "regularSecondaryOpeningHours"):
+    for path in paths:
         assert path in PLACE_DETAILS_FIELDS
         assert f"places.{path}" not in TEXT_SEARCH_FIELDS
         assert f"places.{path}" not in NEARBY_SEARCH_FIELDS
+
+
+def test_round6_group1_mask_paths():
+    # The secondary hours join the details default only. The search
+    # defaults are unchanged, so the fields stay requestable in search
+    # through a custom mask and nothing else.
+    from placekit.fields import PLACE_DETAILS_FIELDS
+
+    _assert_details_only_paths(
+        ("currentSecondaryOpeningHours", "regularSecondaryOpeningHours")
+    )
     assert set(FieldMask.place_details().paths) == set(PLACE_DETAILS_FIELDS)
 
 
@@ -1910,7 +1918,7 @@ def test_photo_uri_result_from_api_preserves_unmodelled_fields():
     # is reduced to scheme, host and path shape with its opaque token
     # shortened, and the photo reference is shortened the same way.
     # The sentinel key stands in for the first field Google adds to
-    # this JSON form; before the fix it reached nobody, in raw or
+    # this JSON form. Before the fix it reached nobody, in raw or
     # typed form, because PhotoUriResult had no raw at all.
     from placekit.models import PhotoUriResult
 
@@ -2058,26 +2066,19 @@ def test_place_utc_offset_and_pure_service_area_decode_absent_vs_false():
 
 
 def test_round6_group3_mask_paths():
-    from placekit.fields import (
-        NEARBY_SEARCH_FIELDS,
-        PLACE_DETAILS_FIELDS,
-        TEXT_SEARCH_FIELDS,
+    _assert_details_only_paths(
+        (
+            "googleMapsTypeLabel",
+            "editorialSummary",
+            "iconMaskBaseUri",
+            "iconBackgroundColor",
+            "openingDate",
+            "utcOffsetMinutes",
+            "pureServiceAreaBusiness",
+            "movedPlace",
+            "movedPlaceId",
+        )
     )
-
-    for path in (
-        "googleMapsTypeLabel",
-        "editorialSummary",
-        "iconMaskBaseUri",
-        "iconBackgroundColor",
-        "openingDate",
-        "utcOffsetMinutes",
-        "pureServiceAreaBusiness",
-        "movedPlace",
-        "movedPlaceId",
-    ):
-        assert path in PLACE_DETAILS_FIELDS
-        assert f"places.{path}" not in TEXT_SEARCH_FIELDS
-        assert f"places.{path}" not in NEARBY_SEARCH_FIELDS
 
 
 # ---------------------------------------------------------------------------
@@ -2180,15 +2181,7 @@ def test_place_without_reviews_has_empty_list():
 
 
 def test_round6_group4_mask_paths():
-    from placekit.fields import (
-        NEARBY_SEARCH_FIELDS,
-        PLACE_DETAILS_FIELDS,
-        TEXT_SEARCH_FIELDS,
-    )
-
-    assert "reviews" in PLACE_DETAILS_FIELDS
-    assert "places.reviews" not in TEXT_SEARCH_FIELDS
-    assert "places.reviews" not in NEARBY_SEARCH_FIELDS
+    _assert_details_only_paths(("reviews",))
 
 
 # ---------------------------------------------------------------------------
@@ -2230,7 +2223,7 @@ def test_place_dine_service_amenity_flags_decode(attribute, wire):
 
     place = Place.from_api({"id": "A", wire: True})
     assert getattr(place, attribute) is True
-    # Exactly one flag is set on the whole place; every other flag
+    # Exactly one flag is set on the whole place. Every other flag
     # reads None, because absence is not a fabricated False.
     set_flags = [
         name for name, _ in _FLAG_FIELDS if getattr(place, name) is not None
@@ -2246,16 +2239,7 @@ def test_place_flag_sent_false_is_not_absence():
 
 
 def test_round6_group5_mask_paths():
-    from placekit.fields import (
-        NEARBY_SEARCH_FIELDS,
-        PLACE_DETAILS_FIELDS,
-        TEXT_SEARCH_FIELDS,
-    )
-
-    for _, wire in _FLAG_FIELDS:
-        assert wire in PLACE_DETAILS_FIELDS
-        assert f"places.{wire}" not in TEXT_SEARCH_FIELDS
-        assert f"places.{wire}" not in NEARBY_SEARCH_FIELDS
+    _assert_details_only_paths([wire for _, wire in _FLAG_FIELDS])
 
 
 # ---------------------------------------------------------------------------
@@ -2320,16 +2304,9 @@ def test_payment_parking_accessibility_options_decode():
 
 
 def test_round6_group6_mask_paths():
-    from placekit.fields import (
-        NEARBY_SEARCH_FIELDS,
-        PLACE_DETAILS_FIELDS,
-        TEXT_SEARCH_FIELDS,
+    _assert_details_only_paths(
+        ("paymentOptions", "parkingOptions", "accessibilityOptions")
     )
-
-    for path in ("paymentOptions", "parkingOptions", "accessibilityOptions"):
-        assert path in PLACE_DETAILS_FIELDS
-        assert f"places.{path}" not in TEXT_SEARCH_FIELDS
-        assert f"places.{path}" not in NEARBY_SEARCH_FIELDS
 
 
 # ---------------------------------------------------------------------------
@@ -2394,16 +2371,9 @@ def test_consumer_alert_overview_and_language_decode():
 
 
 def test_round6_group7_mask_paths():
-    from placekit.fields import (
-        NEARBY_SEARCH_FIELDS,
-        PLACE_DETAILS_FIELDS,
-        TEXT_SEARCH_FIELDS,
+    _assert_details_only_paths(
+        ("timeZone", "generativeSummary", "reviewSummary", "consumerAlert")
     )
-
-    for path in ("timeZone", "generativeSummary", "reviewSummary", "consumerAlert"):
-        assert path in PLACE_DETAILS_FIELDS
-        assert f"places.{path}" not in TEXT_SEARCH_FIELDS
-        assert f"places.{path}" not in NEARBY_SEARCH_FIELDS
 
 
 # ---------------------------------------------------------------------------
@@ -2494,16 +2464,7 @@ def test_money_under_fuel_options_stays_raw():
 
 
 def test_round6_group8_mask_paths():
-    from placekit.fields import (
-        NEARBY_SEARCH_FIELDS,
-        PLACE_DETAILS_FIELDS,
-        TEXT_SEARCH_FIELDS,
-    )
-
-    for path in ("googleMapsLinks", "priceRange"):
-        assert path in PLACE_DETAILS_FIELDS
-        assert f"places.{path}" not in TEXT_SEARCH_FIELDS
-        assert f"places.{path}" not in NEARBY_SEARCH_FIELDS
+    _assert_details_only_paths(("googleMapsLinks", "priceRange"))
 
 
 # ---------------------------------------------------------------------------
@@ -2511,7 +2472,7 @@ def test_round6_group8_mask_paths():
 # ---------------------------------------------------------------------------
 
 
-def test_ev_charge_options_decode_full_payload():
+def test_ev_charge_options_decode_aggregation_whole():
     # The three availability fields are typed with the rest, so the
     # whole Message lands rather than as a shell around raw.
     from placekit.models import Place
@@ -2562,15 +2523,7 @@ def test_ev_charge_options_decode_full_payload():
 
 
 def test_round6_group9_mask_paths():
-    from placekit.fields import (
-        NEARBY_SEARCH_FIELDS,
-        PLACE_DETAILS_FIELDS,
-        TEXT_SEARCH_FIELDS,
-    )
-
-    assert "evChargeOptions" in PLACE_DETAILS_FIELDS
-    assert "places.evChargeOptions" not in TEXT_SEARCH_FIELDS
-    assert "places.evChargeOptions" not in NEARBY_SEARCH_FIELDS
+    _assert_details_only_paths(("evChargeOptions",))
 
 
 # ---------------------------------------------------------------------------
@@ -2578,7 +2531,7 @@ def test_round6_group9_mask_paths():
 # ---------------------------------------------------------------------------
 
 
-def test_address_descriptor_decodes_landmarks_and_areas():
+def test_address_descriptor_decodes_landmark_relations_and_distances():
     # Two landmarks and one area, with every name paired to a
     # different place id, so a crossed name and id line shows as a
     # wrong pair rather than passing.
@@ -2663,15 +2616,7 @@ def test_landmark_types_rejects_bare_string():
 
 
 def test_round6_group10_mask_paths():
-    from placekit.fields import (
-        NEARBY_SEARCH_FIELDS,
-        PLACE_DETAILS_FIELDS,
-        TEXT_SEARCH_FIELDS,
-    )
-
-    assert "addressDescriptor" in PLACE_DETAILS_FIELDS
-    assert "places.addressDescriptor" not in TEXT_SEARCH_FIELDS
-    assert "places.addressDescriptor" not in NEARBY_SEARCH_FIELDS
+    _assert_details_only_paths(("addressDescriptor",))
 
 
 # ---------------------------------------------------------------------------
@@ -2710,3 +2655,52 @@ def test_routing_summary_duration_stays_a_string():
     assert isinstance(summary.legs[0].duration, str)
     assert summary.legs[0].distance_meters == 10
     assert summary.directions_uri is None
+
+
+# ---------------------------------------------------------------------------
+# Round 6 repair: boolean leaves are validated, not stored verbatim
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("bad", ["false", "yes", 0, 1, [], {}])
+def test_round6_repair_bool_leaves_reject_non_bools(bad):
+    # The wire shape of a boolean leaf is a real boolean or nothing. A
+    # string like "false" stored verbatim would read as truthy, so a
+    # switched off flag would read as on. Every leaf family rejects it.
+    from placekit.exceptions import DecodeError
+    from placekit.models import OpeningHours, Place
+
+    with pytest.raises(DecodeError):
+        Place.from_api({"id": "A", "takeout": bad})
+    with pytest.raises(DecodeError):
+        Place.from_api({"id": "A", "paymentOptions": {"acceptsCreditCards": bad}})
+    with pytest.raises(DecodeError):
+        OpeningHours.from_api({"openNow": bad})
+
+
+def test_round6_repair_bool_leaves_accept_real_bools_and_absence():
+    from placekit.models import OpeningHours, Place
+
+    place = Place.from_api(
+        {
+            "id": "A",
+            "takeout": False,
+            "paymentOptions": {"acceptsCreditCards": True},
+        }
+    )
+    assert place.takeout is False
+    assert place.payment_options is not None
+    assert place.payment_options.accepts_credit_cards is True
+    assert place.delivery is None
+    assert OpeningHours.from_api({}).open_now is None
+    assert OpeningHours.from_api({"openNow": True}).open_now is True
+
+
+def test_round6_repair_money_units_infinity_is_decode_error():
+    # int(float("inf")) raises OverflowError, which used to escape the
+    # integer decoder bare. It is a DecodeError now.
+    from placekit.exceptions import DecodeError
+    from placekit.models import Money
+
+    with pytest.raises(DecodeError):
+        Money.from_api({"currencyCode": "USD", "units": float("inf"), "nanos": 0})

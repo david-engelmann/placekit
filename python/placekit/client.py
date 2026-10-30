@@ -278,8 +278,9 @@ def _photo_result(tagged: tuple[str, Any, Any]) -> PhotoMedia | PhotoUriResult:
     """Turn the core's tagged photo tuple into a public model.
 
     The uri arm's third element is the whole JSON form the endpoint
-    returned, as a dict; the model is built from it so the full form
-    is preserved on the result's ``raw``.
+    returned, as a dict. The model is built from it so the full form
+    is preserved on the result's ``raw``. The tuple's first element
+    repeats the URI already inside that dict and is not read.
     """
     tag, first, second = tagged
     if tag == "uri":
@@ -484,7 +485,7 @@ class _Base:
             if exc.context is None:
                 raise DecodeError(str(exc), context=context) from exc
             raise
-        except (KeyError, TypeError, ValueError, AttributeError) as exc:
+        except (KeyError, TypeError, ValueError, AttributeError, OverflowError) as exc:
             raise DecodeError(
                 f"response failed model conversion: {exc!r}", context=context
             ) from exc

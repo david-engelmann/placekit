@@ -349,11 +349,10 @@ fn photo_to_py(
             // The whole JSON form crosses, not just the two typed
             // fields: PhotoMediaJson flattens what the core does not
             // type into its extra map, and the Python model's raw is
-            // built from this dict. Passing only name and photo_uri
-            // here dropped the extra fields at this boundary, the one
-            // outright loss in the response path. The serialization
-            // borrows media, so it runs before the uri conversion
-            // below moves the field out.
+            // built from this dict, so the whole JSON form crosses
+            // this boundary. The serialization borrows media, so it
+            // runs before the uri conversion below moves the field
+            // out.
             let json = serde_json::to_value(&media).map_err(|e| photo_conversion_err(py, e))?;
             let body = value_to_py(py, &json).map_err(|e| photo_conversion_err(py, e))?;
             let uri = media

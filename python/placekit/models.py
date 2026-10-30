@@ -60,7 +60,7 @@ def _as_int(value: Any, model: str, key: str) -> int:
         raise DecodeError(f"{model} payload key {key!r} is not an integer: {value!r}")
     try:
         return int(value)
-    except (TypeError, ValueError) as exc:
+    except (TypeError, ValueError, OverflowError) as exc:
         raise DecodeError(
             f"{model} payload key {key!r} is not an integer: {value!r}"
         ) from exc
@@ -68,6 +68,16 @@ def _as_int(value: Any, model: str, key: str) -> int:
 
 def _optional_int(value: Any, model: str, key: str) -> Optional[int]:
     return None if value is None else _as_int(value, model, key)
+
+
+def _optional_bool(value: Any, model: str, key: str) -> Optional[bool]:
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return value
+    raise DecodeError(
+        f"{model} payload key {key!r} is not a boolean: {value!r}"
+    )
 
 
 def _str_list(value: Any, model: str, key: str) -> list[str]:
@@ -248,7 +258,7 @@ class OpeningPoint:
         date = data.get("date")
         return cls(
             date=Date.from_api(date) if date else None,
-            truncated=data.get("truncated"),
+            truncated=_optional_bool(data.get("truncated"), "OpeningPoint", "truncated"),
             day=_optional_int(data.get("day"), "OpeningPoint", "day"),
             hour=_optional_int(data.get("hour"), "OpeningPoint", "hour"),
             minute=_optional_int(data.get("minute"), "OpeningPoint", "minute"),
@@ -293,7 +303,7 @@ class OpeningHours:
     periods: list[Period] = field(default_factory=list)
     weekday_descriptions: list[str] = field(default_factory=list)
     #: When the place next closes, as an unparsed timestamp string.
-    #: Present on an open place; absent (None) when the API sends none.
+    #: Present on an open place. Absent (None) when the API sends none.
     next_close_time: Optional[str] = None
     #: When the place next opens, as an unparsed timestamp string.
     next_open_time: Optional[str] = None
@@ -313,7 +323,7 @@ class OpeningHours:
     @classmethod
     def from_api(cls, data: dict[str, Any]) -> "OpeningHours":
         return cls(
-            open_now=data.get("openNow"),
+            open_now=_optional_bool(data.get("openNow"), "OpeningHours", "openNow"),
             periods=[Period.from_api(p) for p in data.get("periods", [])],
             weekday_descriptions=_str_list(
                 data.get("weekdayDescriptions", []),
@@ -475,10 +485,18 @@ class PaymentOptions:
     @classmethod
     def from_api(cls, data: dict[str, Any]) -> "PaymentOptions":
         return cls(
-            accepts_credit_cards=data.get("acceptsCreditCards"),
-            accepts_debit_cards=data.get("acceptsDebitCards"),
-            accepts_cash_only=data.get("acceptsCashOnly"),
-            accepts_nfc=data.get("acceptsNfc"),
+            accepts_credit_cards=_optional_bool(
+                data.get("acceptsCreditCards"), "PaymentOptions", "acceptsCreditCards"
+            ),
+            accepts_debit_cards=_optional_bool(
+                data.get("acceptsDebitCards"), "PaymentOptions", "acceptsDebitCards"
+            ),
+            accepts_cash_only=_optional_bool(
+                data.get("acceptsCashOnly"), "PaymentOptions", "acceptsCashOnly"
+            ),
+            accepts_nfc=_optional_bool(
+                data.get("acceptsNfc"), "PaymentOptions", "acceptsNfc"
+            ),
         )
 
 
@@ -497,13 +515,27 @@ class ParkingOptions:
     @classmethod
     def from_api(cls, data: dict[str, Any]) -> "ParkingOptions":
         return cls(
-            free_parking_lot=data.get("freeParkingLot"),
-            paid_parking_lot=data.get("paidParkingLot"),
-            free_street_parking=data.get("freeStreetParking"),
-            paid_street_parking=data.get("paidStreetParking"),
-            valet_parking=data.get("valetParking"),
-            free_garage_parking=data.get("freeGarageParking"),
-            paid_garage_parking=data.get("paidGarageParking"),
+            free_parking_lot=_optional_bool(
+                data.get("freeParkingLot"), "ParkingOptions", "freeParkingLot"
+            ),
+            paid_parking_lot=_optional_bool(
+                data.get("paidParkingLot"), "ParkingOptions", "paidParkingLot"
+            ),
+            free_street_parking=_optional_bool(
+                data.get("freeStreetParking"), "ParkingOptions", "freeStreetParking"
+            ),
+            paid_street_parking=_optional_bool(
+                data.get("paidStreetParking"), "ParkingOptions", "paidStreetParking"
+            ),
+            valet_parking=_optional_bool(
+                data.get("valetParking"), "ParkingOptions", "valetParking"
+            ),
+            free_garage_parking=_optional_bool(
+                data.get("freeGarageParking"), "ParkingOptions", "freeGarageParking"
+            ),
+            paid_garage_parking=_optional_bool(
+                data.get("paidGarageParking"), "ParkingOptions", "paidGarageParking"
+            ),
         )
 
 
@@ -519,14 +551,26 @@ class AccessibilityOptions:
     @classmethod
     def from_api(cls, data: dict[str, Any]) -> "AccessibilityOptions":
         return cls(
-            wheelchair_accessible_parking=data.get("wheelchairAccessibleParking"),
-            wheelchair_accessible_entrance=data.get(
-                "wheelchairAccessibleEntrance"
+            wheelchair_accessible_parking=_optional_bool(
+                data.get("wheelchairAccessibleParking"),
+                "AccessibilityOptions",
+                "wheelchairAccessibleParking",
             ),
-            wheelchair_accessible_restroom=data.get(
-                "wheelchairAccessibleRestroom"
+            wheelchair_accessible_entrance=_optional_bool(
+                data.get("wheelchairAccessibleEntrance"),
+                "AccessibilityOptions",
+                "wheelchairAccessibleEntrance",
             ),
-            wheelchair_accessible_seating=data.get("wheelchairAccessibleSeating"),
+            wheelchair_accessible_restroom=_optional_bool(
+                data.get("wheelchairAccessibleRestroom"),
+                "AccessibilityOptions",
+                "wheelchairAccessibleRestroom",
+            ),
+            wheelchair_accessible_seating=_optional_bool(
+                data.get("wheelchairAccessibleSeating"),
+                "AccessibilityOptions",
+                "wheelchairAccessibleSeating",
+            ),
         )
 
 
@@ -1031,35 +1075,77 @@ class Place:
             utc_offset_minutes=_optional_int(
                 data.get("utcOffsetMinutes"), "Place", "utcOffsetMinutes"
             ),
-            pure_service_area_business=data.get("pureServiceAreaBusiness"),
+            pure_service_area_business=_optional_bool(
+                data.get("pureServiceAreaBusiness"),
+                "Place",
+                "pureServiceAreaBusiness",
+            ),
             moved_place=data.get("movedPlace"),
             moved_place_id=data.get("movedPlaceId"),
             photos=[Photo.from_api(p) for p in data.get("photos", [])],
             attributions=[Attribution.from_api(a) for a in data.get("attributions", [])],
             reviews=[Review.from_api(r) for r in data.get("reviews", [])],
-            takeout=data.get("takeout"),
-            delivery=data.get("delivery"),
-            dine_in=data.get("dineIn"),
-            curbside_pickup=data.get("curbsidePickup"),
-            reservable=data.get("reservable"),
-            serves_breakfast=data.get("servesBreakfast"),
-            serves_lunch=data.get("servesLunch"),
-            serves_dinner=data.get("servesDinner"),
-            serves_beer=data.get("servesBeer"),
-            serves_wine=data.get("servesWine"),
-            serves_brunch=data.get("servesBrunch"),
-            serves_vegetarian_food=data.get("servesVegetarianFood"),
-            outdoor_seating=data.get("outdoorSeating"),
-            live_music=data.get("liveMusic"),
-            menu_for_children=data.get("menuForChildren"),
-            serves_cocktails=data.get("servesCocktails"),
-            serves_dessert=data.get("servesDessert"),
-            serves_coffee=data.get("servesCoffee"),
-            good_for_children=data.get("goodForChildren"),
-            allows_dogs=data.get("allowsDogs"),
-            restroom=data.get("restroom"),
-            good_for_groups=data.get("goodForGroups"),
-            good_for_watching_sports=data.get("goodForWatchingSports"),
+            takeout=_optional_bool(data.get("takeout"), "Place", "takeout"),
+            delivery=_optional_bool(data.get("delivery"), "Place", "delivery"),
+            dine_in=_optional_bool(data.get("dineIn"), "Place", "dineIn"),
+            curbside_pickup=_optional_bool(
+                data.get("curbsidePickup"), "Place", "curbsidePickup"
+            ),
+            reservable=_optional_bool(
+                data.get("reservable"), "Place", "reservable"
+            ),
+            serves_breakfast=_optional_bool(
+                data.get("servesBreakfast"), "Place", "servesBreakfast"
+            ),
+            serves_lunch=_optional_bool(
+                data.get("servesLunch"), "Place", "servesLunch"
+            ),
+            serves_dinner=_optional_bool(
+                data.get("servesDinner"), "Place", "servesDinner"
+            ),
+            serves_beer=_optional_bool(
+                data.get("servesBeer"), "Place", "servesBeer"
+            ),
+            serves_wine=_optional_bool(
+                data.get("servesWine"), "Place", "servesWine"
+            ),
+            serves_brunch=_optional_bool(
+                data.get("servesBrunch"), "Place", "servesBrunch"
+            ),
+            serves_vegetarian_food=_optional_bool(
+                data.get("servesVegetarianFood"), "Place", "servesVegetarianFood"
+            ),
+            outdoor_seating=_optional_bool(
+                data.get("outdoorSeating"), "Place", "outdoorSeating"
+            ),
+            live_music=_optional_bool(
+                data.get("liveMusic"), "Place", "liveMusic"
+            ),
+            menu_for_children=_optional_bool(
+                data.get("menuForChildren"), "Place", "menuForChildren"
+            ),
+            serves_cocktails=_optional_bool(
+                data.get("servesCocktails"), "Place", "servesCocktails"
+            ),
+            serves_dessert=_optional_bool(
+                data.get("servesDessert"), "Place", "servesDessert"
+            ),
+            serves_coffee=_optional_bool(
+                data.get("servesCoffee"), "Place", "servesCoffee"
+            ),
+            good_for_children=_optional_bool(
+                data.get("goodForChildren"), "Place", "goodForChildren"
+            ),
+            allows_dogs=_optional_bool(
+                data.get("allowsDogs"), "Place", "allowsDogs"
+            ),
+            restroom=_optional_bool(data.get("restroom"), "Place", "restroom"),
+            good_for_groups=_optional_bool(
+                data.get("goodForGroups"), "Place", "goodForGroups"
+            ),
+            good_for_watching_sports=_optional_bool(
+                data.get("goodForWatchingSports"), "Place", "goodForWatchingSports"
+            ),
             payment_options=(
                 PaymentOptions.from_api(payment) if payment else None
             ),
@@ -1141,8 +1227,8 @@ class TextSearchResult:
     #: ``searchUri`` field was requested through the field mask.
     search_uri: Optional[str] = None
     #: Routing summaries, one per place, when requested through the field
-    #: mask and routing parameters were supplied. Typed since round 6;
-    #: the untyped dict form stays reachable through ``raw``.
+    #: mask and routing parameters were supplied. Typed since round 6.
+    #: The untyped dict form stays reachable through ``raw``.
     routing_summaries: list[RoutingSummary] = field(default_factory=list)
     raw: dict[str, Any] = field(default_factory=dict, repr=False, compare=False)
 
@@ -1379,7 +1465,7 @@ class PhotoUriResult:
     of following its redirect.
 
     Returned by ``place_photo`` when ``skip_http_redirect`` is set.
-    ``photo_uri`` is short lived; render or fetch it promptly. The
+    ``photo_uri`` is short lived. Render or fetch it promptly. The
     full JSON form the endpoint returned is preserved on ``raw``,
     including any fields this client version does not model yet.
     """
