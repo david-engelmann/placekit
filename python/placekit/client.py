@@ -903,6 +903,12 @@ class AsyncClient(_Base):
 
     >>> client = AsyncClient("YOUR_API_KEY")
     >>> result = await client.text_search("pizza in New York")
+
+    Argument validation fires when a call is awaited, not when the
+    coroutine object is created, because an async method's body only
+    runs on await (A21). A ``ConfigError`` for bad arguments
+    therefore surfaces at the ``await``, unlike the sync client,
+    where it surfaces at the call itself.
     """
 
     async def text_search(

@@ -106,6 +106,10 @@ class FieldMask:
     >>> mask = FieldMask("places.displayName", "places.rating")
     >>> mask.header_value
     'places.displayName,places.rating'
+
+    The mask is a frozen dataclass, so assigning to ``paths`` after
+    construction raises ``dataclasses.FrozenInstanceError``; build a
+    new mask instead of editing one (A23).
     """
 
     paths: Tuple[str, ...]

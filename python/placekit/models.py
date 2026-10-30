@@ -4,12 +4,16 @@ Responses arrive as dataclasses with attribute access, never raw dicts.
 Fields this client version does not model yet are preserved verbatim on
 ``Place.raw`` so nothing the API returns is silently lost.
 
-The models are frozen value objects: a parsed result cannot be mutated
-in place, so results are safe to share and cache. They stay unhashable
-where they carry list fields; ``LatLng``, the one pure pair, is
-hashable. Every ``raw`` is a deep copy of the payload it came from, so
-the caller's dict, a result's raw and a child model's raw share no
-mutable state.
+The models are frozen value objects. Attribute assignment on a
+parsed result raises instead of silently rewriting it, so a result
+can be shared without one holder rebinding another holder's fields.
+The freeze is shallow by design. List fields and each ``raw`` dict
+remain mutable in place, so a holder can still append to
+``place.types`` or edit ``place.raw``; only rebinding is refused.
+They stay unhashable where they carry list fields; ``LatLng``, the
+one pure pair, is hashable. Every ``raw`` is a deep copy of the
+payload it came from, so the caller's dict, a result's raw and a
+child model's raw share no mutable state.
 """
 
 from __future__ import annotations
@@ -343,6 +347,12 @@ class PostalAddress:
         )
 
 
+# Wire fidelity note (T19): public field names mirror the API's own
+# names even where they shadow builtins (Place.id above all, and the
+# various types fields). Renaming them would break the one-to-one
+# mapping between model attributes and wire fields that callers rely
+# on when reading raw payloads, so the shadowing is kept deliberately
+# and no rename is planned.
 @dataclass(frozen=True, slots=True)
 class Place:
     """A single place, from search results or Place Details."""

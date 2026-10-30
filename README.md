@@ -42,6 +42,8 @@ async def main():
 asyncio.run(main())
 ```
 
+The sync `Client` refuses to run inside a running event loop, raising a `ConfigError` that points at `AsyncClient` instead of freezing the loop for the length of a request. Inside async code, use `AsyncClient`.
+
 ## Why a Rust core
 
 - One abi3 wheel per platform serves every Python from 3.10 up. Installs are a single small download, with no compiler, no build step, and zero runtime dependencies.
@@ -75,7 +77,7 @@ result = client.text_search(
 
 Any iterable of path strings works too. Omit `fields` and each endpoint uses a curated default, available as `FieldMask.text_search()`, `FieldMask.nearby_search()`, and `FieldMask.place_details()`.
 
-One billing note on the defaults. They include fields from the Enterprise billing tier, among them rating, user rating counts, price level and, on Place Details, the phone numbers, website URI and opening hours, so a call with a default mask is billed at the Enterprise tier. A higher Enterprise plus Atmosphere tier exists above it and the defaults do not reach it. Pass a narrower `fields` set when you want a lower tier.
+One billing note on the defaults. They include fields from the Enterprise billing tier, among them rating, user rating counts and price level, so a search call with a default mask is billed at the Enterprise tier. Place Details is the exception. Its default mask requests every modelled field, including current opening hours from the higher Enterprise plus Atmosphere tier, so a default `place_details` call is billed at that tier. Pass a narrower `fields` set when you want a lower tier.
 
 ## Errors
 
@@ -92,6 +94,8 @@ Classification follows the Google envelope status first and the HTTP code second
 | `NetworkError` | No HTTP response was produced |
 | `DecodeError` | A success body did not match the expected shape |
 | `ConfigError` | The client was called incorrectly, detected before any request |
+
+Local validation follows one coercion rule everywhere. Numbers must be real and finite, bools are never numbers, and strings are never lists, so a value of the wrong kind fails as a `ConfigError` before any request instead of being converted into something else on the wire.
 
 ```python
 from placekit import Client, RateLimitError
