@@ -58,7 +58,9 @@ from placekit.models import (
     ParkingOptions,
     Period,
     Photo,
+    PhotoMedia,
     Place,
+    PlacePrediction,
     PlusCode,
     PostalAddress,
     PriceRange,
@@ -302,6 +304,250 @@ def test_place_photo_skip_redirect_returns_uri(client, stub_server, base_url):
     assert result.photo_uri.startswith("http://")
     assert result.photo_uri.endswith("/photo-image")
     assert "skipHttpRedirect=true" in stub_server.last_request["path"]
+
+
+# ---------------------------------------------------------------------------
+# Round 8 (T3): object arguments for place_details and place_photo
+# ---------------------------------------------------------------------------
+
+
+def test_place_details_accepts_a_place_object(client):
+    # D1: the search result itself is the upgrade argument. The call
+    # returns a new Place populated from the details fixture, never
+    # the object that was passed in.
+    result = client.text_search("cafes in Sydney")
+    search_place = result.places[0]
+    details = client.place_details(search_place)
+    assert isinstance(details, Place)
+    assert details.id == search_place.id
+    assert details is not search_place
+    assert details.national_phone_number == "(02) 5550 1234"
+
+
+def test_place_details_accepts_a_place_prediction(client, stub_server):
+    # D1: a prediction resolves through its place_id, never through
+    # its place attribute, which is a resource name (finding R8-F7).
+    result = client.autocomplete("Bianco")
+    prediction = result.place_predictions[0]
+    details = client.place_details(prediction)
+    assert details.id == prediction.place_id
+    assert stub_server.last_request["path"].endswith(
+        f"/places/{prediction.place_id}"
+    )
+
+
+def test_place_details_place_and_id_forms_agree(client, stub_server):
+    # D1: the object form is the same call as the string form, with
+    # the same mask on the wire and an equal result.
+    result = client.text_search("cafes in Sydney")
+    place = result.places[0]
+    by_id = client.place_details(place.id)
+    mask_for_id = header(stub_server, "X-Goog-FieldMask")
+    by_object = client.place_details(place)
+    mask_for_object = header(stub_server, "X-Goog-FieldMask")
+    assert by_object == by_id
+    assert mask_for_object == mask_for_id
+
+
+def test_place_details_rejects_an_id_less_place_before_any_request(
+    client, stub_server
+):
+    # D1: an object with no id came from a mask that never requested
+    # one, and the failure says so locally instead of reaching the
+    # core or the stub.
+    stub_server.last_request = None
+    with pytest.raises(ConfigError) as excinfo:
+        client.place_details(Place(id=""))
+    assert excinfo.value.context == "place_details"
+    assert stub_server.last_request is None
+    with pytest.raises(ConfigError) as excinfo:
+        client.place_details(PlacePrediction(place_id=""))
+    assert excinfo.value.context == "place_details"
+    assert stub_server.last_request is None
+
+
+def test_place_details_rejects_wrong_types_before_any_request(
+    client, stub_server
+):
+    # D1: resolution branches on the model types, so an int, None
+    # and a Photo (which carries an id shaped name of its own) all
+    # fail locally with no request.
+    photo = Photo(
+        name="places/ChIJrTLr-GyuEmsRBfy61i59si0/photos/ATJ83zh8vExample"
+    )
+    for bad in (123, None, photo):
+        stub_server.last_request = None
+        with pytest.raises(ConfigError):
+            client.place_details(bad)
+        assert stub_server.last_request is None
+
+
+def test_models_carry_no_fetch_methods():
+    # D1 and D2: models are frozen value objects and never perform
+    # network I/O. This guard fails the day a fetching method lands
+    # on one of them.
+    assert not hasattr(Place, "get_details")
+    assert not hasattr(Photo, "get")
+    assert not hasattr(Photo, "fetch")
+    assert not hasattr(PlacePrediction, "get_details")
+
+
+def test_place_details_accepts_a_place_object_async(api_key, base_url):
+    # D1, async mirror of the sync object form test.
+    async def run():
+        client = AsyncClient(api_key, base_url=base_url)
+        result = await client.text_search("cafes in Sydney")
+        search_place = result.places[0]
+        details = await client.place_details(search_place)
+        assert details.id == search_place.id
+        assert details is not search_place
+        assert details.national_phone_number == "(02) 5550 1234"
+
+    asyncio.run(run())
+
+
+def test_place_details_rejects_an_id_less_place_before_any_request_async(
+    api_key, base_url, stub_server
+):
+    # D1, async mirror of the id less object rejection.
+    async def run():
+        client = AsyncClient(api_key, base_url=base_url)
+        stub_server.last_request = None
+        with pytest.raises(ConfigError) as excinfo:
+            await client.place_details(Place(id=""))
+        assert excinfo.value.context == "place_details"
+        assert stub_server.last_request is None
+
+    asyncio.run(run())
+
+
+def test_place_photo_accepts_a_photo_object(client):
+    # D2: the Photo itself is the fetch argument. The resolver reads
+    # its name and the bytes match the string form assertions.
+    details = client.place_details("ChIJrTLr-GyuEmsRBfy61i59si0")
+    media = client.place_photo(details.photos[0], max_width_px=400)
+    assert isinstance(media, PhotoMedia)
+    assert media.content_type == "image/png"
+    assert media.content[:8] == b"\x89PNG\r\n\x1a\n"
+    assert len(media.content) > 1024
+    assert media.content == PHOTO_FIXTURE.read_bytes()
+
+
+def test_place_photo_photo_form_defaults_to_the_photo_width(
+    client, stub_server
+):
+    # D2: a Photo passed with no sizes defaults its native width,
+    # 4032 in the details fixture, and sends no second dimension.
+    # The stub records only the last request, and the byte form
+    # redirect follow would overwrite the media request, so the
+    # wire assertion observes the same call through the URI form
+    # after the byte form has been exercised.
+    details = client.place_details("ChIJrTLr-GyuEmsRBfy61i59si0")
+    photo = details.photos[0]
+    media = client.place_photo(photo)
+    assert isinstance(media, PhotoMedia)
+    assert media.content == PHOTO_FIXTURE.read_bytes()
+    result = client.place_photo(photo, skip_http_redirect=True)
+    assert isinstance(result, PhotoUriResult)
+    path = stub_server.last_request["path"]
+    assert "maxWidthPx=4032" in path
+    assert "maxHeightPx" not in path
+
+
+def test_place_photo_explicit_size_suppresses_the_default(
+    client, stub_server
+):
+    # D2: passing either size switches the defaulting off entirely,
+    # so an explicit height travels alone with no defaulted width
+    # beside it. Observed through the URI form for the reason the
+    # width default test records.
+    details = client.place_details("ChIJrTLr-GyuEmsRBfy61i59si0")
+    photo = details.photos[0]
+    result = client.place_photo(photo, max_height_px=300, skip_http_redirect=True)
+    assert isinstance(result, PhotoUriResult)
+    path = stub_server.last_request["path"]
+    assert "maxHeightPx=300" in path
+    assert "maxWidthPx" not in path
+
+
+def test_place_photo_width_default_is_capped(client, stub_server):
+    # D2: a native width above the API cap defaults to the cap, so
+    # the default itself never trips the core range check.
+    photo = Photo(
+        name="places/ChIJrTLr-GyuEmsRBfy61i59si0/photos/ATJ83zh8vExample",
+        width_px=9999,
+        height_px=3024,
+    )
+    result = client.place_photo(photo, skip_http_redirect=True)
+    assert isinstance(result, PhotoUriResult)
+    assert "maxWidthPx=4800" in stub_server.last_request["path"]
+
+
+def test_place_photo_photo_without_dimensions_fails_locally(
+    client, stub_server
+):
+    # D2: zero is the unknown dimension sentinel (finding R8-F8), so
+    # a Photo with no dimensions has nothing to default from and
+    # fails before any request.
+    photo = Photo(
+        name="places/ChIJrTLr-GyuEmsRBfy61i59si0/photos/ATJ83zh8vExample"
+    )
+    stub_server.last_request = None
+    with pytest.raises(ConfigError):
+        client.place_photo(photo)
+    assert stub_server.last_request is None
+
+
+def test_place_photo_photo_form_skip_redirect_returns_uri(client):
+    # D2: the URI flow is identical for both argument shapes, and
+    # the result carries the photo name.
+    details = client.place_details("ChIJrTLr-GyuEmsRBfy61i59si0")
+    photo = details.photos[0]
+    result = client.place_photo(photo, skip_http_redirect=True)
+    assert isinstance(result, PhotoUriResult)
+    assert result.name == photo.name
+
+
+def test_place_photo_rejects_wrong_types_before_any_request(
+    client, stub_server
+):
+    # D2: a Place has a name attribute and must still be refused,
+    # because the resolver branches on the Photo type and never on
+    # attribute presence.
+    for bad in (Place(id="ChIJrTLr-GyuEmsRBfy61i59si0"), 123):
+        stub_server.last_request = None
+        with pytest.raises(ConfigError):
+            client.place_photo(bad, max_width_px=100)
+        assert stub_server.last_request is None
+
+
+def test_place_photo_accepts_a_photo_object_async(api_key, base_url):
+    # D2, async mirror of the sync object form test.
+    async def run():
+        client = AsyncClient(api_key, base_url=base_url)
+        details = await client.place_details("ChIJrTLr-GyuEmsRBfy61i59si0")
+        media = await client.place_photo(details.photos[0], max_width_px=400)
+        assert isinstance(media, PhotoMedia)
+        assert media.content == PHOTO_FIXTURE.read_bytes()
+
+    asyncio.run(run())
+
+
+def test_place_photo_photo_form_defaults_to_the_photo_width_async(
+    api_key, base_url, stub_server
+):
+    # D2, async mirror of the width default test, observed through
+    # the URI form for the reason the sync test records.
+    async def run():
+        client = AsyncClient(api_key, base_url=base_url)
+        details = await client.place_details("ChIJrTLr-GyuEmsRBfy61i59si0")
+        result = await client.place_photo(
+            details.photos[0], skip_http_redirect=True
+        )
+        assert isinstance(result, PhotoUriResult)
+        assert "maxWidthPx=4032" in stub_server.last_request["path"]
+
+    asyncio.run(run())
 
 
 def test_text_search_new_parameters_on_the_wire(client, stub_server):

@@ -6,9 +6,11 @@ from .models import (
     AutocompleteResult,
     LatLng,
     NearbySearchResult,
+    Photo,
     PhotoMedia,
     PhotoUriResult,
     Place,
+    PlacePrediction,
     TextSearchResult,
 )
 
@@ -70,7 +72,7 @@ class Client:
     ) -> NearbySearchResult: ...
     def place_details(
         self,
-        place_id: str,
+        place_id: str | Place | PlacePrediction,
         *,
         fields: FieldsLike = ...,
         language: Optional[str] = ...,
@@ -97,7 +99,7 @@ class Client:
     ) -> AutocompleteResult: ...
     def place_photo(
         self,
-        photo_name: str,
+        photo_name: str | Photo,
         *,
         max_width_px: Optional[int] = ...,
         max_height_px: Optional[int] = ...,
@@ -162,7 +164,7 @@ class AsyncClient:
     ) -> NearbySearchResult: ...
     async def place_details(
         self,
-        place_id: str,
+        place_id: str | Place | PlacePrediction,
         *,
         fields: FieldsLike = ...,
         language: Optional[str] = ...,
@@ -189,7 +191,7 @@ class AsyncClient:
     ) -> AutocompleteResult: ...
     async def place_photo(
         self,
-        photo_name: str,
+        photo_name: str | Photo,
         *,
         max_width_px: Optional[int] = ...,
         max_height_px: Optional[int] = ...,

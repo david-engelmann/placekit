@@ -208,7 +208,10 @@ class Attribution:
 class Photo:
     """A photo attached to a place.
 
-    Pass ``name`` to ``Client.place_photo`` to download the image.
+    Pass the ``Photo`` itself to ``Client.place_photo`` or
+    ``AsyncClient.place_photo`` to download the image, or pass its
+    ``name`` as a string. Passing the Photo with no size arguments
+    downloads at the photo native width up to the API cap of 4800.
     """
 
     name: str

@@ -21,9 +21,11 @@ from .models import (
     AutocompleteResult,
     LatLng,
     NearbySearchResult,
+    Photo,
     PhotoMedia,
     PhotoUriResult,
     Place,
+    PlacePrediction,
     TextSearchResult,
 )
 
@@ -400,6 +402,74 @@ class _Base:
                 f"{name} must be a string, got {value!r}", context=context
             )
         return value
+
+    @staticmethod
+    def _resolve_place_id(value: Any) -> str:
+        """Accept a place id as a string, a Place or a PlacePrediction.
+
+        The object forms read the identifier the object already
+        carries. A Place reads its id and a prediction reads its
+        place_id, never the prediction place attribute, which is a
+        resource name and not an id the details endpoint accepts.
+        An object carrying no id raises ConfigError here, because
+        that state means the mask that produced the object did
+        not request one, and the caller deserves that explanation
+        instead of a failure from further down the stack.
+        """
+        if isinstance(value, Place):
+            resolved = value.id
+        elif isinstance(value, PlacePrediction):
+            resolved = value.place_id
+        elif isinstance(value, str):
+            resolved = value
+        else:
+            raise ConfigError(
+                f"place_id must be a string, a Place or a "
+                f"PlacePrediction, got {value!r}"
+            )
+        if not resolved.strip():
+            raise ConfigError(
+                "place_id must not be empty. An object form with no "
+                "id was produced by a field mask that did not "
+                "request one"
+            )
+        return resolved
+
+    @staticmethod
+    def _resolve_photo_args(
+        value: Any,
+        max_width_px: Optional[int],
+        max_height_px: Optional[int],
+    ) -> tuple[str, Optional[int], Optional[int]]:
+        """Accept a photo name as a string or a Photo object.
+
+        A Photo supplies its resource name, and, when the caller
+        passed neither size, one defaulted size from its own
+        dimensions under the rule in the place_photo docstring.
+        A bare string supplies only the name. Any other type is a
+        ConfigError, raised here before any native call.
+        """
+        if isinstance(value, Photo):
+            width = max_width_px
+            height = max_height_px
+            if width is None and height is None:
+                if value.width_px >= 1:
+                    width = min(value.width_px, 4800)
+                elif value.height_px >= 1:
+                    height = min(value.height_px, 4800)
+                else:
+                    raise ConfigError(
+                        "place_photo requires at least one of "
+                        "max_width_px and max_height_px. The Photo "
+                        "passed carries no usable dimensions to "
+                        "default from"
+                    )
+            return value.name, width, height
+        if isinstance(value, str):
+            return value, max_width_px, max_height_px
+        raise ConfigError(
+            f"photo_name must be a string or a Photo, got {value!r}"
+        )
 
     @staticmethod
     def _validate_photo_args(
@@ -784,25 +854,45 @@ class Client(_Base):
 
     def place_details(
         self,
-        place_id: str,
+        place_id: str | Place | PlacePrediction,
         *,
         fields: FieldsLike = None,
         language: Optional[str] = None,
         region: Optional[str] = None,
         session_token: Optional[str] = None,
     ) -> Place:
-        """Fetch full details for one place id."""
+        """Fetch full details for one place id.
+
+        ``place_id`` may be a place id string, a ``Place`` from a
+        search result, or a ``PlacePrediction`` from autocomplete.
+        The call is a new billed request, billed at the Place
+        Details default tier when ``fields`` is omitted, and it
+        returns a new ``Place``. The object passed in is never
+        mutated, and rebinding is the intended pattern, written
+        ``place = client.place_details(place)``. The returned
+        ``Place`` carries the details payload on its own ``raw``,
+        and fields that only exist in a search payload raw do not
+        carry over. After an autocomplete call, pass the same
+        ``session_token`` so the upgrade closes the billing
+        session. Any field a narrower custom ``fields`` mask omits
+        still reads as not returned on the result, in the sense
+        the models documentation defines for unreturned
+        attributes.
+        """
         self._ensure_open("place_details")
         self._check_no_running_loop("place_details")
-        self._require_str("place_id", place_id, "place_details")
-        context = f"place_details place_id={place_id}"
+        try:
+            resolved_id = self._resolve_place_id(place_id)
+        except ConfigError as exc:
+            raise self._with_context(exc, "place_details") from exc
+        context = f"place_details place_id={resolved_id}"
         try:
             fields_list = normalize_fields(fields)
         except ConfigError as exc:
             raise self._with_context(exc, context) from exc
         try:
             data = self._inner.place_details(
-                place_id,
+                resolved_id,
                 fields_list,
                 language,
                 region,
@@ -870,7 +960,7 @@ class Client(_Base):
 
     def place_photo(
         self,
-        photo_name: str,
+        photo_name: str | Photo,
         *,
         max_width_px: Optional[int] = None,
         max_height_px: Optional[int] = None,
@@ -881,21 +971,41 @@ class Client(_Base):
         ``photo_name`` comes from ``Place.photos[i].name``. At least one of
         ``max_width_px`` and ``max_height_px`` is required (each 1 to 4800).
 
+        A ``Photo`` object from ``Place.photos`` may be passed
+        instead of its name. With a ``Photo`` and neither size
+        argument, one size defaults from the photo itself. The
+        width becomes the photo native width capped at 4800, or
+        the height when the photo carries no width. A native width
+        can be large, so a caller who wants a thumbnail must pass
+        a size. Passing either size argument switches the
+        defaulting off and uses the sizes exactly as given. A bare
+        name carries no dimensions, so nothing can default from
+        it and the at least one size rule above stands for names.
+
         By default this follows the endpoint's redirect and returns a
         ``PhotoMedia`` with the image bytes. With
         ``skip_http_redirect=True`` it returns a ``PhotoUriResult``
         carrying the photo's short lived URI instead, with the full
         JSON form the endpoint returned preserved on its ``raw``.
+        The redirect behaviour is the same for both argument
+        shapes, and a URI form result carries the photo name on
+        its ``name`` attribute.
         """
-        context = f"place_photo name={photo_name}"
         self._ensure_open("place_photo")
         self._check_no_running_loop("place_photo")
+        try:
+            name, width, height = self._resolve_photo_args(
+                photo_name, max_width_px, max_height_px
+            )
+        except ConfigError as exc:
+            raise self._with_context(exc, "place_photo") from exc
+        context = f"place_photo name={name}"
         self._validate_photo_args(
-            photo_name, max_width_px, max_height_px, skip_http_redirect, context
+            name, width, height, skip_http_redirect, context
         )
         try:
             tagged = self._inner.place_photo(
-                photo_name, max_width_px, max_height_px, skip_http_redirect
+                name, width, height, skip_http_redirect
             )
         except _CorePlacesError as exc:
             raise_translated(exc, context)
@@ -1024,24 +1134,44 @@ class AsyncClient(_Base):
 
     async def place_details(
         self,
-        place_id: str,
+        place_id: str | Place | PlacePrediction,
         *,
         fields: FieldsLike = None,
         language: Optional[str] = None,
         region: Optional[str] = None,
         session_token: Optional[str] = None,
     ) -> Place:
-        """Async version of ``Client.place_details``."""
+        """Async version of ``Client.place_details``.
+
+        ``place_id`` may be a place id string, a ``Place`` from a
+        search result, or a ``PlacePrediction`` from autocomplete.
+        The call is a new billed request, billed at the Place
+        Details default tier when ``fields`` is omitted, and it
+        returns a new ``Place``. The object passed in is never
+        mutated, and rebinding is the intended pattern, written
+        ``place = await client.place_details(place)``. The returned
+        ``Place`` carries the details payload on its own ``raw``,
+        and fields that only exist in a search payload raw do not
+        carry over. After an autocomplete call, pass the same
+        ``session_token`` so the upgrade closes the billing
+        session. Any field a narrower custom ``fields`` mask omits
+        still reads as not returned on the result, in the sense
+        the models documentation defines for unreturned
+        attributes.
+        """
         self._ensure_open("place_details")
-        self._require_str("place_id", place_id, "place_details")
-        context = f"place_details place_id={place_id}"
+        try:
+            resolved_id = self._resolve_place_id(place_id)
+        except ConfigError as exc:
+            raise self._with_context(exc, "place_details") from exc
+        context = f"place_details place_id={resolved_id}"
         try:
             fields_list = normalize_fields(fields)
         except ConfigError as exc:
             raise self._with_context(exc, context) from exc
         try:
             data = await self._inner.place_details_async(
-                place_id,
+                resolved_id,
                 fields_list,
                 language,
                 region,
@@ -1103,21 +1233,36 @@ class AsyncClient(_Base):
 
     async def place_photo(
         self,
-        photo_name: str,
+        photo_name: str | Photo,
         *,
         max_width_px: Optional[int] = None,
         max_height_px: Optional[int] = None,
         skip_http_redirect: bool = False,
     ) -> PhotoMedia | PhotoUriResult:
-        """Async version of ``Client.place_photo``."""
-        context = f"place_photo name={photo_name}"
+        """Async version of ``Client.place_photo``.
+
+        A ``Photo`` object may be passed instead of its name, with
+        the same size defaulting as the sync method. With a
+        ``Photo`` and neither size argument, the width defaults to
+        the photo native width capped at 4800, or the height when
+        the photo carries no width, and passing either size
+        argument switches the defaulting off. A bare name still
+        requires at least one size argument.
+        """
         self._ensure_open("place_photo")
+        try:
+            name, width, height = self._resolve_photo_args(
+                photo_name, max_width_px, max_height_px
+            )
+        except ConfigError as exc:
+            raise self._with_context(exc, "place_photo") from exc
+        context = f"place_photo name={name}"
         self._validate_photo_args(
-            photo_name, max_width_px, max_height_px, skip_http_redirect, context
+            name, width, height, skip_http_redirect, context
         )
         try:
             tagged = await self._inner.place_photo_async(
-                photo_name, max_width_px, max_height_px, skip_http_redirect
+                name, width, height, skip_http_redirect
             )
         except _CorePlacesError as exc:
             raise_translated(exc, context)

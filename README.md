@@ -27,10 +27,10 @@ result = client.text_search("cafes in Sydney")
 for place in result.places:
     print(place.display_text, place.rating, place.formatted_address)
 
-details = client.place_details(result.places[0].id)
+details = client.place_details(result.places[0])
 print(details.national_phone_number, details.website_uri)
 
-photo = client.place_photo(details.photos[0].name, max_width_px=800)
+photo = client.place_photo(details.photos[0], max_width_px=800)
 photo.save("cafe.jpg")
 ```
 
