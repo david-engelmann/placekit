@@ -382,6 +382,26 @@ def test_place_details_rejects_wrong_types_before_any_request(
         assert stub_server.last_request is None
 
 
+def test_place_details_rejects_a_wrongly_typed_id_before_any_request(
+    client, stub_server
+):
+    # D1: the frozen models never type check their fields, so a
+    # hand built object can carry an identifier that is not a
+    # string at all. Resolution refuses it as a ConfigError
+    # before the strip check would die on it, and no request
+    # reaches the stub.
+    for bad in (
+        Place(id=None),
+        Place(id=123),
+        PlacePrediction(place_id=None),
+    ):
+        stub_server.last_request = None
+        with pytest.raises(ConfigError) as excinfo:
+            client.place_details(bad)
+        assert excinfo.value.context == "place_details"
+        assert stub_server.last_request is None
+
+
 def test_models_carry_no_fetch_methods():
     # D1 and D2: models are frozen value objects and never perform
     # network I/O. This guard fails the day a fetching method lands
@@ -417,6 +437,28 @@ def test_place_details_rejects_an_id_less_place_before_any_request_async(
             await client.place_details(Place(id=""))
         assert excinfo.value.context == "place_details"
         assert stub_server.last_request is None
+
+    asyncio.run(run())
+
+
+def test_place_details_rejects_a_wrongly_typed_id_before_any_request_async(
+    api_key, base_url, stub_server
+):
+    # D1, async mirror of the wrongly typed id rejection. The
+    # resolvers live on the shared base class, so the async
+    # client refuses the same hand built objects the same way.
+    async def run():
+        client = AsyncClient(api_key, base_url=base_url)
+        for bad in (
+            Place(id=None),
+            Place(id=123),
+            PlacePrediction(place_id=None),
+        ):
+            stub_server.last_request = None
+            with pytest.raises(ConfigError) as excinfo:
+                await client.place_details(bad)
+            assert excinfo.value.context == "place_details"
+            assert stub_server.last_request is None
 
     asyncio.run(run())
 
@@ -521,6 +563,26 @@ def test_place_photo_rejects_wrong_types_before_any_request(
         assert stub_server.last_request is None
 
 
+def test_place_photo_rejects_wrongly_typed_dimensions_before_any_request(
+    client, stub_server
+):
+    # D2: a hand built Photo can carry a dimension that is not
+    # an integer, and the frozen models never type check it.
+    # Resolution refuses it as a ConfigError before any
+    # dimension comparison would die on it, and no request
+    # reaches the stub.
+    name = "places/ChIJrTLr-GyuEmsRBfy61i59si0/photos/ATJ83zh8vExample"
+    for bad in (
+        Photo(name=name, width_px="4032"),
+        Photo(name=name, width_px=None),
+    ):
+        stub_server.last_request = None
+        with pytest.raises(ConfigError) as excinfo:
+            client.place_photo(bad)
+        assert excinfo.value.context == "place_photo"
+        assert stub_server.last_request is None
+
+
 def test_place_photo_accepts_a_photo_object_async(api_key, base_url):
     # D2, async mirror of the sync object form test.
     async def run():
@@ -594,6 +656,18 @@ def test_absent_and_explicit_null_read_the_same_but_raw_knows(
     data["websiteUri"] = None
     raw_response(200, json.dumps(data).encode())
     place = client.place_details("ChIJrTLr-GyuEmsRBfy61i59si0")
+    assert place.website_uri is None
+    assert "websiteUri" in place.raw
+
+
+def test_explicit_null_stays_in_raw_at_the_model_layer():
+    # D3: the model layer half of the raw membership claim holds
+    # today and is pinned green here. A payload carrying
+    # websiteUri as an explicit null decodes with website_uri
+    # reading None and the wire name present in raw. Through
+    # the client the key is lost, which is what the strict
+    # xfail above records.
+    place = Place.from_api({"id": "ChIJx", "websiteUri": None})
     assert place.website_uri is None
     assert "websiteUri" in place.raw
 

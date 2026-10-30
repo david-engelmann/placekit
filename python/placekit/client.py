@@ -414,7 +414,10 @@ class _Base:
         An object carrying no id raises ConfigError here, because
         that state means the mask that produced the object did
         not request one, and the caller deserves that explanation
-        instead of a failure from further down the stack.
+        instead of a failure from further down the stack. A
+        wrongly typed identifier on a hand built object raises
+        ConfigError here too, because the frozen models do not
+        type check their fields at construction.
         """
         if isinstance(value, Place):
             resolved = value.id
@@ -426,6 +429,11 @@ class _Base:
             raise ConfigError(
                 f"place_id must be a string, a Place or a "
                 f"PlacePrediction, got {value!r}"
+            )
+        if not isinstance(resolved, str):
+            raise ConfigError(
+                f"place_id from a {type(value).__name__} must be "
+                f"a string, got {resolved!r}"
             )
         if not resolved.strip():
             raise ConfigError(
@@ -446,10 +454,28 @@ class _Base:
         A Photo supplies its resource name, and, when the caller
         passed neither size, one defaulted size from its own
         dimensions under the rule in the place_photo docstring.
-        A bare string supplies only the name. Any other type is a
-        ConfigError, raised here before any native call.
+        A bare string supplies only the name. A Photo whose
+        dimensions are not integers raises ConfigError here,
+        before any dimension is compared, because the frozen
+        models do not type check their fields at construction.
+        Any other type is a ConfigError, raised here before any
+        native call.
         """
         if isinstance(value, Photo):
+            if isinstance(value.width_px, bool) or not isinstance(
+                value.width_px, int
+            ):
+                raise ConfigError(
+                    "a Photo width_px must be an integer, "
+                    f"got {value.width_px!r}"
+                )
+            if isinstance(value.height_px, bool) or not isinstance(
+                value.height_px, int
+            ):
+                raise ConfigError(
+                    "a Photo height_px must be an integer, "
+                    f"got {value.height_px!r}"
+                )
             width = max_width_px
             height = max_height_px
             if width is None and height is None:
@@ -1245,9 +1271,19 @@ class AsyncClient(_Base):
         the same size defaulting as the sync method. With a
         ``Photo`` and neither size argument, the width defaults to
         the photo native width capped at 4800, or the height when
-        the photo carries no width, and passing either size
-        argument switches the defaulting off. A bare name still
-        requires at least one size argument.
+        the photo carries no width. A native width can be large,
+        so a caller who wants a thumbnail must pass a size.
+        Passing either size argument switches the defaulting off.
+        A bare name still requires at least one size argument.
+
+        By default awaiting this follows the endpoint's redirect
+        and returns a ``PhotoMedia`` with the image bytes. With
+        ``skip_http_redirect=True`` it returns a ``PhotoUriResult``
+        carrying the photo's short lived URI instead, with the full
+        JSON form the endpoint returned preserved on its ``raw``.
+        The redirect behaviour is the same for both argument
+        shapes, and a URI form result carries the photo name on
+        its ``name`` attribute.
         """
         self._ensure_open("place_photo")
         try:

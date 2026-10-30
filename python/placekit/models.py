@@ -17,9 +17,14 @@ the mask never requested and fields the API had no value for,
 which cannot be told apart from the object. List attributes read
 an empty list in the same state, and a few string and number
 attributes read their empty default. The ``raw`` payload answers
-the narrower question of what the response carried, because a
-wire name is a key in ``raw`` exactly when the response carried
-that field. No attribute raises for being unreturned, and the
+the narrower question of what the response carried, within one
+limit. At the model layer, and for fields this client does not
+model at all, a wire name is a key in ``raw`` exactly when the
+response carried that field. Through the client the core
+reserializes modelled fields, so a modelled field the response
+carried as an explicit null, or as an explicitly empty list,
+does not keep its key in ``raw``. No attribute raises for being
+unreturned, and the
 way to populate the full modelled set is a ``place_details``
 call, whose default mask requests all of it.
 
