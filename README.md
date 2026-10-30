@@ -85,6 +85,24 @@ Any iterable of path strings works too. Omit `fields` and each endpoint uses a c
 
 One billing note on the defaults. They include fields from the Enterprise billing tier, among them rating, user rating counts and price level, so a search call with a default mask is billed at the Enterprise tier. Place Details is the exception. Its default mask requests every modelled field, including current opening hours from the higher Enterprise plus Atmosphere tier, so a default `place_details` call is billed at that tier. Pass a narrower `fields` set when you want a lower tier.
 
+## Constants
+
+Three modules carry the vocabularies callers pass most often, as plain strings that drop into the existing parameters. `placekit.types` holds the place type vocabulary from the official Place Types page, `placekit.lang` holds the supported language codes, and `placekit.ranking` holds the ranking preferences split by method, because Text Search and Nearby Search accept different sets.
+
+```python
+from placekit import lang, ranking, types
+
+result = client.nearby_search(
+    (-33.8668, 151.2071),
+    800.0,
+    included_types=[types.TYPE_CAFE],
+    language=lang.ENGLISH,
+    rank_preference=ranking.DISTANCE,
+)
+```
+
+The modules are snapshots of the official tables and a convenience only. The client accepts any string in these slots, including values this version has never heard of, so a type or language the API adds tomorrow works without waiting for a placekit release.
+
 ## Errors
 
 Every failure raises a subclass of `PlacesError`, carrying `status_code` and `google_status` when the error came from the API.
