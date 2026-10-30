@@ -50,6 +50,16 @@ asyncio.run(main())
 
 The sync `Client` refuses to run inside a running event loop, raising a `ConfigError` that points at `AsyncClient` instead of freezing the loop for the length of a request. Inside async code, use `AsyncClient`.
 
+## Coming from googleplaces
+
+placekit targets Places API (New), and python-google-places wraps the
+retired legacy API, so the port is more than an import change.
+MIGRATING.md walks the four canonical legacy examples across call by
+call, with the name mapping, the attribute reading contract, and the
+removals named plainly.
+
+[Migrating from python-google-places](MIGRATING.md)
+
 ## Why a Rust core
 
 - One abi3 wheel per platform serves every Python from 3.10 up, so installs on the platforms above are a single small download with no compiler, no build step, and zero runtime dependencies.
