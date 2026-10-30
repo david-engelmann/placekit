@@ -59,9 +59,10 @@ here once and then met again inside the examples.
 
 ## Example 1. The flagship search
 
-The legacy flagship is quoted in full below, exactly as published.
-It is Python 2 as published, it is quoted history, and it is not
-executed anywhere in this repository.
+The legacy flagship is quoted below. Its code lines are quoted
+exactly as published, with the comments and the API key assignment
+omitted. It is Python 2 as published, it is quoted history, and it
+is not executed anywhere in this repository.
 
 ```python
 from googleplaces import GooglePlaces, types, lang
@@ -119,7 +120,10 @@ result = client.text_search(
 )
 
 # A pure type and radius browse, with no text filter, stays a
-# Nearby Search.
+# Nearby Search. The browse narrows the legacy food filter to the
+# restaurant type alone, so cafes, bakeries and the other food
+# subtypes are not carried by it. A caller who wants the broader
+# net passes several Table A food types in included_types.
 browse = client.nearby_search(
     (51.5074, -0.1278),
     20000.0,
@@ -175,7 +179,9 @@ What changed, in the order the code meets it.
   search, and the legacy value food is a Table B value, so
   types.TYPE_FOOD is unusable in a request even though the constant
   exists. The port filters on restaurant, a Table A value, and the
-  query text carries the broader food intent.
+  query text carries the broader food intent in the text search.
+  The browse has no query text to carry that intent, and its
+  narrowing is named at the browse call itself.
 - place.name became display_text. The attribute named name is the
   resource name, a string like places/ChIJrTLr-GyuEmsRBfy61i59si0,
   and display_text is the business name the legacy name printed.
@@ -225,9 +231,10 @@ if result.next_page_token:
 Three changes hide in those two lines. The boolean property becomes
 a truthiness test, and the token itself reads None when no page
 remains, where the legacy token default was an empty list. The
-parameter renames to page_token, and the original query arguments
-may be repeated or omitted, because the token carries the query.
-And paging exists only on Text Search. A Nearby Search result has
+parameter renames to page_token, and the query text is repeated on
+the token call. The token carries the query at the API, and
+placekit still requires the query argument on every text_search
+call. And paging exists only on Text Search. A Nearby Search result has
 no next_page_token attribute at all, because the new API returns
 one page of at most 20 results by design.
 
@@ -269,8 +276,15 @@ result = client.autocomplete(
 for prediction in result.place_predictions:
     print(prediction.text.text)
     print(prediction.place_id)
-    details = client.place_details(prediction, session_token=session_token)
-    print(details.display_text)
+
+# The session closes with one details call, on one chosen
+# prediction. Calling place_details inside the loop would spend
+# the token on the first prediction and bill every later upgrade
+# as a standalone details call.
+details = client.place_details(
+    result.place_predictions[0], session_token=session_token
+)
+print(details.display_text)
 ```
 
 What changed, in order. The input keyword became the positional
@@ -305,16 +319,18 @@ fresh token per session is the habit this example teaches.
 ## Example 4. Adding and deleting a place
 
 The last canonical example is short by design. Its legacy block is
-quoted in full, and it is quoted history that is not executed.
+quoted below with its code lines exactly as published and its
+comments omitted, and it is quoted history that is not executed.
 
 ```python
 try:
-    added_place = google_places.add_place(
-        name='Mom and Pop local store',
-        lat_lng={'lat': 51.501984, 'lng': -0.141792},
-        accuracy=100, types=types.TYPE_HOME_GOODS_STORE,
-        language=lang.ENGLISH_GREAT_BRITAIN)
+    added_place = google_places.add_place(name='Mom and Pop local store',
+            lat_lng={'lat': 51.501984, 'lng': -0.141792},
+            accuracy=100,
+            types=types.TYPE_HOME_GOODS_STORE,
+            language=lang.ENGLISH_GREAT_BRITAIN)
     print added_place.place_id
+    print added_place.id
     google_places.delete_place(added_place.place_id)
 except GooglePlacesError as error_detail:
     print error_detail
@@ -454,6 +470,11 @@ spellings are GALICIAN, GUJARATI and UKRAINIAN in placekit.lang,
 with the autocomplete collections named COLLECTION_CITIES and
 COLLECTION_REGIONS in placekit.types.
 
+The legacy default language is gone as well. The legacy library
+defaulted to English, and placekit sends no language unless the
+caller passes one, so a port that relied on the default names its
+language explicitly.
+
 ## Errors
 
 GooglePlacesError arrived as one class with the status in the
@@ -490,10 +511,11 @@ result carries the search default fields and reads everything else
 under the attribute contract, as None, an empty list, or an empty
 default. A details result carries every modelled field the API had
 values for. The fields migrants most often reach for on the wrong
-level are website_uri, the phone numbers, opening hours, reviews
-and the full address components, and each of them belongs to the
-details level. Reviews are typed Place.reviews in the details
-default and absent from search results under the default masks.
+level are website_uri, the phone numbers, opening hours, reviews,
+the full address components, short_formatted_address and
+attributions, and each of them belongs to the details level.
+Reviews are typed Place.reviews in the details default and absent
+from search results under the default masks.
 
 ## Port checklist
 

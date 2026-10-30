@@ -121,6 +121,15 @@ def test_guide_example_3_autocomplete_session(client, stub_server):
     )
     body = json.loads(stub_server.last_request["body"])
     assert body["sessionToken"] == SESSION_TOKEN
+    recorded = stub_server.last_request
+
+    # The shipped loop reads every prediction and makes no call, so
+    # the request the stub last recorded is still the autocomplete
+    # request when the loop is done.
+    for prediction in result.place_predictions:
+        assert prediction.text.text
+        assert prediction.place_id
+    assert stub_server.last_request == recorded
 
     prediction = result.place_predictions[0]
     assert prediction.text.text == (
@@ -128,8 +137,13 @@ def test_guide_example_3_autocomplete_session(client, stub_server):
     )
     assert prediction.place_id == "ChIJrTLr-GyuEmsRBfy61i59si0"
 
+    # The session closes with one details call on the one chosen
+    # prediction, and that call is the only details request the
+    # whole flow makes.
     details = client.place_details(prediction, session_token=SESSION_TOKEN)
     assert details.display_text == "Bianco Latte"
+    assert stub_server.last_request["method"] == "GET"
+    assert f"/places/{prediction.place_id}" in stub_server.last_request["path"]
     assert f"sessionToken={SESSION_TOKEN}" in stub_server.last_request["path"]
 
 
@@ -183,6 +197,10 @@ def test_guide_examples_against_the_live_cassettes():
 
 def test_guide_file_exists_and_names_the_boundaries():
     guide = (REPO_ROOT / "MIGRATING.md").read_text()
+    # Whitespace is normalised before the substring checks, so a
+    # rewrap that changes no wording cannot fail these pins while
+    # a wording softening still does.
+    guide = " ".join(guide.split())
     for removal in (
         "Nearby search keyword and name filters",
         "Adding and deleting places",
