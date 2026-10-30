@@ -159,10 +159,7 @@ fn check_body_bools(value: &Bound<'_, PyAny>) -> Result<(), String> {
                     && !item.is_none()
                     && !item.is_instance_of::<PyBool>()
                 {
-                    return Err(format!(
-                        "{name} must be a bool, got {}",
-                        item.get_type()
-                    ));
+                    return Err(format!("{name} must be a bool, got {}", item.get_type()));
                 }
             }
             check_body_bools(&item)?;
