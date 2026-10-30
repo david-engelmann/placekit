@@ -129,9 +129,11 @@ def test_place_details_sync(client):
     # Structured address fields are typed (finding C4) but not in the
     # default mask, so they arrive only when requested, as here.
     assert place.attributions[0].provider == "Example Maps Data"
-    # The default mask does not request editorialSummary, so an honest
-    # stub cannot serve it on a default call (finding A2).
-    assert "editorialSummary" not in place.raw
+    # The default mask requests editorialSummary since Round 6 typed
+    # it, so the stub serves it on a default call and the typed
+    # attribute is populated.
+    assert place.editorial_summary is not None
+    assert place.editorial_summary.text.startswith("A bright corner cafe")
 
 
 def test_place_details_typed_fields_with_explicit_mask(client):
@@ -170,16 +172,23 @@ def test_place_details_typed_fields_with_explicit_mask(client):
     assert 'class="postal-code">2000<' in place.adr_format_address
 
 
-def test_place_details_editorial_summary_needs_explicit_field(client):
-    # The earlier form of this assertion ran against a stub that ignored
-    # the field mask, asserting behaviour the real API cannot produce on
-    # a default call (finding A2). The field arrives only when requested.
+def test_editorial_summary_typed_needs_explicit_field(client):
+    # Round 6 rework of the earlier raw-only form of this test.
+    # editorialSummary is typed now as a LocalizedText. Through the
+    # client with an explicit mask the typed attribute is populated
+    # and the payload still survives in raw, and the field joins the
+    # default details mask, so a default call populates it too.
     place = client.place_details(
         "ChIJrTLr-GyuEmsRBfy61i59si0", fields=["id", "editorialSummary"]
     )
+    assert place.editorial_summary is not None
+    assert place.editorial_summary.text.startswith("A bright corner cafe")
     assert place.raw["editorialSummary"]["text"].startswith("A bright corner cafe")
     # And fields outside the explicit mask stay absent.
     assert place.national_phone_number is None
+    default = client.place_details("ChIJrTLr-GyuEmsRBfy61i59si0")
+    assert default.editorial_summary is not None
+    assert default.editorial_summary.text.startswith("A bright corner cafe")
 
 
 def test_autocomplete_sync(client):
@@ -283,7 +292,16 @@ def test_text_search_top_level_fields_survive(client):
     )
     assert result.search_uri == "https://maps.google.com/?q=cafes+in+Sydney"
     assert len(result.routing_summaries) == 1
-    assert result.routing_summaries[0]["legs"][0]["distanceMeters"] == 5587
+    # Typed since round 6 group 11: attribute access, and the duration
+    # stays the wire string rather than becoming a parsed interval.
+    summary = result.routing_summaries[0]
+    assert summary.legs[0].distance_meters == 5587
+    assert summary.legs[0].duration == "601s"
+    assert isinstance(summary.legs[0].duration, str)
+    assert summary.directions_uri == "https://maps.google.com/?directions=example"
+    # The untyped dict form stays reachable through the result raw,
+    # which is the mitigation for the breaking typed change.
+    assert result.raw["routingSummaries"][0]["legs"][0]["distanceMeters"] == 5587
     assert result.raw["searchUri"] == result.search_uri
     # Places outside the mask stay out.
     assert result.places[0].display_text is None
@@ -1742,3 +1760,953 @@ def test_model_constructors_reject_bare_strings_in_list_fields():
         PlacePrediction(place_id="y", types="cafe")
     place = Place(id="x", types=["restaurant"])
     assert place.types == ["restaurant"]
+
+
+# ---------------------------------------------------------------------------
+# Round 6 (T1) group 1: OpeningHours completions, secondary hours, and
+# the PhotoUriResult raw fix (fixes section 5.2)
+# ---------------------------------------------------------------------------
+
+
+def test_opening_hours_next_close_time_from_cassette_02():
+    # Cut from cassette 02 of the live smoke recordings (the one
+    # cassette whose mask requested the opening hours parents whole):
+    # each hours object is reduced to its first period, nextCloseTime
+    # is verbatim, and the photos array and every URL of the place
+    # around them are dropped, keeping ids and timestamps.
+    from placekit.models import Place
+
+    place = Place.from_api(
+        {
+            "id": "ChIJzRBPAz5ZwokRd0AUXGm-2f8",
+            "regularOpeningHours": {
+                "openNow": True,
+                "periods": [
+                    {
+                        "open": {"day": 0, "hour": 9, "minute": 0},
+                        "close": {"day": 0, "hour": 22, "minute": 30},
+                    }
+                ],
+                "nextCloseTime": "2026-10-30T04:00:00Z",
+            },
+            "currentOpeningHours": {
+                "openNow": True,
+                "periods": [
+                    {
+                        "open": {
+                            "day": 0,
+                            "hour": 9,
+                            "minute": 0,
+                            "date": {"year": 2026, "month": 11, "day": 1},
+                        },
+                        "close": {
+                            "day": 0,
+                            "hour": 22,
+                            "minute": 30,
+                            "date": {"year": 2026, "month": 11, "day": 1},
+                        },
+                    }
+                ],
+                "nextCloseTime": "2026-10-30T04:00:00Z",
+            },
+        }
+    )
+    assert place.opening_hours is not None
+    assert place.opening_hours.next_close_time == "2026-10-30T04:00:00Z"
+    assert place.current_opening_hours is not None
+    assert place.current_opening_hours.next_close_time == "2026-10-30T04:00:00Z"
+
+
+def test_opening_hours_next_open_time_and_absent_close_time():
+    # Hand built: the cassette place was open, so only nextCloseTime
+    # was populated there. A closed place carries nextOpenTime alone,
+    # and the absent sibling must read None, never a shared default.
+    from placekit.models import Place
+
+    place = Place.from_api(
+        {
+            "id": "A",
+            "regularOpeningHours": {"nextOpenTime": "2026-10-30T09:00:00Z"},
+        }
+    )
+    assert place.opening_hours is not None
+    assert place.opening_hours.next_open_time == "2026-10-30T09:00:00Z"
+    assert place.opening_hours.next_close_time is None
+
+
+def test_opening_hours_special_days_decode_dates():
+    from placekit.models import Date, Place
+
+    place = Place.from_api(
+        {
+            "id": "A",
+            "currentOpeningHours": {
+                "specialDays": [{"date": {"year": 2026, "month": 12, "day": 25}}]
+            },
+        }
+    )
+    assert place.current_opening_hours is not None
+    special = place.current_opening_hours.special_days
+    assert len(special) == 1
+    assert isinstance(special[0].date, Date)
+    assert (special[0].date.year, special[0].date.month, special[0].date.day) == (
+        2026,
+        12,
+        25,
+    )
+
+
+def test_secondary_opening_hours_decode_with_type():
+    from placekit.models import OpeningHours, Place
+
+    place = Place.from_api(
+        {
+            "id": "A",
+            "currentSecondaryOpeningHours": [
+                {
+                    "secondaryHoursType": "DRIVE_THROUGH",
+                    "periods": [
+                        {
+                            "open": {"day": 1, "hour": 8, "minute": 0},
+                            "close": {"day": 1, "hour": 20, "minute": 0},
+                        }
+                    ],
+                }
+            ],
+        }
+    )
+    secondary = place.current_secondary_opening_hours
+    assert len(secondary) == 1
+    assert isinstance(secondary[0], OpeningHours)
+    assert secondary[0].secondary_hours_type == "DRIVE_THROUGH"
+    assert secondary[0].periods[0].open is not None
+    assert secondary[0].periods[0].open.hour == 8
+    # The paired control: no secondary keys, both lists empty.
+    plain = Place.from_api({"id": "A"})
+    assert plain.current_secondary_opening_hours == []
+    assert plain.regular_secondary_opening_hours == []
+
+
+def test_round6_group1_mask_paths():
+    # The secondary hours join the details default only; the search
+    # defaults are unchanged, so the fields stay requestable in search
+    # through a custom mask and nothing else.
+    from placekit.fields import (
+        NEARBY_SEARCH_FIELDS,
+        PLACE_DETAILS_FIELDS,
+        TEXT_SEARCH_FIELDS,
+    )
+
+    for path in ("currentSecondaryOpeningHours", "regularSecondaryOpeningHours"):
+        assert path in PLACE_DETAILS_FIELDS
+        assert f"places.{path}" not in TEXT_SEARCH_FIELDS
+        assert f"places.{path}" not in NEARBY_SEARCH_FIELDS
+    assert set(FieldMask.place_details().paths) == set(PLACE_DETAILS_FIELDS)
+
+
+def test_photo_uri_result_from_api_preserves_unmodelled_fields():
+    # The body is cut from cassette 06 of the live smoke recordings,
+    # sanitized as the smoke report prescribes: the signed photo URI
+    # is reduced to scheme, host and path shape with its opaque token
+    # shortened, and the photo reference is shortened the same way.
+    # The sentinel key stands in for the first field Google adds to
+    # this JSON form; before the fix it reached nobody, in raw or
+    # typed form, because PhotoUriResult had no raw at all.
+    from placekit.models import PhotoUriResult
+
+    result = PhotoUriResult.from_api(
+        {
+            "name": "places/ChIJzRBPAz5ZwokRd0AUXGm-2f8/photos/AV-0GLfkSvEkSqs",
+            "photoUri": "https://lh3.googleusercontent.com/grass-cs/AABkmLexSCJl",
+            "zzFutureField": 1,
+        }
+    )
+    assert result.name == "places/ChIJzRBPAz5ZwokRd0AUXGm-2f8/photos/AV-0GLfkSvEkSqs"
+    assert result.photo_uri == "https://lh3.googleusercontent.com/grass-cs/AABkmLexSCJl"
+    assert result.raw["zzFutureField"] == 1
+    assert result.raw["photoUri"] == result.photo_uri
+
+
+def test_place_photo_skip_redirect_result_carries_raw(client):
+    # Client level companion to the model test above: the raw on the
+    # returned object equals the JSON form the stub served, which is
+    # the property the binding change exists to provide.
+    result = client.place_photo(
+        "places/ChIJrTLr-GyuEmsRBfy61i59si0/photos/ATJ83zh8vExample",
+        max_width_px=400,
+        skip_http_redirect=True,
+    )
+    assert isinstance(result, PhotoUriResult)
+    assert result.raw == {"name": result.name, "photoUri": result.photo_uri}
+
+
+# ---------------------------------------------------------------------------
+# Round 6 (T1) group 2: PostalAddress completions
+# ---------------------------------------------------------------------------
+
+
+def test_postal_address_completion_fields_decode():
+    # The base object is the cassette 02 shaped postalAddress (the
+    # regionCode AU shape the offline fixture also carries). The live
+    # place returned no sublocality, organization or recipients, so
+    # those three keys are added by hand to that shape here.
+    from placekit.models import PostalAddress
+
+    address = PostalAddress.from_api(
+        {
+            "regionCode": "AU",
+            "languageCode": "en",
+            "postalCode": "2000",
+            "administrativeArea": "New South Wales",
+            "locality": "Sydney",
+            "addressLines": ["Shop 1/123 George St"],
+            "sublocality": "The Rocks",
+            "organization": "Bianco Latte Pty Ltd",
+            "recipients": ["Bianco Latte", "Deliveries Desk"],
+        }
+    )
+    assert address.sublocality == "The Rocks"
+    assert address.organization == "Bianco Latte Pty Ltd"
+    assert address.recipients == ["Bianco Latte", "Deliveries Desk"]
+
+
+def test_postal_address_recipients_rejects_bare_string():
+    from placekit.models import PostalAddress
+
+    with pytest.raises(DecodeError):
+        PostalAddress.from_api({"recipients": "Bianco Latte"})
+
+
+# ---------------------------------------------------------------------------
+# Round 6 (T1) group 3: Place scalars and LocalizedText reuse
+# ---------------------------------------------------------------------------
+
+
+def test_place_moved_fields_decode():
+    from placekit.models import Place
+
+    place = Place.from_api(
+        {
+            "id": "A",
+            "movedPlace": "places/ChIJnew",
+            "movedPlaceId": "ChIJnew",
+        }
+    )
+    assert place.moved_place == "places/ChIJnew"
+    assert place.moved_place_id == "ChIJnew"
+    plain = Place.from_api({"id": "A"})
+    assert plain.moved_place is None
+    assert plain.moved_place_id is None
+
+
+def test_place_icon_and_opening_date_decode():
+    from placekit.models import Date, Place
+
+    place = Place.from_api(
+        {
+            "id": "A",
+            "iconMaskBaseUri": "https://maps.example.com/icon/mask",
+            "iconBackgroundColor": "#7B1FA2",
+            "openingDate": {"year": 2024, "month": 3, "day": 9},
+        }
+    )
+    assert place.icon_mask_base_uri == "https://maps.example.com/icon/mask"
+    assert place.icon_background_color == "#7B1FA2"
+    assert isinstance(place.opening_date, Date)
+    assert (place.opening_date.year, place.opening_date.month, place.opening_date.day) == (
+        2024,
+        3,
+        9,
+    )
+
+
+def test_place_localized_scalars_reuse_localized_text():
+    from placekit.models import LocalizedText, Place
+
+    place = Place.from_api(
+        {
+            "id": "A",
+            "googleMapsTypeLabel": {"text": "Cafe", "languageCode": "en"},
+            "editorialSummary": {
+                "text": "A bright corner cafe",
+                "languageCode": "en",
+            },
+        }
+    )
+    assert isinstance(place.google_maps_type_label, LocalizedText)
+    assert place.google_maps_type_label.text == "Cafe"
+    assert place.google_maps_type_label.language_code == "en"
+    assert isinstance(place.editorial_summary, LocalizedText)
+    assert place.editorial_summary.text == "A bright corner cafe"
+    assert place.editorial_summary.language_code == "en"
+
+
+def test_place_utc_offset_and_pure_service_area_decode_absent_vs_false():
+    # The Rule A control pair: a sent false and a sent negative offset
+    # decode as themselves, and absence decodes as None for both, so
+    # the two states stay distinguishable.
+    from placekit.models import Place
+
+    place = Place.from_api(
+        {"id": "A", "utcOffsetMinutes": -300, "pureServiceAreaBusiness": False}
+    )
+    assert place.utc_offset_minutes == -300
+    assert place.pure_service_area_business is False
+    plain = Place.from_api({"id": "A"})
+    assert plain.utc_offset_minutes is None
+    assert plain.pure_service_area_business is None
+
+
+def test_round6_group3_mask_paths():
+    from placekit.fields import (
+        NEARBY_SEARCH_FIELDS,
+        PLACE_DETAILS_FIELDS,
+        TEXT_SEARCH_FIELDS,
+    )
+
+    for path in (
+        "googleMapsTypeLabel",
+        "editorialSummary",
+        "iconMaskBaseUri",
+        "iconBackgroundColor",
+        "openingDate",
+        "utcOffsetMinutes",
+        "pureServiceAreaBusiness",
+        "movedPlace",
+        "movedPlaceId",
+    ):
+        assert path in PLACE_DETAILS_FIELDS
+        assert f"places.{path}" not in TEXT_SEARCH_FIELDS
+        assert f"places.{path}" not in NEARBY_SEARCH_FIELDS
+
+
+# ---------------------------------------------------------------------------
+# Round 6 (T1) group 4: Review and Place.reviews
+# ---------------------------------------------------------------------------
+
+
+def _review_payloads() -> list[dict]:
+    # Hand built in the fixture style. No cassette contains a review,
+    # because reviews were in no recorded mask. The two reviews carry
+    # different values in every field, so a crossed decoder line shows
+    # as a wrong value instead of passing.
+    return [
+        {
+            "name": "places/ChIJx/reviews/AAA",
+            "relativePublishTimeDescription": "2 weeks ago",
+            "text": {"text": "Loved the espresso", "languageCode": "en"},
+            "originalText": {
+                "text": "Me encanto el espresso",
+                "languageCode": "es",
+            },
+            "rating": 5,
+            "authorAttribution": {
+                "displayName": "Sam Reviewer",
+                "uri": "https://maps.example.com/contributor/sam",
+                "photoUri": "https://maps.example.com/photo/sam",
+            },
+            "publishTime": "2026-10-12T08:30:00Z",
+            "flagContentUri": "https://maps.example.com/flag/review-a",
+            "googleMapsUri": "https://maps.google.com/?cid=111",
+            "visitDate": {"year": 2026, "month": 10, "day": 11},
+        },
+        {
+            "name": "places/ChIJx/reviews/BBB",
+            "relativePublishTimeDescription": "a month ago",
+            "text": {"text": "Good brunch", "languageCode": "en"},
+            "originalText": {"text": "Buen brunch", "languageCode": "es"},
+            "rating": 4.5,
+            "authorAttribution": {
+                "displayName": "Jo Critic",
+                "uri": "https://maps.example.com/contributor/jo",
+                "photoUri": "https://maps.example.com/photo/jo",
+            },
+            "publishTime": "2026-09-01T10:00:00Z",
+            "flagContentUri": "https://maps.example.com/flag/review-b",
+            "googleMapsUri": "https://maps.google.com/?cid=222",
+            "visitDate": {"year": 2026, "month": 8, "day": 30},
+        },
+    ]
+
+
+def test_place_reviews_decode_full_review_objects():
+    from placekit.models import Place
+
+    place = Place.from_api({"id": "ChIJx", "reviews": _review_payloads()})
+    assert len(place.reviews) == 2
+    first = place.reviews[0]
+    assert first.name == "places/ChIJx/reviews/AAA"
+    assert first.relative_publish_time_description == "2 weeks ago"
+    assert first.text is not None and first.text.text == "Loved the espresso"
+    assert first.text.language_code == "en"
+    assert first.original_text is not None
+    assert first.original_text.text == "Me encanto el espresso"
+    assert first.original_text.language_code == "es"
+    assert first.rating == 5.0
+    assert first.author_attribution is not None
+    assert first.author_attribution.display_name == "Sam Reviewer"
+    assert first.author_attribution.uri == "https://maps.example.com/contributor/sam"
+    assert first.author_attribution.photo_uri == "https://maps.example.com/photo/sam"
+    assert first.publish_time == "2026-10-12T08:30:00Z"
+    assert first.flag_content_uri == "https://maps.example.com/flag/review-a"
+    assert first.google_maps_uri == "https://maps.google.com/?cid=111"
+    assert first.visit_date is not None
+    assert (first.visit_date.year, first.visit_date.month, first.visit_date.day) == (
+        2026,
+        10,
+        11,
+    )
+    second = place.reviews[1]
+    assert second.name == "places/ChIJx/reviews/BBB"
+    assert second.rating == 4.5
+    assert second.text is not None and second.text.text == "Good brunch"
+    assert second.publish_time == "2026-09-01T10:00:00Z"
+
+
+def test_review_rating_keeps_fraction_and_whole_forms():
+    from placekit.models import Review
+
+    fraction = Review.from_api({"rating": 4.5})
+    assert fraction.rating == 4.5
+    whole = Review.from_api({"rating": 5})
+    assert whole.rating == 5.0
+    assert isinstance(whole.rating, float)
+
+
+def test_place_without_reviews_has_empty_list():
+    from placekit.models import Place
+
+    assert Place.from_api({"id": "A"}).reviews == []
+
+
+def test_round6_group4_mask_paths():
+    from placekit.fields import (
+        NEARBY_SEARCH_FIELDS,
+        PLACE_DETAILS_FIELDS,
+        TEXT_SEARCH_FIELDS,
+    )
+
+    assert "reviews" in PLACE_DETAILS_FIELDS
+    assert "places.reviews" not in TEXT_SEARCH_FIELDS
+    assert "places.reviews" not in NEARBY_SEARCH_FIELDS
+
+
+# ---------------------------------------------------------------------------
+# Round 6 (T1) group 5: the 23 dine, service and amenity flags
+# ---------------------------------------------------------------------------
+
+_FLAG_FIELDS = [
+    ("takeout", "takeout"),
+    ("delivery", "delivery"),
+    ("dine_in", "dineIn"),
+    ("curbside_pickup", "curbsidePickup"),
+    ("reservable", "reservable"),
+    ("serves_breakfast", "servesBreakfast"),
+    ("serves_lunch", "servesLunch"),
+    ("serves_dinner", "servesDinner"),
+    ("serves_beer", "servesBeer"),
+    ("serves_wine", "servesWine"),
+    ("serves_brunch", "servesBrunch"),
+    ("serves_vegetarian_food", "servesVegetarianFood"),
+    ("outdoor_seating", "outdoorSeating"),
+    ("live_music", "liveMusic"),
+    ("menu_for_children", "menuForChildren"),
+    ("serves_cocktails", "servesCocktails"),
+    ("serves_dessert", "servesDessert"),
+    ("serves_coffee", "servesCoffee"),
+    ("good_for_children", "goodForChildren"),
+    ("allows_dogs", "allowsDogs"),
+    ("restroom", "restroom"),
+    ("good_for_groups", "goodForGroups"),
+    ("good_for_watching_sports", "goodForWatchingSports"),
+]
+
+
+@pytest.mark.parametrize("attribute,wire", _FLAG_FIELDS)
+def test_place_dine_service_amenity_flags_decode(attribute, wire):
+    # Parametrized over all 23 rather than sampled, so a dropped row
+    # in the table is a failing parameter, not a silent gap.
+    from placekit.models import Place
+
+    place = Place.from_api({"id": "A", wire: True})
+    assert getattr(place, attribute) is True
+    # Exactly one flag is set on the whole place; every other flag
+    # reads None, because absence is not a fabricated False.
+    set_flags = [
+        name for name, _ in _FLAG_FIELDS if getattr(place, name) is not None
+    ]
+    assert set_flags == [attribute]
+
+
+def test_place_flag_sent_false_is_not_absence():
+    from placekit.models import Place
+
+    place = Place.from_api({"id": "A", "dineIn": False})
+    assert place.dine_in is False
+
+
+def test_round6_group5_mask_paths():
+    from placekit.fields import (
+        NEARBY_SEARCH_FIELDS,
+        PLACE_DETAILS_FIELDS,
+        TEXT_SEARCH_FIELDS,
+    )
+
+    for _, wire in _FLAG_FIELDS:
+        assert wire in PLACE_DETAILS_FIELDS
+        assert f"places.{wire}" not in TEXT_SEARCH_FIELDS
+        assert f"places.{wire}" not in NEARBY_SEARCH_FIELDS
+
+
+# ---------------------------------------------------------------------------
+# Round 6 (T1) group 6: the boolean option objects
+# ---------------------------------------------------------------------------
+
+
+def test_payment_parking_accessibility_options_decode():
+    # One payload carrying all three parents, each with a mix of true
+    # and false leaves and at least one leaf omitted per object. The
+    # omission assertions are the Rule A control: an omitted leaf
+    # reads None, never a fabricated False.
+    from placekit.models import Place
+
+    place = Place.from_api(
+        {
+            "id": "A",
+            "paymentOptions": {
+                "acceptsCreditCards": True,
+                "acceptsDebitCards": False,
+                "acceptsNfc": True,
+            },
+            "parkingOptions": {
+                "freeParkingLot": True,
+                "paidParkingLot": False,
+                "paidStreetParking": True,
+                "valetParking": False,
+                "paidGarageParking": True,
+            },
+            "accessibilityOptions": {
+                "wheelchairAccessibleParking": True,
+                "wheelchairAccessibleRestroom": False,
+                "wheelchairAccessibleSeating": True,
+            },
+        }
+    )
+    payment = place.payment_options
+    assert payment is not None
+    assert payment.accepts_credit_cards is True
+    assert payment.accepts_debit_cards is False
+    assert payment.accepts_cash_only is None
+    assert payment.accepts_nfc is True
+    parking = place.parking_options
+    assert parking is not None
+    assert parking.free_parking_lot is True
+    assert parking.paid_parking_lot is False
+    assert parking.free_street_parking is None
+    assert parking.paid_street_parking is True
+    assert parking.valet_parking is False
+    assert parking.free_garage_parking is None
+    assert parking.paid_garage_parking is True
+    accessibility = place.accessibility_options
+    assert accessibility is not None
+    assert accessibility.wheelchair_accessible_parking is True
+    assert accessibility.wheelchair_accessible_entrance is None
+    assert accessibility.wheelchair_accessible_restroom is False
+    assert accessibility.wheelchair_accessible_seating is True
+    plain = Place.from_api({"id": "A"})
+    assert plain.payment_options is None
+    assert plain.parking_options is None
+    assert plain.accessibility_options is None
+
+
+def test_round6_group6_mask_paths():
+    from placekit.fields import (
+        NEARBY_SEARCH_FIELDS,
+        PLACE_DETAILS_FIELDS,
+        TEXT_SEARCH_FIELDS,
+    )
+
+    for path in ("paymentOptions", "parkingOptions", "accessibilityOptions"):
+        assert path in PLACE_DETAILS_FIELDS
+        assert f"places.{path}" not in TEXT_SEARCH_FIELDS
+        assert f"places.{path}" not in NEARBY_SEARCH_FIELDS
+
+
+# ---------------------------------------------------------------------------
+# Round 6 (T1) group 7: TimeZone, the summaries and the consumer alert
+# ---------------------------------------------------------------------------
+
+
+def test_time_zone_id_decodes_and_version_stays_raw():
+    from placekit.models import Place
+
+    place = Place.from_api(
+        {"id": "A", "timeZone": {"id": "Australia/Sydney", "version": "2025a"}}
+    )
+    assert place.time_zone is not None
+    assert place.time_zone.id == "Australia/Sydney"
+    # The version is database metadata under the stated exception: it
+    # is not an attribute of TimeZone and stays reachable in raw.
+    assert not hasattr(place.time_zone, "version")
+    assert place.raw["timeZone"]["version"] == "2025a"
+
+
+def test_generative_and_review_summary_localized_text_decode():
+    from placekit.models import LocalizedText, Place
+
+    place = Place.from_api(
+        {
+            "id": "A",
+            "generativeSummary": {
+                "overview": {"text": "A sunny corner cafe", "languageCode": "en"}
+            },
+            "reviewSummary": {
+                "text": {"text": "Loved for its espresso", "languageCode": "en"}
+            },
+        }
+    )
+    assert place.generative_summary is not None
+    assert isinstance(place.generative_summary.overview, LocalizedText)
+    assert place.generative_summary.overview.text == "A sunny corner cafe"
+    assert place.review_summary is not None
+    assert isinstance(place.review_summary.text, LocalizedText)
+    assert place.review_summary.text.text == "Loved for its espresso"
+
+
+def test_consumer_alert_overview_and_language_decode():
+    # The alert overview is a plain string on the wire, with the
+    # language as its sibling. Decoding it through LocalizedText
+    # would raise on the string, so this fails on that misread.
+    from placekit.models import Place
+
+    place = Place.from_api(
+        {
+            "id": "A",
+            "consumerAlert": {
+                "overview": "This place may have closed",
+                "languageCode": "en",
+            },
+        }
+    )
+    assert place.consumer_alert is not None
+    assert place.consumer_alert.overview == "This place may have closed"
+    assert place.consumer_alert.language_code == "en"
+
+
+def test_round6_group7_mask_paths():
+    from placekit.fields import (
+        NEARBY_SEARCH_FIELDS,
+        PLACE_DETAILS_FIELDS,
+        TEXT_SEARCH_FIELDS,
+    )
+
+    for path in ("timeZone", "generativeSummary", "reviewSummary", "consumerAlert"):
+        assert path in PLACE_DETAILS_FIELDS
+        assert f"places.{path}" not in TEXT_SEARCH_FIELDS
+        assert f"places.{path}" not in NEARBY_SEARCH_FIELDS
+
+
+# ---------------------------------------------------------------------------
+# Round 6 (T1) group 8: GoogleMapsLinks, PriceRange and Money
+# ---------------------------------------------------------------------------
+
+
+def test_google_maps_links_decode_all_five_uris():
+    from placekit.models import Place
+
+    place = Place.from_api(
+        {
+            "id": "A",
+            "googleMapsLinks": {
+                "directionsUri": "https://maps.example.com/directions/A",
+                "placeUri": "https://maps.example.com/place/A",
+                "writeAReviewUri": "https://maps.example.com/write/A",
+                "reviewsUri": "https://maps.example.com/reviews/A",
+                "photosUri": "https://maps.example.com/photos/A",
+            },
+        }
+    )
+    links = place.google_maps_links
+    assert links is not None
+    assert links.directions_uri == "https://maps.example.com/directions/A"
+    assert links.place_uri == "https://maps.example.com/place/A"
+    assert links.write_a_review_uri == "https://maps.example.com/write/A"
+    assert links.reviews_uri == "https://maps.example.com/reviews/A"
+    assert links.photos_uri == "https://maps.example.com/photos/A"
+
+
+def test_price_range_money_decodes_units_from_string():
+    # Units arrive as a JSON string, because the field is an int64, and
+    # decode to a real int. Nanos arrive as a plain number.
+    from placekit.models import Place
+
+    place = Place.from_api(
+        {
+            "id": "A",
+            "priceRange": {
+                "startPrice": {
+                    "currencyCode": "AUD",
+                    "units": "10",
+                    "nanos": 500000000,
+                }
+            },
+        }
+    )
+    price_range = place.price_range
+    assert price_range is not None
+    assert price_range.start_price is not None
+    assert price_range.start_price.currency_code == "AUD"
+    assert price_range.start_price.units == 10
+    assert type(price_range.start_price.units) is int
+    assert price_range.start_price.nanos == 500000000
+    # An absent end price is an open ended range, never a zero Money.
+    assert price_range.end_price is None
+
+
+def test_money_under_fuel_options_stays_raw():
+    # The container rule: Money is typed only where it is reachable.
+    # The identical shape under fuelOptions is never reached by a
+    # Place decode, so the whole fuel container stays raw-only.
+    from placekit.models import Place
+
+    place = Place.from_api(
+        {
+            "id": "A",
+            "fuelOptions": {
+                "fuelPrices": [
+                    {
+                        "type": "REGULAR_UNLEADED",
+                        "price": {
+                            "currencyCode": "AUD",
+                            "units": "1",
+                            "nanos": 899000000,
+                        },
+                        "updateTime": "2026-10-29T00:00:00Z",
+                    }
+                ]
+            },
+        }
+    )
+    assert not hasattr(place, "fuel_options")
+    fuel_price = place.raw["fuelOptions"]["fuelPrices"][0]
+    assert fuel_price["price"]["units"] == "1"
+    assert fuel_price["price"]["nanos"] == 899000000
+
+
+def test_round6_group8_mask_paths():
+    from placekit.fields import (
+        NEARBY_SEARCH_FIELDS,
+        PLACE_DETAILS_FIELDS,
+        TEXT_SEARCH_FIELDS,
+    )
+
+    for path in ("googleMapsLinks", "priceRange"):
+        assert path in PLACE_DETAILS_FIELDS
+        assert f"places.{path}" not in TEXT_SEARCH_FIELDS
+        assert f"places.{path}" not in NEARBY_SEARCH_FIELDS
+
+
+# ---------------------------------------------------------------------------
+# Round 6 (T1) group 9: evChargeOptions completed
+# ---------------------------------------------------------------------------
+
+
+def test_ev_charge_options_decode_full_payload():
+    # The three availability fields are typed with the rest, so the
+    # whole Message lands rather than as a shell around raw.
+    from placekit.models import Place
+
+    place = Place.from_api(
+        {
+            "id": "A",
+            "evChargeOptions": {
+                "connectorCount": 6,
+                "connectorAggregation": [
+                    {
+                        "type": "CCS_COMBO_1",
+                        "maxChargeRateKw": 50.5,
+                        "count": 4,
+                        "availableCount": 3,
+                        "outOfServiceCount": 1,
+                        "availabilityLastUpdateTime": "2026-10-29T06:00:00Z",
+                    },
+                    {
+                        "type": "TESLA",
+                        "maxChargeRateKw": 250,
+                        "count": 2,
+                    },
+                ],
+            },
+        }
+    )
+    ev = place.ev_charge_options
+    assert ev is not None
+    assert ev.connector_count == 6
+    assert len(ev.connector_aggregation) == 2
+    first = ev.connector_aggregation[0]
+    assert first.type == "CCS_COMBO_1"
+    assert first.max_charge_rate_kw == 50.5
+    assert first.count == 4
+    assert first.available_count == 3
+    assert first.out_of_service_count == 1
+    assert first.availability_last_update_time == "2026-10-29T06:00:00Z"
+    second = ev.connector_aggregation[1]
+    assert second.type == "TESLA"
+    assert second.max_charge_rate_kw == 250.0
+    assert isinstance(second.max_charge_rate_kw, float)
+    assert second.count == 2
+    assert second.available_count is None
+    assert second.out_of_service_count is None
+    assert second.availability_last_update_time is None
+    assert Place.from_api({"id": "A"}).ev_charge_options is None
+
+
+def test_round6_group9_mask_paths():
+    from placekit.fields import (
+        NEARBY_SEARCH_FIELDS,
+        PLACE_DETAILS_FIELDS,
+        TEXT_SEARCH_FIELDS,
+    )
+
+    assert "evChargeOptions" in PLACE_DETAILS_FIELDS
+    assert "places.evChargeOptions" not in TEXT_SEARCH_FIELDS
+    assert "places.evChargeOptions" not in NEARBY_SEARCH_FIELDS
+
+
+# ---------------------------------------------------------------------------
+# Round 6 (T1) group 10: addressDescriptor
+# ---------------------------------------------------------------------------
+
+
+def test_address_descriptor_decodes_landmarks_and_areas():
+    # Two landmarks and one area, with every name paired to a
+    # different place id, so a crossed name and id line shows as a
+    # wrong pair rather than passing.
+    from placekit.models import Place
+
+    place = Place.from_api(
+        {
+            "id": "A",
+            "addressDescriptor": {
+                "landmarks": [
+                    {
+                        "name": "places/L1",
+                        "placeId": "L1",
+                        "displayName": {
+                            "text": "Central Station",
+                            "languageCode": "en",
+                        },
+                        "types": ["train_station", "transit_station"],
+                        "spatialRelationship": "NEAR",
+                        "straightLineDistanceMeters": 120.5,
+                        "travelDistanceMeters": 210,
+                    },
+                    {
+                        "name": "places/L2",
+                        "placeId": "L2",
+                        "displayName": {
+                            "text": "Botanic Gardens",
+                            "languageCode": "en",
+                        },
+                        "types": ["park"],
+                        "straightLineDistanceMeters": 45,
+                    },
+                ],
+                "areas": [
+                    {
+                        "name": "places/A1",
+                        "placeId": "A1",
+                        "displayName": {
+                            "text": "The Rocks",
+                            "languageCode": "en",
+                        },
+                        "containment": "WITHIN",
+                    }
+                ],
+            },
+        }
+    )
+    descriptor = place.address_descriptor
+    assert descriptor is not None
+    assert len(descriptor.landmarks) == 2
+    first = descriptor.landmarks[0]
+    assert first.name == "places/L1"
+    assert first.place_id == "L1"
+    assert first.display_name is not None
+    assert first.display_name.text == "Central Station"
+    assert first.types == ["train_station", "transit_station"]
+    assert first.spatial_relationship == "NEAR"
+    assert first.straight_line_distance_meters == 120.5
+    assert first.travel_distance_meters == 210.0
+    second = descriptor.landmarks[1]
+    assert second.name == "places/L2"
+    assert second.place_id == "L2"
+    assert second.types == ["park"]
+    assert second.spatial_relationship is None
+    assert second.straight_line_distance_meters == 45.0
+    assert second.travel_distance_meters is None
+    assert len(descriptor.areas) == 1
+    area = descriptor.areas[0]
+    assert area.name == "places/A1"
+    assert area.place_id == "A1"
+    assert area.display_name is not None
+    assert area.display_name.text == "The Rocks"
+    assert area.containment == "WITHIN"
+
+
+def test_landmark_types_rejects_bare_string():
+    from placekit import ConfigError
+    from placekit.models import Landmark
+
+    with pytest.raises(ConfigError):
+        Landmark(types="park")
+
+
+def test_round6_group10_mask_paths():
+    from placekit.fields import (
+        NEARBY_SEARCH_FIELDS,
+        PLACE_DETAILS_FIELDS,
+        TEXT_SEARCH_FIELDS,
+    )
+
+    assert "addressDescriptor" in PLACE_DETAILS_FIELDS
+    assert "places.addressDescriptor" not in TEXT_SEARCH_FIELDS
+    assert "places.addressDescriptor" not in NEARBY_SEARCH_FIELDS
+
+
+# ---------------------------------------------------------------------------
+# Round 6 (T1) group 11: typed routing summaries
+# ---------------------------------------------------------------------------
+
+
+def test_nearby_routing_summaries_are_typed(client):
+    # The nearby fixture carries the same routing summary shape as the
+    # text fixture, so the second reader is pinned too.
+    from placekit.models import RoutingSummary
+
+    result = client.nearby_search(
+        (-33.8668, 151.2071),
+        800.0,
+        fields=["places.id", "routingSummaries"],
+    )
+    assert len(result.routing_summaries) == 1
+    summary = result.routing_summaries[0]
+    assert isinstance(summary, RoutingSummary)
+    assert summary.legs[0].distance_meters == 5587
+    assert summary.legs[0].duration == "601s"
+    assert summary.directions_uri == "https://maps.google.com/?directions=example"
+    assert result.raw["routingSummaries"][0]["directionsUri"] == (
+        "https://maps.google.com/?directions=example"
+    )
+
+
+def test_routing_summary_duration_stays_a_string():
+    from placekit.models import RoutingSummary
+
+    summary = RoutingSummary.from_api(
+        {"legs": [{"duration": "582s", "distanceMeters": 10}]}
+    )
+    assert summary.legs[0].duration == "582s"
+    assert isinstance(summary.legs[0].duration, str)
+    assert summary.legs[0].distance_meters == 10
+    assert summary.directions_uri is None
