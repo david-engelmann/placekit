@@ -1719,3 +1719,26 @@ def test_empty_and_exhausted_iterables_omit_the_filter(client, stub_server):
     client.text_search("cafes", price_levels=[])
     body = json.loads(stub_server.last_request["body"])
     assert "priceLevels" not in body
+
+
+def test_model_constructors_reject_bare_strings_in_list_fields():
+    # Round 5 repair (RT5-L3): direct construction used to store a
+    # bare string in a list-typed field unchecked, so Place(types=
+    # "restaurant") iterated as one-character types. The models with
+    # list fields now refuse str and bytes at construction, while a
+    # proper list constructs normally.
+    from placekit.models import OpeningHours, Place, PlacePrediction
+
+    with pytest.raises(ConfigError) as excinfo:
+        Place(id="x", types="restaurant")
+    assert "types" in str(excinfo.value)
+    with pytest.raises(ConfigError):
+        Place(id="x", types=b"restaurant")
+    with pytest.raises(ConfigError):
+        Place(id="x", photos="places/x/photos/y")
+    with pytest.raises(ConfigError):
+        OpeningHours(weekday_descriptions="Monday")
+    with pytest.raises(ConfigError):
+        PlacePrediction(place_id="y", types="cafe")
+    place = Place(id="x", types=["restaurant"])
+    assert place.types == ["restaurant"]

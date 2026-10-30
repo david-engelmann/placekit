@@ -80,6 +80,18 @@ def _str_list(value: Any, model: str, key: str) -> list[str]:
         ) from exc
 
 
+def _reject_bare_string(model: str, field_name: str, value: Any) -> None:
+    """Direct construction guard (RT5-L3): a list-typed field handed
+    a bare string or bytes value would otherwise store it unchecked,
+    and iterating the field later would yield one-character items,
+    the shred the decoders already refuse on the response side."""
+    if isinstance(value, (str, bytes)):
+        raise ConfigError(
+            f"{model} field {field_name!r} must be a list, not a "
+            f"single string: {value!r}"
+        )
+
+
 @dataclass(frozen=True, slots=True)
 class LocalizedText:
     """A text value paired with its language."""
@@ -177,6 +189,9 @@ class Photo:
     #: Link to view this photo on Google Maps.
     google_maps_uri: Optional[str] = None
 
+    def __post_init__(self) -> None:
+        _reject_bare_string("Photo", "author_attributions", self.author_attributions)
+
     @classmethod
     def from_api(cls, data: dict[str, Any]) -> "Photo":
         return cls(
@@ -260,6 +275,12 @@ class OpeningHours:
     periods: list[Period] = field(default_factory=list)
     weekday_descriptions: list[str] = field(default_factory=list)
 
+    def __post_init__(self) -> None:
+        _reject_bare_string("OpeningHours", "periods", self.periods)
+        _reject_bare_string(
+            "OpeningHours", "weekday_descriptions", self.weekday_descriptions
+        )
+
     @classmethod
     def from_api(cls, data: dict[str, Any]) -> "OpeningHours":
         return cls(
@@ -281,6 +302,9 @@ class AddressComponent:
     short_text: str = ""
     types: list[str] = field(default_factory=list)
     language_code: Optional[str] = None
+
+    def __post_init__(self) -> None:
+        _reject_bare_string("AddressComponent", "types", self.types)
 
     @classmethod
     def from_api(cls, data: dict[str, Any]) -> "AddressComponent":
@@ -332,6 +356,9 @@ class PostalAddress:
     administrative_area: Optional[str] = None
     locality: Optional[str] = None
     address_lines: list[str] = field(default_factory=list)
+
+    def __post_init__(self) -> None:
+        _reject_bare_string("PostalAddress", "address_lines", self.address_lines)
 
     @classmethod
     def from_api(cls, data: dict[str, Any]) -> "PostalAddress":
@@ -388,6 +415,12 @@ class Place:
     #: it shares no mutable state with the caller's dict. Excluded from
     #: repr and equality, which are about the modelled fields.
     raw: dict[str, Any] = field(default_factory=dict, repr=False, compare=False)
+
+    def __post_init__(self) -> None:
+        _reject_bare_string("Place", "types", self.types)
+        _reject_bare_string("Place", "address_components", self.address_components)
+        _reject_bare_string("Place", "photos", self.photos)
+        _reject_bare_string("Place", "attributions", self.attributions)
 
     @property
     def display_text(self) -> Optional[str]:
@@ -482,6 +515,12 @@ class TextSearchResult:
     routing_summaries: list[dict[str, Any]] = field(default_factory=list)
     raw: dict[str, Any] = field(default_factory=dict, repr=False, compare=False)
 
+    def __post_init__(self) -> None:
+        _reject_bare_string("TextSearchResult", "places", self.places)
+        _reject_bare_string(
+            "TextSearchResult", "routing_summaries", self.routing_summaries
+        )
+
     @classmethod
     def from_api(cls, data: dict[str, Any]) -> "TextSearchResult":
         data = copy.deepcopy(data)
@@ -509,6 +548,12 @@ class NearbySearchResult:
     #: mask and routing parameters were supplied.
     routing_summaries: list[dict[str, Any]] = field(default_factory=list)
     raw: dict[str, Any] = field(default_factory=dict, repr=False, compare=False)
+
+    def __post_init__(self) -> None:
+        _reject_bare_string("NearbySearchResult", "places", self.places)
+        _reject_bare_string(
+            "NearbySearchResult", "routing_summaries", self.routing_summaries
+        )
 
     @classmethod
     def from_api(cls, data: dict[str, Any]) -> "NearbySearchResult":
@@ -542,6 +587,9 @@ class FormattedText:
     text: str = ""
     matches: list[StringMatch] = field(default_factory=list)
 
+    def __post_init__(self) -> None:
+        _reject_bare_string("FormattedText", "matches", self.matches)
+
     @classmethod
     def from_api(cls, data: dict[str, Any]) -> "FormattedText":
         return cls(
@@ -564,6 +612,9 @@ class PlacePrediction:
     types: list[str] = field(default_factory=list)
     distance_meters: Optional[int] = None
     raw: dict[str, Any] = field(default_factory=dict, repr=False, compare=False)
+
+    def __post_init__(self) -> None:
+        _reject_bare_string("PlacePrediction", "types", self.types)
 
     @classmethod
     def from_api(cls, data: dict[str, Any]) -> "PlacePrediction":
@@ -642,6 +693,9 @@ class AutocompleteResult:
 
     suggestions: list[Suggestion]
     raw: dict[str, Any] = field(default_factory=dict, repr=False, compare=False)
+
+    def __post_init__(self) -> None:
+        _reject_bare_string("AutocompleteResult", "suggestions", self.suggestions)
 
     @property
     def place_predictions(self) -> list[PlacePrediction]:
