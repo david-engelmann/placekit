@@ -1,6 +1,10 @@
 from typing import Any, NoReturn, Optional
 
 class PlacesError(Exception):
+    # F-S8, accepted as a known stubtest-silent inaccuracy: kind,
+    # status_code and google_status are set at raise time on the
+    # instance, and this stub declares them at class level because a
+    # stub cannot express raise-time assignment.
     kind: str
     message: str
     status_code: Optional[int]
