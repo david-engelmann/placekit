@@ -7,26 +7,33 @@ name = "placekit"
 dynamic = ["version"]
 description = "Modern Google Places API (New) client for Python, powered by a Rust core"
 readme = "README.md"
-license = { text = "MIT" }
+license = "MIT"
+license-files = ["LICENSE"]
 requires-python = ">=3.10"
 authors = [{ name = "David Engelmann" }]
-keywords = ["google places", "places api", "geocoding", "maps", "rust"]
+keywords = ["google-places", "places", "geocoding", "pyo3", "maps"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
-    "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
     "Programming Language :: Rust",
     "Topic :: Scientific/Engineering :: GIS",
     "Typing :: Typed",
 ]
 
+[project.urls]
+Homepage = "https://github.com/david-engelmann/placekit"
+Repository = "https://github.com/david-engelmann/placekit"
+Issues = "https://github.com/david-engelmann/placekit/issues"
+Changelog = "https://github.com/david-engelmann/placekit/blob/main/CHANGELOG.md"
+
 [project.optional-dependencies]
-dev = ["pytest>=8"]
+dev = ["pytest>=8", "mypy>=1.11", "maturin>=1.7,<2.0"]
 
 [tool.maturin]
 python-source = "python"
