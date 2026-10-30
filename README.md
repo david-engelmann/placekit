@@ -85,6 +85,10 @@ Any iterable of path strings works too. Omit `fields` and each endpoint uses a c
 
 One billing note on the defaults. They include fields from the Enterprise billing tier, among them rating, user rating counts and price level, so a search call with a default mask is billed at the Enterprise tier. Place Details is the exception. Its default mask requests every modelled field, including current opening hours from the higher Enterprise plus Atmosphere tier, so a default `place_details` call is billed at that tier. Pass a narrower `fields` set when you want a lower tier.
 
+### Reading attributes the mask did not request
+
+A place from a search call only carries the fields the search mask asked for. Reading an attribute outside the mask gives None, an empty list, or an empty default, never an error and never a fabricated value, and the object cannot say whether the field was unrequested or simply had no value. Two habits follow. Check membership in `raw` with the wire name when the distinction matters. Call `place_details` with the place when the full modelled set is needed, since its default mask requests every modelled field.
+
 ## Constants
 
 Three modules carry the vocabularies callers pass most often, as plain strings that drop into the existing parameters. `placekit.types` holds the place type vocabulary from the official Place Types page, `placekit.lang` holds the supported language codes, and `placekit.ranking` holds the ranking preferences split by method, because Text Search and Nearby Search accept different sets.

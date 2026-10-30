@@ -15,7 +15,10 @@ the method promises full details. The search defaults are a curated
 subset; modelled attributes beyond them (among them addressComponents,
 plusCode, viewport, postalAddress and currentOpeningHours) are only
 populated when a caller requests them through ``fields``. Pass a
-narrower ``fields`` set to control billing.
+narrower ``fields`` set to control billing. The mask also decides
+what can be populated at all. An attribute outside the mask reads
+as not returned on the result, in the sense the models
+documentation defines, whether or not the API holds a value for it.
 """
 
 from __future__ import annotations

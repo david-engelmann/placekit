@@ -550,6 +550,73 @@ def test_place_photo_photo_form_defaults_to_the_photo_width_async(
     asyncio.run(run())
 
 
+# ---------------------------------------------------------------------------
+# Round 8 (T3): the attribute reading contract
+# ---------------------------------------------------------------------------
+
+
+def test_unrequested_attributes_read_as_not_returned(client):
+    # D3: a search default Place leaves details fields unreturned,
+    # and the same fields populate on a details call for the same
+    # id. The wire name is absent from the search raw, so raw
+    # membership tracks what the response carried.
+    result = client.text_search("cafes in Sydney")
+    place = result.places[0]
+    assert place.website_uri is None
+    assert place.national_phone_number is None
+    assert place.reviews == []
+    assert "websiteUri" not in place.raw
+    details = client.place_details(place.id)
+    assert details.website_uri == "https://example.com/"
+    assert details.national_phone_number == "(02) 5550 1234"
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason=(
+        "the Rust core reserializes modelled fields and drops a "
+        "null valued one before Python sees the payload, so raw "
+        "loses the key on the client path. The model layer keeps "
+        "it, and a core round owns the fix"
+    ),
+)
+def test_absent_and_explicit_null_read_the_same_but_raw_knows(
+    client, raw_response
+):
+    # D3: an explicit null on an optional scalar reads None, exactly
+    # as absence does, but the wire name stays a key in raw, which
+    # is the one distinction the contract claims. The assertions
+    # below are the full claim. They pass at the model layer today
+    # and fail through the client for the reason the xfail marker
+    # records, so the marker is strict and this test goes red the
+    # day the core stops dropping the key.
+    data = json.loads(fixture_bytes("place_details.json"))
+    data["websiteUri"] = None
+    raw_response(200, json.dumps(data).encode())
+    place = client.place_details("ChIJrTLr-GyuEmsRBfy61i59si0")
+    assert place.website_uri is None
+    assert "websiteUri" in place.raw
+
+
+def test_the_three_empty_shapes_from_a_minimal_payload():
+    # D3: decoding a payload that carries only an id leaves every
+    # other attribute in its not returned shape, never an error and
+    # never fabricated content.
+    place = Place.from_api({"id": "ChIJx"})
+    assert place.types == []
+    assert place.photos == []
+    assert place.reviews == []
+    assert place.name == ""
+
+
+def test_explicit_null_in_a_list_field_is_a_decode_error():
+    # D3: an explicit null is a malformed value for a list field,
+    # not a synonym for absence, so the documentation never grows a
+    # claim that null is a supported no value signal.
+    with pytest.raises(DecodeError):
+        Place.from_api({"id": "ChIJx", "types": None})
+
+
 def test_text_search_new_parameters_on_the_wire(client, stub_server):
     client.text_search(
         "cafes",

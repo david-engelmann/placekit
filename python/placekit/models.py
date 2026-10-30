@@ -9,6 +9,20 @@ sharing no mutable state with any other copy. ``PhotoMedia`` is the
 one class with no ``raw``, because its payload is bytes rather than
 a JSON object.
 
+Responses populate attributes only from fields the response
+carried, and the response carries only what the field mask
+requested and the API had values for. An optional attribute that
+reads None was not returned, and not returned covers both fields
+the mask never requested and fields the API had no value for,
+which cannot be told apart from the object. List attributes read
+an empty list in the same state, and a few string and number
+attributes read their empty default. The ``raw`` payload answers
+the narrower question of what the response carried, because a
+wire name is a key in ``raw`` exactly when the response carried
+that field. No attribute raises for being unreturned, and the
+way to populate the full modelled set is a ``place_details``
+call, whose default mask requests all of it.
+
 The models are frozen value objects. Attribute assignment on a
 parsed result raises instead of silently rewriting it, so a result
 can be shared without one holder rebinding another holder's fields.
