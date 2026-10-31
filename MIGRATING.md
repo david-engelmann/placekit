@@ -24,7 +24,8 @@ new API, and code that uses them is deleted, not ported.**
 
 String locations are a fifth, softer removal, and they get their own
 line. A string location needs coordinates from a geocode step that
-placekit does not perform.
+placekit does not perform. The String locations section teaches the
+three crossings a caller writes instead.
 
 Before the examples, one setup pass. Enable Places API (New) on the
 Google Cloud project. Install placekit and uninstall
@@ -171,7 +172,8 @@ What changed, in the order the code meets it.
 - The string location became caller supplied coordinates, and this
   is the single biggest change in the port. London, England becomes
   the pair 51.5074 and -0.1278, and producing that pair from an
-  address is a geocode step the caller owns.
+  address is a geocode step the caller owns. The String locations
+  section teaches the three crossings that produce such a pair.
 - The keyword forced the move to Text Search. Nearby Search in the
   new API accepts no text filter at all, so a keyword search is a
   text_search call, and only the pure browse stays a nearby_search.
@@ -349,7 +351,7 @@ is true of the other removals this table collects.
 | The query alias | Nothing. The searches are text_search and nearby_search. |
 | The sensor parameter | Nothing. Google dropped it years ago. |
 | The deprecated id and reference identifiers | Nothing. The one identifier is Place.id. |
-| geocode_location | Nothing in placekit. The caller supplies coordinates. |
+| geocode_location | Nothing in placekit. The caller supplies coordinates, and the String locations section teaches the crossings. |
 
 The error half of the legacy block does port, and it ports to a
 short block of its own.
@@ -517,10 +519,188 @@ attributions, and each of them belongs to the details level.
 Reviews are typed Place.reviews in the details default and absent
 from search results under the default masks.
 
+## String locations
+
+The legacy library accepted a string location on its searches and
+resolved it before the search ran. One module function,
+geocode_location, spent one Geocoding API request on the client's
+own key ahead of every string location call, with no caching of
+any kind, and kept only the first result's coordinates. The
+flagship example never mentioned a second API, so the cost never
+appeared in the call the user wrote.
+
+placekit performs no geocode step, and that boundary stands. No
+method on the client accepts a string location, and no method
+hides a geocode call behind a search. What follows are the three
+crossings a caller writes instead, each with its price printed
+where the path is taught. Every price in this section was read
+from Google's pricing list on 2026-10-30. Prices go stale within
+months, so check the current pricing page before relying on one.
+
+### Crossing 1. Your own Geocoding API call
+
+The direct crossing is the Geocoding API, a second API on a
+second host with its own enablement. Two generations are live.
+Geocoding API v4 at geocode.googleapis.com is the current
+generation, generally available since March 2026, and the one to
+build on. It speaks the header idiom the rest of this guide uses,
+with the key in the X-Goog-Api-Key header and a field mask in the
+X-Goog-FieldMask header, and its results carry location,
+granularity and placeId fields. The v3 web service at
+maps.googleapis.com is what the legacy library used. A v3 call is
+a GET on the geocode/json path with the address and the key as
+query parameters and a status string in the body, and that
+dialect matches nothing placekit models.
+
+Three console steps come before any code.
+
+- Enable the Geocoding API on the Google Cloud project. Enabling
+  Places API (New) does not enable it, and a call against a
+  project without it fails before any address is read.
+- Widen the key restriction if the key carries one. The same key
+  string works, and a key restricted to Places API (New) refuses
+  Geocoding calls until the Geocoding API joins its list. The
+  failure arrives as an authentication error whose cause lives in
+  the console, not in the code.
+- Expect a second pricing page. The Geocoding SKU is $5.00 per
+  1,000 requests beyond a 10,000 monthly free cap, and one SKU
+  covers both generations.
+
+The call itself is the caller's own HTTP code. It is not a
+placekit call, and the proof suite does not execute it. The block
+shows the shape the v4 documentation describes, with the address
+URL encoded into the path and the mask naming the three fields
+the port reads.
+
+```python
+import json
+import urllib.parse
+import urllib.request
+
+address = "1600 Amphitheatre Parkway, Mountain View, CA"
+url = (
+    "https://geocode.googleapis.com/v4/geocode/address/"
+    + urllib.parse.quote(address)
+)
+request = urllib.request.Request(url)
+request.add_header("X-Goog-Api-Key", "YOUR_API_KEY")
+request.add_header(
+    "X-Goog-FieldMask",
+    "results.location,results.granularity,results.placeId",
+)
+with urllib.request.urlopen(request) as response:
+    payload = json.load(response)
+
+result = payload["results"][0]
+latitude = result["location"]["latitude"]
+longitude = result["location"]["longitude"]
+granularity = result["granularity"]
+place_id = result["placeId"]
+```
+
+The response holds a results array, and taking the first entry
+on faith repeats the legacy library's silent choice. Read the
+granularity before trusting a pair, because ROOFTOP and
+APPROXIMATE are different promises about the same fields, and an
+ambiguous string can return a city and a state as its first two
+results. Read the placeId as well. It is placekit's own native
+identifier, and a caller who holds it can call place_details on
+it directly. A structured address can travel as query parameters
+instead of the path string, with parts named address.locality,
+address.postalCode and their siblings, and the v4 documentation
+shows both forms. Coordinates from this API may be cached for at
+most 30 consecutive days under the Maps Platform terms, so a
+port that stores them forever overclaims what the terms allow.
+
+The pair then feeds any placekit search, in the caller supplied
+coordinates form the rest of this guide uses.
+
+```python
+client = Client("YOUR_API_KEY")
+browse = client.nearby_search((latitude, longitude), 20000.0)
+```
+
+### Crossing 2. Autocomplete, then a details call masked to location
+
+The second crossing never leaves the APIs a placekit user has
+already enabled. Autocomplete the string, take the prediction's
+place ID, then call place_details masked to the id and location
+fields.
+
+```python
+from placekit import Client
+
+client = Client("YOUR_API_KEY")
+
+result = client.autocomplete("Bianco Latte, George Street, Sydney")
+prediction = result.place_predictions[0]
+place = client.place_details(prediction, fields=["id", "location"])
+
+latitude = place.location.latitude
+longitude = place.location.longitude
+```
+
+The mask carries id beside location because the client refuses
+a details response that carries neither an id nor a name, and
+both fields sit in the same tier, so the extra field costs
+nothing. The price is two calls the caller wrote. An
+autocomplete request is $2.83 per 1,000 and a Place Details call
+masked this narrowly bills at the Essentials tier of $5.00 per
+1,000, so a lookup resolves for about $0.0078 beyond the free
+caps of 10,000 a month on each. The narrow mask is what earns
+the Essentials price. The default details mask requests every
+modelled field and would bill at the top tier to fetch a
+coordinate pair. The durable output is the place ID rather than
+the pair, and the pair arrives on a full typed Place. The costs
+are two calls instead of one, and autocomplete leans toward
+places over bare street addresses, so a bare postal address
+belongs on the first crossing.
+
+### Crossing 3. One text search
+
+The third crossing is one call on shipped surface, masked to the
+identifier and the location.
+
+```python
+result = client.text_search(
+    "Bianco Latte, George Street, Sydney",
+    fields=["places.id", "places.location"],
+)
+place = result.places[0]
+
+latitude = place.location.latitude
+longitude = place.location.longitude
+```
+
+The warning belongs beside the code, at full strength. A text
+search returns places, not a geocode, and its first result is a
+relevance answer, not an address resolution. The response
+carries no granularity and no partial match signal, so a
+locality centroid and a rooftop arrive wearing the same shape,
+and nothing on the result says which one the caller is holding.
+The price is the other half of the warning. Asking for
+places.location moves the call to the Text Search Pro tier at
+$32.00 per 1,000 beyond a 5,000 monthly free cap, which is 6.4
+times the Geocoding price for the same pair, and the free IDs
+Only tier is no substitute because it returns identifiers and no
+coordinates. This crossing fits place like strings, a business
+name plus a city, where the place answer is often the better
+one. A bare postal address belongs on the first crossing.
+
+Choosing among the three is a judgement about the string, not
+about the library. A street address goes to the geocoder, which
+was built to answer with an address point and a precision
+signal. A place name goes to the second or third crossing, both
+of which run on the key and the enablement the caller already
+has. On every crossing, taking the first result is a choice the
+caller makes in their own code. None of the three makes it
+invisibly, and that visibility is the difference between this
+section and the legacy behaviour it replaces.
+
 ## Port checklist
 
 - [ ] Swap the import and the client.
-- [ ] Replace string locations with coordinates from a geocode step of your own.
+- [ ] Replace string locations with coordinates from a geocode step of your own, following one of the three crossings in the String locations section.
 - [ ] Move keyword searches to Text Search.
 - [ ] Change filter values to Table A values.
 - [ ] Rebind upgrades instead of mutating.

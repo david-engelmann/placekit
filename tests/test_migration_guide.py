@@ -42,6 +42,14 @@ def client(api_key, base_url) -> Client:
     return Client(api_key, base_url=base_url)
 
 
+def _header(stub_server, name: str) -> str | None:
+    headers = stub_server.last_request["headers"]
+    for key, value in headers.items():
+        if key.lower() == name.lower():
+            return value
+    return None
+
+
 def _flagship_search(client):
     """The Example 1 searches, in the guide block's call shapes."""
     result = client.text_search(
@@ -145,6 +153,51 @@ def test_guide_example_3_autocomplete_session(client, stub_server):
     assert stub_server.last_request["method"] == "GET"
     assert f"/places/{prediction.place_id}" in stub_server.last_request["path"]
     assert f"sessionToken={SESSION_TOKEN}" in stub_server.last_request["path"]
+
+
+def test_guide_string_location_autocomplete_crossing(client, stub_server):
+    # The String locations section, crossing 2, in the guide block's
+    # call shapes. The crossing never leaves the shipped surface.
+    result = client.autocomplete("Bianco Latte, George Street, Sydney")
+    prediction = result.place_predictions[0]
+    assert prediction.place_id == "ChIJrTLr-GyuEmsRBfy61i59si0"
+
+    place = client.place_details(prediction, fields=["id", "location"])
+    assert place.id == prediction.place_id
+    assert place.location.latitude == -33.866784
+    assert place.location.longitude == 151.20713
+    assert f"/places/{prediction.place_id}" in stub_server.last_request["path"]
+    # The narrow mask is the point of the crossing. It is what the
+    # stub recorded on the details request, and it is what keeps
+    # the call at the Essentials tier the guide prices. The id
+    # rides beside location because the client refuses a details
+    # response carrying neither an id nor a name.
+    assert _header(stub_server, "X-Goog-FieldMask") == "id,location"
+    # The mask asked for nothing else, so a field the default
+    # details mask carries reads as not returned on the result.
+    assert place.website_uri is None
+
+
+def test_guide_string_location_text_search_crossing(client, stub_server):
+    # The String locations section, crossing 3, in the guide block's
+    # call shapes. One call, masked to the identifier and location.
+    result = client.text_search(
+        "Bianco Latte, George Street, Sydney",
+        fields=["places.id", "places.location"],
+    )
+    place = result.places[0]
+    assert place.id == "ChIJrTLr-GyuEmsRBfy61i59si0"
+    assert place.location.latitude == -33.866784
+    assert place.location.longitude == 151.20713
+    assert (
+        _header(stub_server, "X-Goog-FieldMask")
+        == "places.id,places.location"
+    )
+    body = json.loads(stub_server.last_request["body"])
+    assert body["textQuery"] == "Bianco Latte, George Street, Sydney"
+    # The mask asked for nothing else, so a field the default
+    # search mask carries reads as not returned on the result.
+    assert place.rating is None
 
 
 def test_guide_example_1_reads_reviews_and_icon_fields(client):
