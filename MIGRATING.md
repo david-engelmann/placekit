@@ -569,8 +569,16 @@ Three console steps come before any code.
 The call itself is the caller's own HTTP code. It is not a
 placekit call, and the proof suite does not execute it. The block
 shows the shape the v4 documentation describes, with the address
-URL encoded into the path and the mask naming the three fields
-the port reads.
+URL encoded into the path and the mask naming the fields the
+port reads. The encoding escapes every reserved character
+including the slash, because the quote default leaves the slash
+unescaped and an address containing one would otherwise break
+the path into pieces the API reads as a different request. Read
+the results before assigning one. Taking the first entry on
+faith repeats the legacy library's silent choice, so the block
+prints every candidate with its granularity and formatted
+address, then takes the first candidate whose granularity is
+ROOFTOP and falls back to the first candidate when none is.
 
 ```python
 import json
@@ -580,37 +588,53 @@ import urllib.request
 address = "1600 Amphitheatre Parkway, Mountain View, CA"
 url = (
     "https://geocode.googleapis.com/v4/geocode/address/"
-    + urllib.parse.quote(address)
+    + urllib.parse.quote(address, safe="")
 )
 request = urllib.request.Request(url)
 request.add_header("X-Goog-Api-Key", "YOUR_API_KEY")
 request.add_header(
     "X-Goog-FieldMask",
-    "results.location,results.granularity,results.placeId",
+    "results.location,results.granularity,results.placeId,"
+    "results.formattedAddress,results.types",
 )
 with urllib.request.urlopen(request) as response:
     payload = json.load(response)
 
-result = payload["results"][0]
+candidates = payload["results"]
+for candidate in candidates:
+    print(candidate["granularity"], candidate["formattedAddress"])
+
+result = next(
+    (c for c in candidates if c["granularity"] == "ROOFTOP"),
+    candidates[0],
+)
 latitude = result["location"]["latitude"]
 longitude = result["location"]["longitude"]
 granularity = result["granularity"]
 place_id = result["placeId"]
 ```
 
-The response holds a results array, and taking the first entry
-on faith repeats the legacy library's silent choice. Read the
-granularity before trusting a pair, because ROOFTOP and
-APPROXIMATE are different promises about the same fields, and an
-ambiguous string can return a city and a state as its first two
-results. Read the placeId as well. It is placekit's own native
-identifier, and a caller who holds it can call place_details on
-it directly. A structured address can travel as query parameters
-instead of the path string, with parts named address.locality,
-address.postalCode and their siblings, and the v4 documentation
-shows both forms. Coordinates from this API may be cached for at
-most 30 consecutive days under the Maps Platform terms, so a
-port that stores them forever overclaims what the terms allow.
+Granularity names four promises in descending precision.
+ROOFTOP is a point for the address itself. RANGE_INTERPOLATED
+is a point interpolated along a street range. GEOMETRIC_CENTER
+is the center of a shape larger than a building, such as a
+locality. APPROXIMATE is a coarse placement, and it is the
+value to distrust for a street address. Granularity alone
+cannot always separate candidates. The documented Washington
+example returns the city and the state as its first two results
+and both carry APPROXIMATE, which is why the mask also asks for
+formattedAddress and types. Those fields are the readable
+labels a caller chooses between. Read the placeId as well. It
+is placekit's own native identifier, and a caller who holds it
+can call place_details on it directly. A structured address can
+travel as query parameters instead of the path string, with
+parts named address.locality, address.postalCode and their
+siblings, and the v4 documentation shows both forms.
+Coordinates from this API may be cached for at most 30
+consecutive days under the Maps Platform terms, so a port that
+stores them forever overclaims what the terms allow. The
+placeId is the exception the terms name, and it may be kept
+without that limit.
 
 The pair then feeds any placekit search, in the caller supplied
 coordinates form the rest of this guide uses.
@@ -641,17 +665,23 @@ longitude = place.location.longitude
 ```
 
 The mask carries id beside location because the client refuses
-a details response that carries neither an id nor a name, and
-both fields sit in the same tier, so the extra field costs
-nothing. The price is two calls the caller wrote. An
-autocomplete request is $2.83 per 1,000 and a Place Details call
-masked this narrowly bills at the Essentials tier of $5.00 per
-1,000, so a lookup resolves for about $0.0078 beyond the free
-caps of 10,000 a month on each. The narrow mask is what earns
+a details response that carries neither an id nor a name. The
+id field sits in the free IDs Only tier and location sits in
+the Essentials tier, and a details call bills at the highest
+tier its mask touches, so the id adds nothing to the price the
+location already sets. The price is two calls the caller wrote.
+An autocomplete request is $2.83 per 1,000 beyond a 10,000
+monthly free cap, and a Place Details call masked this narrowly
+bills at the Essentials tier of $5.00 per 1,000 beyond a 10,000
+monthly free cap, so a lookup past both caps resolves for about
+$0.0078. The narrow mask is what earns
 the Essentials price. The default details mask requests every
 modelled field and would bill at the top tier to fetch a
 coordinate pair. The durable output is the place ID rather than
-the pair, and the pair arrives on a full typed Place. The costs
+the pair, and the pair arrives on a full typed Place. Taking
+the first prediction is a choice made at that line, and an
+ambiguous string deserves a read of the prediction texts before
+the details call spends money. The costs
 are two calls instead of one, and autocomplete leans toward
 places over bare street addresses, so a bare postal address
 belongs on the first crossing.
@@ -680,8 +710,9 @@ locality centroid and a rooftop arrive wearing the same shape,
 and nothing on the result says which one the caller is holding.
 The price is the other half of the warning. Asking for
 places.location moves the call to the Text Search Pro tier at
-$32.00 per 1,000 beyond a 5,000 monthly free cap, which is 6.4
-times the Geocoding price for the same pair, and the free IDs
+$32.00 per 1,000 beyond a 5,000 monthly free cap, on the same
+2026-10-30 read as every other price in this section. That is
+6.4 times the Geocoding price for the same pair, and the free IDs
 Only tier is no substitute because it returns identifiers and no
 coordinates. This crossing fits place like strings, a business
 name plus a city, where the place answer is often the better
