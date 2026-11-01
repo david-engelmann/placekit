@@ -141,7 +141,7 @@ impl Client {
         &self,
         request: &TextSearchRequest,
         fields: Option<&FieldMask>,
-    ) -> Result<(SearchResponse, String), Error> {
+    ) -> Result<(SearchResponse, String, u16), Error> {
         if request.text_query.trim().is_empty() {
             return Err(Error::config("text_query must not be empty"));
         }
@@ -168,7 +168,7 @@ impl Client {
             .post(url)
             .headers(self.headers(Some(&mask))?)
             .json(request);
-        self.send(builder).await
+        self.send_with_status(builder).await
     }
 
     /// Nearby Search: find places around a location.
@@ -176,7 +176,7 @@ impl Client {
         &self,
         request: &NearbySearchRequest,
         fields: Option<&FieldMask>,
-    ) -> Result<(SearchResponse, String), Error> {
+    ) -> Result<(SearchResponse, String, u16), Error> {
         validate_circle(
             &request.location_restriction.circle,
             "location_restriction circle",
@@ -199,7 +199,7 @@ impl Client {
             .post(url)
             .headers(self.headers(Some(&mask))?)
             .json(request);
-        self.send(builder).await
+        self.send_with_status(builder).await
     }
 
     /// Place Details for a single place id.
@@ -210,7 +210,7 @@ impl Client {
         language_code: Option<&str>,
         region_code: Option<&str>,
         session_token: Option<&str>,
-    ) -> Result<(Place, String), Error> {
+    ) -> Result<(Place, String, u16), Error> {
         validate_place_id(place_id)?;
         if let Some(token) = session_token {
             validate_session_token(token)?;
@@ -256,7 +256,7 @@ impl Client {
                 source: None,
             });
         }
-        Ok((place, body))
+        Ok((place, body, status))
     }
 
     /// Autocomplete: place and query predictions for partial input.
@@ -266,7 +266,7 @@ impl Client {
         &self,
         request: &AutocompleteRequest,
         fields: Option<&FieldMask>,
-    ) -> Result<(AutocompleteResponse, String), Error> {
+    ) -> Result<(AutocompleteResponse, String, u16), Error> {
         if request.input.trim().is_empty() {
             return Err(Error::config("autocomplete input must not be empty"));
         }
@@ -303,7 +303,7 @@ impl Client {
             .post(url)
             .headers(self.headers(fields)?)
             .json(request);
-        self.send(builder).await
+        self.send_with_status(builder).await
     }
 
     /// Download photo media for a photo resource name returned by other
@@ -577,14 +577,6 @@ impl Client {
             headers.insert(FIELD_MASK_HEADER, value);
         }
         Ok(headers)
-    }
-
-    async fn send<T: DeserializeOwned>(
-        &self,
-        builder: reqwest::RequestBuilder,
-    ) -> Result<(T, String), Error> {
-        let (value, body, _) = self.send_with_status(builder).await?;
-        Ok((value, body))
     }
 
     /// Send a JSON request and decode the success body, keeping the
