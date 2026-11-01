@@ -633,25 +633,20 @@ def test_unrequested_attributes_read_as_not_returned(client):
     assert details.national_phone_number == "(02) 5550 1234"
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "the Rust core reserializes modelled fields and drops a "
-        "null valued one before Python sees the payload, so raw "
-        "loses the key on the client path. The model layer keeps "
-        "it, and a core round owns the fix"
-    ),
-)
 def test_absent_and_explicit_null_read_the_same_but_raw_knows(
     client, raw_response
 ):
     # D3: an explicit null on an optional scalar reads None, exactly
     # as absence does, but the wire name stays a key in raw, which
     # is the one distinction the contract claims. The assertions
-    # below are the full claim. They pass at the model layer today
-    # and fail through the client for the reason the xfail marker
-    # records, so the marker is strict and this test goes red the
-    # day the core stops dropping the key.
+    # below are the full claim. They passed at the model layer from
+    # the start and failed through the client while the core
+    # reserialized modelled fields and dropped a null valued one
+    # before Python saw the payload. Since Round 16 the core passes
+    # the response body through beside the typed value and Python
+    # builds raw from the body itself, so the claim now holds end
+    # to end and the strict xfail marker that recorded the debt is
+    # gone.
     data = json.loads(fixture_bytes("place_details.json"))
     data["websiteUri"] = None
     raw_response(200, json.dumps(data).encode())
@@ -3295,3 +3290,421 @@ def test_string_match_explicit_zero_start_offset_survives():
     assert match.start_offset == 0
     assert match.start_offset is not None
     assert match.end_offset == 6
+
+
+# ---------------------------------------------------------------------------
+# Round 16 (T2): raw fidelity through the core
+# ---------------------------------------------------------------------------
+#
+# Raw through the client is now the response body itself, parsed once
+# in Python, while attributes keep decoding from the core typed tree.
+# The fidelity pins below each failed on the head before this round,
+# through a drop or through a kill, for the reason their text states.
+# Three pins are controls by design and passed before the round as
+# they pass after it, and they are exempt from the fail first rule by
+# name: test_photo_uri_raw_equals_the_served_body,
+# test_photo_uri_unmodelled_null_key_stays_in_raw and the core guard
+# pin in the Rust suite that keeps request bodies byte identical.
+
+
+def _serve_details(raw_response, mutate):
+    data = json.loads(fixture_bytes("place_details.json"))
+    mutate(data)
+    raw_response(200, json.dumps(data).encode())
+
+
+def test_empty_types_list_keeps_its_key_in_raw(client, raw_response):
+    # An explicitly empty modelled list used to drop from raw at the
+    # core reserialization (Vec::is_empty guard), so raw could not
+    # tell a carried empty list from an unreturned one.
+    _serve_details(raw_response, lambda data: data.update(types=[]))
+    place = client.place_details("ChIJrTLr-GyuEmsRBfy61i59si0")
+    assert place.types == []
+    assert place.raw["types"] == []
+
+
+def test_empty_object_lists_keep_their_keys_in_raw(client, raw_response):
+    def mutate(data):
+        data["photos"] = []
+        data["addressComponents"] = []
+
+    _serve_details(raw_response, mutate)
+    place = client.place_details("ChIJrTLr-GyuEmsRBfy61i59si0")
+    assert place.photos == []
+    assert place.address_components == []
+    assert place.raw["photos"] == []
+    assert place.raw["addressComponents"] == []
+
+
+def test_empty_weekday_descriptions_keep_their_key_in_child_raw(
+    client, raw_response
+):
+    # The nested case: the raw threading must reach child models, not
+    # only the top level object.
+    def mutate(data):
+        data["regularOpeningHours"]["weekdayDescriptions"] = []
+
+    _serve_details(raw_response, mutate)
+    place = client.place_details("ChIJrTLr-GyuEmsRBfy61i59si0")
+    hours = place.opening_hours
+    assert hours is not None
+    assert hours.weekday_descriptions == []
+    assert hours.raw["weekdayDescriptions"] == []
+
+
+def test_empty_types_list_in_search_place_raw(client, raw_response):
+    data = json.loads(fixture_bytes("text_search.json"))
+    data["places"][0]["types"] = []
+    raw_response(200, json.dumps(data).encode())
+    result = client.text_search("cafes in Sydney")
+    assert result.places[0].types == []
+    assert result.places[0].raw["types"] == []
+
+
+def test_empty_types_list_in_prediction_raw(client, raw_response):
+    data = json.loads(fixture_bytes("autocomplete.json"))
+    data["suggestions"][0]["placePrediction"]["types"] = []
+    raw_response(200, json.dumps(data).encode())
+    result = client.autocomplete("Bianco")
+    prediction = result.place_predictions[0]
+    assert prediction.types == []
+    assert prediction.raw["types"] == []
+
+
+def test_class2_null_short_text_reads_none_and_stays_in_raw(
+    client, raw_response
+):
+    # Class 2: a null in a plain string position killed the whole
+    # response at the core. The Python layer tolerates the class and
+    # stores None, and raw keeps the key with the null.
+    def mutate(data):
+        data["addressComponents"][0]["shortText"] = None
+
+    _serve_details(raw_response, mutate)
+    place = client.place_details("ChIJrTLr-GyuEmsRBfy61i59si0")
+    component = place.address_components[0]
+    assert component.short_text is None
+    assert "shortText" in component.raw
+    assert component.raw["shortText"] is None
+
+
+def test_class2_null_attribution_photo_uri_at_depth(client, raw_response):
+    def mutate(data):
+        data["photos"][0]["authorAttributions"][0]["photoUri"] = None
+
+    _serve_details(raw_response, mutate)
+    place = client.place_details("ChIJrTLr-GyuEmsRBfy61i59si0")
+    attribution = place.photos[0].author_attributions[0]
+    assert attribution.photo_uri is None
+    assert "photoUri" in attribution.raw
+    assert attribution.raw["photoUri"] is None
+
+
+def test_class2_null_place_id_on_a_prediction(client, raw_response):
+    data = json.loads(fixture_bytes("autocomplete.json"))
+    data["suggestions"][0]["placePrediction"]["placeId"] = None
+    raw_response(200, json.dumps(data).encode())
+    result = client.autocomplete("Bianco")
+    prediction = result.place_predictions[0]
+    assert prediction.place_id is None
+    assert "placeId" in prediction.raw
+    assert prediction.raw["placeId"] is None
+
+
+def test_class4_null_element_inside_types_on_details(client, raw_response):
+    # Class 4: a null element inside a modelled string list killed
+    # the whole response at the core. The element now lands as None
+    # at its wire index, with no dropping or reordering.
+    def mutate(data):
+        data["types"] = ["cafe", None]
+
+    _serve_details(raw_response, mutate)
+    place = client.place_details("ChIJrTLr-GyuEmsRBfy61i59si0")
+    assert place.types == ["cafe", None]
+    assert place.raw["types"] == ["cafe", None]
+
+
+def test_class4_null_element_inside_types_keeps_the_search_page(
+    client, raw_response
+):
+    data = json.loads(fixture_bytes("text_search.json"))
+    data["places"][0]["types"] = ["cafe", None]
+    raw_response(200, json.dumps(data).encode())
+    result = client.text_search("cafes in Sydney")
+    assert len(result.places) == 2
+    assert result.places[0].types == ["cafe", None]
+    assert result.places[0].raw["types"] == ["cafe", None]
+
+
+def test_class4_null_element_inside_prediction_types(client, raw_response):
+    data = json.loads(fixture_bytes("autocomplete.json"))
+    data["suggestions"][0]["placePrediction"]["types"] = ["cafe", None]
+    raw_response(200, json.dumps(data).encode())
+    result = client.autocomplete("Bianco")
+    prediction = result.place_predictions[0]
+    assert prediction.types == ["cafe", None]
+    assert prediction.raw["types"] == ["cafe", None]
+
+
+def test_photo_uri_raw_equals_the_served_body(client, raw_response):
+    # Control pin, exempt from the fail first rule by name (see the
+    # section header). The two key body already round tripped before
+    # this round; the pin now guards the verbatim body path itself.
+    body = {
+        "name": "places/ChIJrTLr-GyuEmsRBfy61i59si0/photos/ATJ83zh8vExample",
+        "photoUri": "http://127.0.0.1/photo-image",
+    }
+    raw_response(200, json.dumps(body).encode())
+    result = client.place_photo(
+        body["name"], max_width_px=400, skip_http_redirect=True
+    )
+    assert isinstance(result, PhotoUriResult)
+    assert result.raw == body
+
+
+def test_photo_uri_null_photo_uri_reads_none_and_stays_in_raw(
+    client, raw_response
+):
+    body = {
+        "name": "places/ChIJrTLr-GyuEmsRBfy61i59si0/photos/ATJ83zh8vExample",
+        "photoUri": None,
+    }
+    raw_response(200, json.dumps(body).encode())
+    result = client.place_photo(
+        body["name"], max_width_px=400, skip_http_redirect=True
+    )
+    assert result.photo_uri is None
+    assert "photoUri" in result.raw
+    assert result.raw["photoUri"] is None
+
+
+def test_photo_uri_null_name_reads_none_and_stays_in_raw(
+    client, raw_response
+):
+    body = {"name": None, "photoUri": "http://127.0.0.1/photo-image"}
+    raw_response(200, json.dumps(body).encode())
+    result = client.place_photo(
+        "places/ChIJrTLr-GyuEmsRBfy61i59si0/photos/ATJ83zh8vExample",
+        max_width_px=400,
+        skip_http_redirect=True,
+    )
+    assert result.name is None
+    assert "name" in result.raw
+    assert result.raw["name"] is None
+
+
+def test_photo_uri_unmodelled_null_key_stays_in_raw(client, raw_response):
+    # Control pin, exempt from the fail first rule by name (see the
+    # section header). Unmodelled fields rode the flattened extra map
+    # verbatim before this round and must keep doing so.
+    body = {
+        "name": "places/ChIJrTLr-GyuEmsRBfy61i59si0/photos/ATJ83zh8vExample",
+        "photoUri": "http://127.0.0.1/photo-image",
+        "zzFutureField": None,
+    }
+    raw_response(200, json.dumps(body).encode())
+    result = client.place_photo(
+        body["name"], max_width_px=400, skip_http_redirect=True
+    )
+    assert "zzFutureField" in result.raw
+    assert result.raw["zzFutureField"] is None
+
+
+def test_empty_display_name_text_keeps_its_key_in_child_raw(
+    client, raw_response
+):
+    # An explicitly empty string on a plain string field used to drop
+    # from raw under the is_empty_string guard. Only raw membership
+    # moves; the attribute read the empty string all along.
+    def mutate(data):
+        data["displayName"]["text"] = ""
+
+    _serve_details(raw_response, mutate)
+    place = client.place_details("ChIJrTLr-GyuEmsRBfy61i59si0")
+    assert place.display_name is not None
+    assert place.display_name.text == ""
+    assert "text" in place.display_name.raw
+    assert place.display_name.raw["text"] == ""
+
+
+def test_zero_photo_width_keeps_its_key_in_raw(client, raw_response):
+    def mutate(data):
+        data["photos"][0]["widthPx"] = 0
+
+    _serve_details(raw_response, mutate)
+    place = client.place_details("ChIJrTLr-GyuEmsRBfy61i59si0")
+    photo = place.photos[0]
+    assert photo.width_px == 0
+    assert "widthPx" in photo.raw
+    assert photo.raw["widthPx"] == 0
+
+
+def test_zero_photo_height_keeps_its_key_in_raw(client, raw_response):
+    def mutate(data):
+        data["photos"][0]["heightPx"] = 0
+
+    _serve_details(raw_response, mutate)
+    place = client.place_details("ChIJrTLr-GyuEmsRBfy61i59si0")
+    photo = place.photos[0]
+    assert photo.height_px == 0
+    assert "heightPx" in photo.raw
+    assert photo.raw["heightPx"] == 0
+
+
+def test_zero_date_component_keeps_its_key_in_child_raw(
+    client, raw_response
+):
+    def mutate(data):
+        data["regularOpeningHours"]["periods"][0]["open"]["date"] = {
+            "year": 0,
+            "month": 1,
+            "day": 7,
+        }
+
+    _serve_details(raw_response, mutate)
+    place = client.place_details("ChIJrTLr-GyuEmsRBfy61i59si0")
+    hours = place.opening_hours
+    assert hours is not None
+    date = hours.periods[0].open.date
+    assert date is not None
+    assert date.year == 0
+    assert "year" in date.raw
+    assert date.raw["year"] == 0
+
+
+def test_partial_location_raw_carries_no_fabricated_longitude(
+    client, raw_response
+):
+    # Both halves in one pin. The typed attribute keeps the core
+    # leniency default, because the typed path does not change. The
+    # raw location is the wire object, latitude alone, with no
+    # longitude key the wire never sent.
+    def mutate(data):
+        data["location"] = {"latitude": -33.866784}
+
+    _serve_details(raw_response, mutate)
+    place = client.place_details("ChIJrTLr-GyuEmsRBfy61i59si0")
+    assert place.location is not None
+    assert place.location.latitude == pytest.approx(-33.866784)
+    assert place.location.longitude == 0.0
+    assert place.raw["location"] == {"latitude": -33.866784}
+
+
+# Branch A pins for classes 1 and 3. The core forwards the explicit
+# null and the documented Python contract decides it, the contract
+# test_explicit_null_in_a_list_field_is_a_decode_error pins at the
+# model layer. The whole response is still lost, exactly as before
+# this round; what moves is the origin of the error, and each pin
+# asserts the stable origin marker of its position family plus the
+# HTTP status the core threaded across, so each pin fails on the
+# head before this round, where the core raised with serde wording.
+
+
+def test_branch_a_null_types_list_raises_the_python_decoder_error(
+    client, raw_response
+):
+    _serve_details(raw_response, lambda data: data.update(types=None))
+    with pytest.raises(DecodeError) as excinfo:
+        client.place_details("ChIJrTLr-GyuEmsRBfy61i59si0")
+    assert excinfo.value.status_code == 200
+    assert "Place payload key 'types' is not a list" in excinfo.value.message
+
+
+def test_branch_a_null_weekday_descriptions_raises_the_python_decoder_error(
+    client, raw_response
+):
+    def mutate(data):
+        data["regularOpeningHours"]["weekdayDescriptions"] = None
+
+    _serve_details(raw_response, mutate)
+    with pytest.raises(DecodeError) as excinfo:
+        client.place_details("ChIJrTLr-GyuEmsRBfy61i59si0")
+    assert excinfo.value.status_code == 200
+    assert (
+        "OpeningHours payload key 'weekdayDescriptions' is not a list"
+        in excinfo.value.message
+    )
+
+
+def test_branch_a_null_latitude_raises_the_python_decoder_error(
+    client, raw_response
+):
+    def mutate(data):
+        data["location"] = {"latitude": None, "longitude": 151.20713}
+
+    _serve_details(raw_response, mutate)
+    with pytest.raises(DecodeError) as excinfo:
+        client.place_details("ChIJrTLr-GyuEmsRBfy61i59si0")
+    assert excinfo.value.status_code == 200
+    assert "LatLng payload key 'latitude'" in excinfo.value.message
+
+
+def test_branch_a_null_object_list_raises_the_conversion_wrapper_error(
+    client, raw_response
+):
+    # Object list positions name no model and no key today; their
+    # origin marker is the generic conversion wrapper form.
+    _serve_details(raw_response, lambda data: data.update(photos=None))
+    with pytest.raises(DecodeError) as excinfo:
+        client.place_details("ChIJrTLr-GyuEmsRBfy61i59si0")
+    assert excinfo.value.status_code == 200
+    assert "response failed model conversion" in excinfo.value.message
+
+
+def test_d3_2_scenario_async(api_key, base_url, raw_response):
+    # Async mirror of the flipped D3-2 test above.
+    data = json.loads(fixture_bytes("place_details.json"))
+    data["websiteUri"] = None
+    raw_response(200, json.dumps(data).encode())
+
+    async def run():
+        client = AsyncClient(api_key, base_url=base_url)
+        place = await client.place_details("ChIJrTLr-GyuEmsRBfy61i59si0")
+        assert place.website_uri is None
+        assert "websiteUri" in place.raw
+
+    asyncio.run(run())
+
+
+def test_empty_types_list_scenario_async(api_key, base_url, raw_response):
+    data = json.loads(fixture_bytes("text_search.json"))
+    data["places"][0]["types"] = []
+    raw_response(200, json.dumps(data).encode())
+
+    async def run():
+        client = AsyncClient(api_key, base_url=base_url)
+        result = await client.text_search("cafes in Sydney")
+        assert result.places[0].types == []
+        assert result.places[0].raw["types"] == []
+
+    asyncio.run(run())
+
+
+def test_class4_scenario_async(api_key, base_url, raw_response):
+    data = json.loads(fixture_bytes("place_details.json"))
+    data["types"] = ["cafe", None]
+    raw_response(200, json.dumps(data).encode())
+
+    async def run():
+        client = AsyncClient(api_key, base_url=base_url)
+        place = await client.place_details("ChIJrTLr-GyuEmsRBfy61i59si0")
+        assert place.types == ["cafe", None]
+        assert place.raw["types"] == ["cafe", None]
+
+    asyncio.run(run())
+
+
+def test_class2_null_id_and_name_on_a_search_place(client, raw_response):
+    # Class 2 at the Place identity positions. The null id falls
+    # back to the name exactly as an absent id does, and a null name
+    # reads as the empty default in that fallback, never as the
+    # string form of None. Raw keeps both nulls.
+    data = json.loads(fixture_bytes("text_search.json"))
+    data["places"][0]["id"] = None
+    data["places"][0]["name"] = None
+    raw_response(200, json.dumps(data).encode())
+    result = client.text_search("cafes in Sydney")
+    place = result.places[0]
+    assert place.id == ""
+    assert place.raw["id"] is None
+    assert place.raw["name"] is None
