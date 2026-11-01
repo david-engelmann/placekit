@@ -31,6 +31,7 @@ cannot be written because those cases hold no recorded components.
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -262,6 +263,76 @@ def test_gb_postal_unobserved():
     place = recorded_place("recorded_A3_postal_town_carries_city.json")
     assert place.postal_address is None
     assert address.postal_locality(place.postal_address) is None
+
+
+# ---------------------------------------------------------------------------
+# Country signal letter case
+
+
+def with_country_signal(place: Place, short_text: str) -> Place:
+    """Return the decoded place with its country signal rewritten.
+
+    The signal is the short text of the country component, and the
+    rewrite happens on the decoded place so the recorded geometry
+    of the fixture stays exactly as recorded.
+    """
+    components = [
+        replace(component, short_text=short_text)
+        if "country" in component.types
+        else component
+        for component in place.address_components
+    ]
+    return replace(place, address_components=components)
+
+
+def test_gb_lowercase_signal_keeps_the_contested_answer():
+    place = with_country_signal(
+        recorded_place("recorded_A4_locality_postal_town_disagree.json"), "gb"
+    )
+    # The carried code stays the value as sent while the routing
+    # match reads it without regard to letter case, so the recorded
+    # rivalry survives instead of falling to the generic chain.
+    assert address.country_code(place) == "gb"
+    assert address.city_resolutions(place) == (
+        address.CityResolution(
+            value="Bourton-on-the-Water",
+            carrier=address.CARRIER_LOCALITY,
+            confidence=address.CONFIDENCE_CONTESTED,
+            country_code="gb",
+            competing_value="Cheltenham",
+            competing_carrier=address.CARRIER_POSTAL_TOWN,
+        ),
+        address.CityResolution(
+            value="Cheltenham",
+            carrier=address.CARRIER_POSTAL_TOWN,
+            confidence=address.CONFIDENCE_CONTESTED,
+            country_code="gb",
+            competing_value="Bourton-on-the-Water",
+            competing_carrier=address.CARRIER_LOCALITY,
+        ),
+    )
+    headline = address.resolve_city(place)
+    assert headline.confidence == address.CONFIDENCE_CONTESTED
+    assert headline.competing_value == "Cheltenham"
+
+
+def test_jp_lowercase_signal_takes_the_stated_table():
+    place = with_country_signal(
+        recorded_place("recorded_A8_tokyo_english.json"), "jp"
+    )
+    assert address.country_code(place) == "jp"
+    assert address.resolve_city(place) == address.CityResolution(
+        value="Taito City",
+        carrier=address.CARRIER_LOCALITY,
+        confidence=address.CONFIDENCE_PRIMARY,
+        country_code="jp",
+    )
+    assert address.resolve_district(place) == address.DistrictResolution(
+        value="Asakusa",
+        carrier=address.CARRIER_SUBLOCALITY_LEVEL_2,
+        confidence=address.CONFIDENCE_PRIMARY,
+        country_code="jp",
+    )
 
 
 # ---------------------------------------------------------------------------

@@ -20,7 +20,10 @@ country and it does not mean a surveyed national rule, and the
 module does not promise that a stated precedence holds beyond
 the sampled locality it rests on. The United States carries no
 stated precedence in this version, so American places run under
-the generic chain at heuristic grade.
+the generic chain at heuristic grade. The country code that
+routes a place to a stated answer or to the generic chain is
+matched without regard to letter case, while the code a helper
+returns and a result carries stays the value as sent.
 
 The surface is deliberately narrower than the address problem.
 No helper parses formatted text and no helper composes a display
@@ -185,6 +188,17 @@ def _checked_components(
             "and not a bare string or bytes"
         )
     return components
+
+
+# Routing into a stated answer or the generic chain matches the
+# country code without regard to letter case, so a lowercase or
+# mixed case signal still reaches the answer its country carries.
+# The normalisation serves the match only and the code a helper
+# returns or a result carries stays the value as sent.
+def _routing_country(country: Optional[str]) -> Optional[str]:
+    if country is None:
+        return None
+    return country.upper()
 
 
 def _checked_type_name(type_name: str) -> str:
@@ -440,16 +454,17 @@ def city_resolutions(place: Place) -> tuple[CityResolution, ...]:
     order and each carries the other in its competing fields.
     """
     country = country_code(place)
+    route = _routing_country(country)
     components = place.address_components
-    if country in CONTESTED_COUNTRIES:
+    if route in CONTESTED_COUNTRIES:
         return _british_resolutions(place, country)
-    if country in PRECEDENCE_COUNTRIES:
+    if route in PRECEDENCE_COUNTRIES:
         locality = component_long_text(components, types.TYPE_LOCALITY)
         if locality is not None:
             return (
                 CityResolution(locality, CARRIER_LOCALITY, CONFIDENCE_PRIMARY, country),
             )
-        if country == "AE":
+        if route == "AE":
             postal_value = postal_locality(place.postal_address)
             if postal_value is not None:
                 return (
@@ -512,10 +527,11 @@ def resolve_district(place: Place) -> DistrictResolution:
     circumstance.
     """
     country = country_code(place)
-    if country == "JP":
+    route = _routing_country(country)
+    if route == "JP":
         type_name = types.TYPE_SUBLOCALITY_LEVEL_2
         carrier = CARRIER_SUBLOCALITY_LEVEL_2
-    elif country == "AE":
+    elif route == "AE":
         type_name = types.TYPE_SUBLOCALITY_LEVEL_1
         carrier = CARRIER_SUBLOCALITY_LEVEL_1
     else:
