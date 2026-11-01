@@ -346,18 +346,38 @@ class _Base:
     # -- lifecycle and duplication -------------------------------------
 
     def close(self) -> None:
-        """Release the underlying native client.
+        """Close this client to later calls.
 
-        Idempotent. Any later call on this client raises ConfigError.
-        Both clients are context managers (``with`` for Client,
-        ``async with`` for AsyncClient) that close on exit.
+        Idempotent. Closing gates later calls, which raise
+        ConfigError, and it does nothing else. It neither cancels
+        nor waits for calls already in flight, and those calls
+        finish with their own results. It releases nothing natively.
+        The native side has no close operation to call, so the
+        wrapper simply drops its handle once the gate is set, and a
+        call that captured the handle before the gate landed keeps
+        it alive until that call completes. Both clients are
+        context managers (``with`` for Client, ``async with`` for
+        AsyncClient) that close on exit.
         """
-        self._inner = None
         self._closed = True
+        self._inner = None
 
-    def _ensure_open(self, context: str) -> None:
+    def _ensure_open(self, context: str):
+        """Return the native handle for one call, or refuse.
+
+        The handle is captured here, at call entry, and the caller
+        uses the captured handle for the whole call. A close that
+        lands while the call is still building its body therefore
+        cannot withdraw the handle mid call. The call completes on
+        the handle it started with, and only calls that start after
+        the close are refused.
+        """
         if self._closed:
             raise ConfigError("client is closed", context=context)
+        inner = self._inner
+        if inner is None:
+            raise ConfigError("client is closed", context=context)
+        return inner
 
     def __reduce__(self):
         # The native handle is a live resource; the default pickle
@@ -796,6 +816,17 @@ class Client(_Base):
     the client at a local stub server. ``timeout`` is per request, in
     seconds, and may be at most 3600; anything else about it (zero,
     negative, non-finite, a boolean, a non-number) is a ``ConfigError``.
+
+    Concurrency and lifecycle. One client may be shared across
+    threads, and calls on it run concurrently, each returning its
+    own result. ``close()`` gates later calls with ``ConfigError``
+    and neither cancels nor waits for calls already in flight. Each
+    client holds its own connection pool, and every client in a
+    process shares one Tokio runtime that lives for the life of the
+    process. A process may fork after using the client, and calls
+    in the child work because the bindings rebuild their runtime
+    and client state for the child process. The module does not
+    load under subinterpreters.
     """
 
     def text_search(
@@ -832,7 +863,7 @@ class Client(_Base):
         ``routing_parameters`` takes a dict whose ``origin`` may be a
         ``LatLng`` or a ``(latitude, longitude)`` tuple.
         """
-        self._ensure_open("text_search")
+        inner = self._ensure_open("text_search")
         self._check_no_running_loop("text_search")
         self._require_str("query", query, "text_search")
         try:
@@ -862,7 +893,7 @@ class Client(_Base):
         except ConfigError as exc:
             raise self._with_context(exc, "text_search") from exc
         try:
-            data = self._inner.text_search(body, fields_list)
+            data = inner.text_search(body, fields_list)
         except _CorePlacesError as exc:
             raise_translated(exc, "text_search")
         return self._convert_body(TextSearchResult.from_api, data, "text_search")
@@ -890,7 +921,7 @@ class Client(_Base):
         The primary type filters take up to 50 place types each, and a
         type listed in both is an error at the API.
         """
-        self._ensure_open("nearby_search")
+        inner = self._ensure_open("nearby_search")
         self._check_no_running_loop("nearby_search")
         try:
             body = self._nearby_search_body(
@@ -911,7 +942,7 @@ class Client(_Base):
         except ConfigError as exc:
             raise self._with_context(exc, "nearby_search") from exc
         try:
-            data = self._inner.nearby_search(body, fields_list)
+            data = inner.nearby_search(body, fields_list)
         except _CorePlacesError as exc:
             raise_translated(exc, "nearby_search")
         return self._convert_body(NearbySearchResult.from_api, data, "nearby_search")
@@ -943,7 +974,7 @@ class Client(_Base):
         the models documentation defines for unreturned
         attributes.
         """
-        self._ensure_open("place_details")
+        inner = self._ensure_open("place_details")
         self._check_no_running_loop("place_details")
         try:
             resolved_id = self._resolve_place_id(place_id)
@@ -955,7 +986,7 @@ class Client(_Base):
         except ConfigError as exc:
             raise self._with_context(exc, context) from exc
         try:
-            data = self._inner.place_details(
+            data = inner.place_details(
                 resolved_id,
                 fields_list,
                 language,
@@ -992,7 +1023,7 @@ class Client(_Base):
         takes up to 5 place types, or the single collection ``(cities)``
         or ``(regions)``. A ``fields`` mask is optional on this endpoint.
         """
-        self._ensure_open("autocomplete")
+        inner = self._ensure_open("autocomplete")
         self._check_no_running_loop("autocomplete")
         self._require_str("input_text", input_text, "autocomplete")
         try:
@@ -1017,7 +1048,7 @@ class Client(_Base):
         except ConfigError as exc:
             raise self._with_context(exc, "autocomplete") from exc
         try:
-            data = self._inner.autocomplete(body, fields_list)
+            data = inner.autocomplete(body, fields_list)
         except _CorePlacesError as exc:
             raise_translated(exc, "autocomplete")
         return self._convert_body(AutocompleteResult.from_api, data, "autocomplete")
@@ -1055,7 +1086,7 @@ class Client(_Base):
         shapes, and a URI form result carries the photo name on
         its ``name`` attribute.
         """
-        self._ensure_open("place_photo")
+        inner = self._ensure_open("place_photo")
         self._check_no_running_loop("place_photo")
         try:
             name, width, height = self._resolve_photo_args(
@@ -1068,7 +1099,7 @@ class Client(_Base):
             name, width, height, skip_http_redirect, context
         )
         try:
-            tagged = self._inner.place_photo(
+            tagged = inner.place_photo(
                 name, width, height, skip_http_redirect
             )
         except _CorePlacesError as exc:
@@ -1093,6 +1124,18 @@ class AsyncClient(_Base):
     runs on await (A21). A ``ConfigError`` for bad arguments
     therefore surfaces at the ``await``, unlike the sync client,
     where it surfaces at the call itself.
+
+    Concurrency and lifecycle. One client may be shared across
+    tasks and used from more than one event loop. Cancelling a task
+    that is awaiting a call drops the wire request and leaves the
+    client fully usable for later calls. ``close()`` gates later
+    calls with ``ConfigError`` and neither cancels nor waits for
+    calls already in flight. Each client holds its own connection
+    pool, and every client in a process shares one Tokio runtime
+    that lives for the life of the process. A process may fork
+    after using the client, and calls in the child work because
+    the bindings rebuild their runtime and client state for the
+    child process. The module does not load under subinterpreters.
     """
 
     async def text_search(
@@ -1119,7 +1162,7 @@ class AsyncClient(_Base):
         include_future_opening_businesses: Optional[bool] = None,
     ) -> TextSearchResult:
         """Async version of ``Client.text_search``."""
-        self._ensure_open("text_search")
+        inner = self._ensure_open("text_search")
         self._require_str("query", query, "text_search")
         try:
             body = self._text_search_body(
@@ -1148,7 +1191,7 @@ class AsyncClient(_Base):
         except ConfigError as exc:
             raise self._with_context(exc, "text_search") from exc
         try:
-            data = await self._inner.text_search_async(body, fields_list)
+            data = await inner.text_search_async(body, fields_list)
         except _CorePlacesError as exc:
             raise_translated(exc, "text_search")
         return self._convert_body(TextSearchResult.from_api, data, "text_search")
@@ -1171,7 +1214,7 @@ class AsyncClient(_Base):
         include_future_opening_businesses: Optional[bool] = None,
     ) -> NearbySearchResult:
         """Async version of ``Client.nearby_search``."""
-        self._ensure_open("nearby_search")
+        inner = self._ensure_open("nearby_search")
         try:
             body = self._nearby_search_body(
                 location,
@@ -1191,7 +1234,7 @@ class AsyncClient(_Base):
         except ConfigError as exc:
             raise self._with_context(exc, "nearby_search") from exc
         try:
-            data = await self._inner.nearby_search_async(body, fields_list)
+            data = await inner.nearby_search_async(body, fields_list)
         except _CorePlacesError as exc:
             raise_translated(exc, "nearby_search")
         return self._convert_body(NearbySearchResult.from_api, data, "nearby_search")
@@ -1223,7 +1266,7 @@ class AsyncClient(_Base):
         the models documentation defines for unreturned
         attributes.
         """
-        self._ensure_open("place_details")
+        inner = self._ensure_open("place_details")
         try:
             resolved_id = self._resolve_place_id(place_id)
         except ConfigError as exc:
@@ -1234,7 +1277,7 @@ class AsyncClient(_Base):
         except ConfigError as exc:
             raise self._with_context(exc, context) from exc
         try:
-            data = await self._inner.place_details_async(
+            data = await inner.place_details_async(
                 resolved_id,
                 fields_list,
                 language,
@@ -1264,7 +1307,7 @@ class AsyncClient(_Base):
         include_future_opening_businesses: Optional[bool] = None,
     ) -> AutocompleteResult:
         """Async version of ``Client.autocomplete``."""
-        self._ensure_open("autocomplete")
+        inner = self._ensure_open("autocomplete")
         self._require_str("input_text", input_text, "autocomplete")
         try:
             body = self._autocomplete_body(
@@ -1288,7 +1331,7 @@ class AsyncClient(_Base):
         except ConfigError as exc:
             raise self._with_context(exc, "autocomplete") from exc
         try:
-            data = await self._inner.autocomplete_async(
+            data = await inner.autocomplete_async(
                 body, fields_list
             )
         except _CorePlacesError as exc:
@@ -1323,7 +1366,7 @@ class AsyncClient(_Base):
         shapes, and a URI form result carries the photo name on
         its ``name`` attribute.
         """
-        self._ensure_open("place_photo")
+        inner = self._ensure_open("place_photo")
         try:
             name, width, height = self._resolve_photo_args(
                 photo_name, max_width_px, max_height_px
@@ -1335,7 +1378,7 @@ class AsyncClient(_Base):
             name, width, height, skip_http_redirect, context
         )
         try:
-            tagged = await self._inner.place_photo_async(
+            tagged = await inner.place_photo_async(
                 name, width, height, skip_http_redirect
             )
         except _CorePlacesError as exc:
