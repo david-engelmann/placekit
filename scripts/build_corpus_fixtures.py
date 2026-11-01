@@ -21,6 +21,15 @@ text and original review text are replaced with synthetic text of the
 same character length carrying the same language code, and the original
 length is recorded in the facts. Every replaced path is recorded.
 
+The redactor works by key, so a post redaction scan walks every
+finished fixture without trusting key names and refuses the build on
+anything the redactor could not see. An attribution shaped object
+under any key or container must hold only synthetic values in its
+identity fields, no contributor shaped URI may survive anywhere, and
+review text inside any review shaped container must sit in the
+synthetic form or the build fails. The scan runs on every build, in
+verify mode as well, because both modes share the build path.
+
 Usage, from the repo root.
 
     python3 scripts/build_corpus_fixtures.py --cassettes DIR [--facts FILE]
@@ -37,6 +46,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -177,6 +187,101 @@ class Redactor:
         return self
 
 
+# The post redaction scan. The redactor works by key, so its coverage
+# depends on the cassette carrying attribution objects and reviews in
+# the canonical shapes. The scan works by shape and by value instead.
+# It walks the finished body without trusting any key name, and the
+# build refuses on anything it finds, so a renamed, pluralised, or
+# singular key and a noncanonical container buy a hostile or future
+# cassette nothing.
+
+CONTRIBUTOR_URI_MARKERS = ("googleusercontent.com", "ggpht.com", "/maps/contrib/")
+REVIEW_CONTAINER_KEYS = ("reviews", "review")
+REVIEW_MARKER_KEYS = (
+    "authorAttribution",
+    "authorAttributions",
+    "rating",
+    "publishTime",
+    "relativePublishTimeDescription",
+)
+SYNTHETIC_NAME_FORM = re.compile(r"^Example Author [0-9]+$")
+SYNTHETIC_URI_PREFIX = "https://example.com/contributors/"
+
+
+def _contributor_shaped(value: str) -> bool:
+    return any(marker in value for marker in CONTRIBUTOR_URI_MARKERS)
+
+
+def _synthetic_attribution_value(field: str, value) -> bool:
+    if field == "displayName":
+        return isinstance(value, str) and bool(SYNTHETIC_NAME_FORM.match(value))
+    return isinstance(value, str) and value.startswith(SYNTHETIC_URI_PREFIX)
+
+
+def scan_for_survivors(body) -> list[str]:
+    """List anything personal the redactor may have missed.
+
+    Three nets, none of them keyed on the canonical placements. Any
+    string carrying a contributor shaped URI is a survivor, whatever
+    holds it. Any object carrying a profile URI field, a photo URI
+    field, or two or more of the identity fields is attribution
+    shaped, and every identity field it carries must hold the
+    synthetic form. Any review text inside a review shaped container
+    must sit in the synthetic form, and string form review text is a
+    survivor on sight, because the redaction always writes the dict
+    form. A review shaped container is a value under a review key or
+    an object carrying one of the review marker keys.
+    """
+    survivors: list[str] = []
+
+    def walk(node, path: str, in_review: bool):
+        if isinstance(node, str):
+            if _contributor_shaped(node):
+                survivors.append(f"contributor shaped URI survives at {path}")
+            return
+        if isinstance(node, list):
+            for i, item in enumerate(node):
+                walk(item, f"{path}[{i}]", in_review)
+            return
+        if not isinstance(node, dict):
+            return
+        identity = [field for field in ATTRIBUTION_FIELDS if field in node]
+        if "uri" in node or "photoUri" in node or len(identity) >= 2:
+            for field in identity:
+                if not _synthetic_attribution_value(field, node[field]):
+                    survivors.append(
+                        f"attribution field {field} survives unredacted at {path}"
+                    )
+        review_shaped = in_review or any(key in node for key in REVIEW_MARKER_KEYS)
+        if review_shaped:
+            for member in ("text", "originalText"):
+                if member not in node:
+                    continue
+                value = node[member]
+                member_path = f"{path}.{member}" if path else member
+                if isinstance(value, str):
+                    survivors.append(
+                        f"review text survives in string form at {member_path}"
+                    )
+                elif isinstance(value, dict) and isinstance(value.get("text"), str):
+                    inner = value["text"]
+                    if inner != synthetic_text(len(inner), value.get("languageCode")):
+                        survivors.append(
+                            f"review text survives unredacted at {member_path}.text"
+                        )
+        for key, value in node.items():
+            child = f"{path}.{key}" if path else key
+            # Nothing below a text member needs the review context.
+            # The member itself was judged above, at its parent.
+            child_in_review = (
+                in_review or key in REVIEW_CONTAINER_KEYS
+            ) and key not in ("text", "originalText")
+            walk(value, child, child_in_review)
+
+    walk(body, "", False)
+    return survivors
+
+
 def trim_photos(node, path: str, trims: list):
     if isinstance(node, dict):
         for key, value in node.items():
@@ -280,6 +385,13 @@ def build_one(cassette_root: Path, spec: dict):
     check_preserved(
         preserved_source, body, "", trims, set(redactor.paths)
     )
+
+    survivors = scan_for_survivors(body)
+    if survivors:
+        raise SystemExit(
+            f"{spec['file']}, post redaction scan refuses the build, "
+            + ", ".join(survivors)
+        )
 
     data = canonical_bytes(body)
     facts = {
