@@ -35,12 +35,28 @@ const FIELD_MASK_HEADER: &str = "x-goog-fieldmask";
 const USER_AGENT: &str = concat!("placekit/", env!("CARGO_PKG_VERSION"), " (rust core)");
 
 /// Builder for [`Client`].
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct ClientBuilder {
     api_key: String,
     base_url: String,
     timeout: Duration,
     max_response_bytes: usize,
+}
+
+// The Debug impls for the builder and the client are written by
+// hand because the API key is the one secret these types hold
+// (R18-A1). A derived Debug prints the full key, and logging a
+// freshly built client is an ordinary, idiomatic thing for a Rust
+// consumer to do, so the key prints as a redaction marker instead.
+impl std::fmt::Debug for ClientBuilder {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ClientBuilder")
+            .field("api_key", &"<redacted>")
+            .field("base_url", &self.base_url)
+            .field("timeout", &self.timeout)
+            .field("max_response_bytes", &self.max_response_bytes)
+            .finish()
+    }
 }
 
 impl ClientBuilder {
@@ -112,12 +128,23 @@ impl ClientBuilder {
 }
 
 /// An async client for the Places API (New).
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct Client {
     api_key: String,
     base_url: String,
     http: reqwest::Client,
     max_response_bytes: usize,
+}
+
+impl std::fmt::Debug for Client {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Client")
+            .field("api_key", &"<redacted>")
+            .field("base_url", &self.base_url)
+            .field("http", &self.http)
+            .field("max_response_bytes", &self.max_response_bytes)
+            .finish()
+    }
 }
 
 impl Client {
@@ -1118,6 +1145,29 @@ mod tests {
         // silently; the builder now fails instead (F13).
         assert_eq!(Client::new("bad\nkey").unwrap_err().kind(), "config");
         assert_eq!(Client::new("bad\u{1}key").unwrap_err().kind(), "config");
+    }
+
+    #[test]
+    fn debug_output_never_prints_the_api_key() {
+        // R18-A1: the builder and the client hold the API key, and a
+        // derived Debug would print it in full. The hand written
+        // impls print a redaction marker instead. A distinctive key
+        // makes the assertion fail on any leak of the value itself,
+        // not on a substring the surrounding text could contain.
+        let key = "DISTINCTIVE-KEY-9f8e7d6c";
+        let shown = format!("{:?}", Client::builder(key));
+        assert!(
+            !shown.contains(key),
+            "builder Debug leaked the key: {shown}"
+        );
+        assert!(shown.contains("<redacted>"), "{shown}");
+        let client = Client::builder(key)
+            .base_url("http://127.0.0.1:9/v1")
+            .build()
+            .unwrap();
+        let shown = format!("{client:?}");
+        assert!(!shown.contains(key), "client Debug leaked the key: {shown}");
+        assert!(shown.contains("<redacted>"), "{shown}");
     }
 
     #[test]
