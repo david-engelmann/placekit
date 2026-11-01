@@ -7,7 +7,15 @@ never read back out of the fixture, so a builder error that rewrote a
 value inside a fixture fails against an independent copy. Raw deep
 equality compares the decoded raw against the fixture payload with
 type sensitive scalar comparison, so an int token, a float token, and
-a boolean never compare equal to one another.
+a boolean never compare equal to one another. That comparison proves
+client behaviour, meaning the client carries token types from the
+served bytes into raw. It cannot see an edit made inside a fixture
+file itself, because both sides of the comparison read the same file.
+Fixture fidelity to the cassettes is proven at build time by the
+builder preservation walk and by byte regeneration, and the wire
+token pins in this module hold the drift named fields against literal
+token strings in this file, so a token type edit inside one of those
+fixtures fails here as well.
 
 Redacted paths carry synthetic values by the parent ruling recorded in
 the coverage manifest, and no pin in this module treats a redacted
@@ -82,6 +90,20 @@ def details(client, raw_response, name, place_id):
     assert place.id == place_id
     assert_raw_equal(place.raw, payload)
     return place
+
+
+def wire_token(name: str, *path):
+    """Read one numeric leaf from fixture text as its literal wire token.
+
+    Handing the token string itself to the int and float parse hooks
+    keeps the exact characters the fixture carries, so a whole number
+    token and the same value written with a trailing fraction stay
+    distinct in a way a parsed value comparison cannot promise.
+    """
+    node = json.loads(fixture_bytes(name).decode(), parse_int=str, parse_float=str)
+    for step in path:
+        node = node[step]
+    return node
 
 
 # ---------------------------------------------------------------------------
@@ -439,6 +461,23 @@ def test_recorded_v1_rating_absent_against_rating_whole(client, raw_response):
     assert absent.rating is None
     assert absent.user_rating_count is None
     assert "rating" not in absent.raw
+
+
+def test_recorded_wire_token_forms_match_the_cassette_tokens():
+    # The drift named fields from the design record, pinned at the
+    # token level against literal token strings in this file. The raw
+    # equality above reads both of its sides from the same fixture
+    # file, so only a pin like this one sees a token type edit made
+    # inside the file itself.
+    v1 = "recorded_V1_rating_absent_against_whole.json"
+    assert wire_token(v1, "places", 0, "rating") == "5"
+    p10 = "recorded_P10_ev_charging_full_detail.json"
+    rates = ("places", 0, "evChargeOptions", "connectorAggregation")
+    assert wire_token(p10, *rates, 0, "maxChargeRateKw") == "50"
+    assert wire_token(p10, *rates, 1, "maxChargeRateKw") == "7.199999809265137"
+    assert wire_token(p10, *rates, 2, "maxChargeRateKw") == "50"
+    h8 = "recorded_H8_fractional_utc_offset.json"
+    assert wire_token(h8, "places", 0, "utcOffsetMinutes") == "345"
 
 
 def test_recorded_v3_top_price_levels(client, raw_response):
