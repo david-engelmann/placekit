@@ -1,0 +1,2219 @@
+{
+  "preamble": {
+    "purpose": "This manifest is the in repo accounting of provenance and coverage for the Round 13 fixture corpus. It is not a single source of truth. Provenance is proven at build time, while the cassettes are present, by the builder script regenerating every recorded fixture from its cassette and matching the shipped bytes and hashes, as the Round 13 build report shows. This file guards drift among the shipped claims from that point on.",
+    "location": "The manifest lives at tests/fixtures/coverage_manifest.json, the human coverage table at tests/fixtures/coverage_table.md, recorded fixtures under tests/fixtures/recorded, and synthesized fixtures under tests/fixtures/synthesized.",
+    "recorded_filename_template": "recorded_<CASE>_<slug>.json",
+    "observation_filename_template": "recorded_<OBS>_<slug>.json",
+    "synthesized_filename_template": "synthesized_<CASE>_<slug>.json",
+    "canonical_form": "Recorded fixtures are written with sorted keys, compact separators, escaped non ASCII text, one line, and no trailing newline, matching the legacy fixtures byte habit.",
+    "redaction_rule": "Personal content is redacted in every recorded fixture, by body and by path, never by case name. Inside every author attribution object, in review author attributions and in photo author attributions alike, the display name, the profile URI, and the photo URI are replaced with shape preserving synthetic values on the example domain. Review text is replaced with synthetic text of the same character length carrying the same language code, and the original length is recorded per path in the fixture entry. A fixture touched by redaction says so in its entry, and no pin on a redacted path claims the API sent the shipped value.",
+    "trim_rules": "Only two trims are allowed. The top level nextPageToken value is removed, and photos arrays are cut back to their first entry where photos are not load bearing for the case. The original array length is recorded for every trimmed array path. A trim fabricates neither an absence nor a count, and no pin asserts a count or an absence on a trimmed path.",
+    "hash_definitions": {
+      "source_body_sha256": "SHA-256 of the canonical writing of the full source response body in the named cassette, taken before selection, trims, or redaction.",
+      "fixture_sha256": "SHA-256 of the shipped fixture file bytes."
+    },
+    "guard_limits": {
+      "per_file_ceiling_bytes": 32768,
+      "set_total_ceiling_bytes": 409600,
+      "set_scope": "Every fixture file in the recorded and synthesized folders."
+    },
+    "guard_known_limits": "The accounting test guards drift among the shipped claims. A coordinated edit that changes a fixture, refreshes its hash in this manifest, and adjusts its coverage table row together passes the accounting test, and the Round 13 build report records that pass as the known limit of this guard. Cassette fidelity is a build time property resting on the build report and on the cassettes retained in the rounds tree."
+  },
+  "cases": [
+    {
+      "id": "P1",
+      "label": "A place with no address at all, natural feature",
+      "state": "recorded in session 2",
+      "note": "One result in the source body. The absence pattern differs from the taxonomy prediction. The place carries exactly one address component, the peak itself, and no street, city, or country component exists. The short formatted address and the postal address are also absent from the body, though their fields were not in the request mask, so that part of the absence is observed rather than mask backed.",
+      "fixtures": [
+        {
+          "file": "recorded_P1_no_address_natural_feature.json",
+          "session": "S2",
+          "exchange": "22_exchange.json",
+          "endpoint": "searchText",
+          "request_mask": "places.id,places.name,places.displayName,places.formattedAddress,places.location,places.rating,places.userRatingCount,places.types,places.primaryType,places.priceLevel,places.businessStatus,places.photos,nextPageToken,places.addressComponents,places.plusCode",
+          "selector_place_ids": [
+            "ChIJvZ69FaJU6DkRsrqrBvjcdgU"
+          ],
+          "source_body_sha256": "3b25e185fa46307007e0a9b552596b838b3654297d99d5f7391f0479dbf122f1",
+          "fixture_sha256": "e4f3edd2d4ef528b8cd032972e82afc1aa066f50156197f2e28aad22e64e2c82",
+          "size_bytes": 1540,
+          "size_exception": null,
+          "trims": [
+            {
+              "path": "places[0].photos",
+              "kind": "array_cut_to_first",
+              "original_length": 10
+            }
+          ],
+          "redactions": {
+            "paths": [
+              "places[0].photos[0].authorAttributions[0].displayName",
+              "places[0].photos[0].authorAttributions[0].uri",
+              "places[0].photos[0].authorAttributions[0].photoUri"
+            ],
+            "review_text_lengths": {}
+          }
+        }
+      ],
+      "tests": [
+        "test_recorded_p1_no_address_natural_feature"
+      ]
+    },
+    {
+      "id": "P2",
+      "label": "A place with no address, transit station",
+      "state": "recorded in session 2",
+      "note": "Prevalence basis, two of five results in the source body carry the transitStation tree, and the excerpt pins one carrier.",
+      "fixtures": [
+        {
+          "file": "recorded_P2_transit_station.json",
+          "session": "S2",
+          "exchange": "23_exchange.json",
+          "endpoint": "searchText",
+          "request_mask": "places.id,places.name,places.displayName,places.formattedAddress,places.location,places.rating,places.userRatingCount,places.types,places.primaryType,places.priceLevel,places.businessStatus,places.photos,nextPageToken,places.transitStation",
+          "selector_place_ids": [
+            "ChIJhRwB-yFawokRi0AhGH87UTc"
+          ],
+          "source_body_sha256": "e923536b74b024cd50a986742c2bf6d6aae608bb82e79f9714869c3ec2178587",
+          "fixture_sha256": "2a71f1c7141cd3b82f31c08b5ace90b39b77c6762569131e486056db959285ab",
+          "size_bytes": 3130,
+          "size_exception": null,
+          "trims": [
+            {
+              "path": "places[0].photos",
+              "kind": "array_cut_to_first",
+              "original_length": 10
+            }
+          ],
+          "redactions": {
+            "paths": [
+              "places[0].photos[0].authorAttributions[0].displayName",
+              "places[0].photos[0].authorAttributions[0].uri",
+              "places[0].photos[0].authorAttributions[0].photoUri"
+            ],
+            "review_text_lengths": {}
+          }
+        }
+      ],
+      "tests": [
+        "test_recorded_p2_transit_station_tree_in_raw"
+      ]
+    },
+    {
+      "id": "P3",
+      "label": "Permanently closed place",
+      "state": "hunted and missed in R12",
+      "hunt_note": "The hunt ran over Bisbee in session 2 cassette 18 and over Jerome in cassette 19, and all forty results came back OPERATIONAL, so the follow up details call was never spent.",
+      "fixtures": [],
+      "tests": []
+    },
+    {
+      "id": "P4",
+      "label": "Temporarily closed place",
+      "state": "recorded in session 1",
+      "note": "Prevalence basis, one of nineteen results in the source body carries CLOSED_TEMPORARILY.",
+      "partial_note": "Partial. Recorded at search depth only, and the details grade version of this case remains unrecorded.",
+      "fixtures": [
+        {
+          "file": "recorded_P4_temporarily_closed.json",
+          "session": "S1",
+          "exchange": "03_exchange.json",
+          "endpoint": "searchNearby",
+          "request_mask": "places.id,places.name,places.displayName,places.formattedAddress,places.location,places.rating,places.userRatingCount,places.types,places.primaryType,places.priceLevel,places.businessStatus,places.photos",
+          "selector_place_ids": [
+            "ChIJzw3eiINbwokRKCVwMLN501M"
+          ],
+          "source_body_sha256": "4863191111f751fdd20b63b147f0fa06420d155f781c53c347caedcc73503166",
+          "fixture_sha256": "30be139f0d0cd8d3a5f41fa0a9c110ed31b2facbfe34e0e6d457656066854661",
+          "size_bytes": 1418,
+          "size_exception": null,
+          "trims": [
+            {
+              "path": "places[0].photos",
+              "kind": "array_cut_to_first",
+              "original_length": 6
+            }
+          ],
+          "redactions": {
+            "paths": [
+              "places[0].photos[0].authorAttributions[0].displayName",
+              "places[0].photos[0].authorAttributions[0].uri",
+              "places[0].photos[0].authorAttributions[0].photoUri"
+            ],
+            "review_text_lengths": {}
+          }
+        }
+      ],
+      "tests": [
+        "test_recorded_p4_temporarily_closed_at_search_depth"
+      ]
+    },
+    {
+      "id": "P5",
+      "label": "Future opening place",
+      "state": "hunted and missed in R12",
+      "hunt_note": "Every large session 2 result set doubled as the hunt, and none of the 321 session 2 places carries FUTURE_OPENING or an openingDate key, and neither does any session 1 body.",
+      "fixtures": [],
+      "tests": []
+    },
+    {
+      "id": "P6",
+      "label": "Moved place",
+      "state": "synthesized candidate",
+      "note": "Six session 2 details calls requested movedPlace and movedPlaceId in the mask and no body carries either key.",
+      "fixtures": [
+        {
+          "file": "synthesized_P6_moved_place.json",
+          "origin": "synthesized",
+          "basis": "documented movedPlace and movedPlaceId fields",
+          "statement": "No recording of this shape exists. Every recorded details call that requested the moved fields returned a body without either key.",
+          "fixture_sha256": "4537473c63c1266f9c4b9aa1a2516aa35f99387a151ee20a839d25a59718208d",
+          "size_bytes": 658,
+          "size_exception": null
+        }
+      ],
+      "tests": [
+        "test_synthesized_p6_moved_place_decodes"
+      ]
+    },
+    {
+      "id": "P7",
+      "label": "Place with no photos",
+      "state": "recorded in session 2",
+      "note": "Prevalence basis, sixteen of twenty results in the source body carry no photos key under a mask that requested photos.",
+      "fixtures": [
+        {
+          "file": "recorded_P7_no_photos_key.json",
+          "session": "S2",
+          "exchange": "03_exchange.json",
+          "endpoint": "searchText",
+          "request_mask": "places.id,places.name,places.displayName,places.formattedAddress,places.location,places.rating,places.userRatingCount,places.types,places.primaryType,places.priceLevel,places.businessStatus,places.photos,nextPageToken,places.evChargeOptions",
+          "selector_place_ids": [
+            "ChIJqXbFE1vGwoARUN09pf8FYqM"
+          ],
+          "source_body_sha256": "adb29c30a0702938a02c99764f75c059c0faa655f2792c2bc96c64f3513b48a9",
+          "fixture_sha256": "bcee0e54c69c15286e99ab554c90751ea333814480f445614be72aa30cfe3aea",
+          "size_bytes": 1052,
+          "size_exception": null,
+          "trims": [
+            {
+              "path": "nextPageToken",
+              "kind": "value_removed"
+            }
+          ],
+          "redactions": {
+            "paths": [],
+            "review_text_lengths": {}
+          }
+        }
+      ],
+      "tests": [
+        "test_recorded_p7_no_photos_key_under_requesting_mask"
+      ]
+    },
+    {
+      "id": "P8",
+      "label": "Place with no reviews and no rating",
+      "state": "recorded in both",
+      "note": "The same absence at two depths, with the search half drawn from session 1 and the details half from session 2.",
+      "fixtures": [
+        {
+          "file": "recorded_P8_search_depth_no_rating.json",
+          "session": "S1",
+          "exchange": "03_exchange.json",
+          "endpoint": "searchNearby",
+          "request_mask": "places.id,places.name,places.displayName,places.formattedAddress,places.location,places.rating,places.userRatingCount,places.types,places.primaryType,places.priceLevel,places.businessStatus,places.photos",
+          "selector_place_ids": [
+            "ChIJTSFxKQBbwokRnlW6hfLADH8"
+          ],
+          "source_body_sha256": "4863191111f751fdd20b63b147f0fa06420d155f781c53c347caedcc73503166",
+          "fixture_sha256": "dad965f322c1b8381dd13b587677d1063f46e1d98da74a7497270379f5935004",
+          "size_bytes": 1452,
+          "size_exception": null,
+          "trims": [],
+          "redactions": {
+            "paths": [
+              "places[0].photos[0].authorAttributions[0].displayName",
+              "places[0].photos[0].authorAttributions[0].uri",
+              "places[0].photos[0].authorAttributions[0].photoUri"
+            ],
+            "review_text_lengths": {}
+          }
+        },
+        {
+          "file": "recorded_P8_details_depth_no_rating.json",
+          "session": "S2",
+          "exchange": "16_exchange.json",
+          "endpoint": "placeDetails",
+          "request_mask": "id,name,displayName,formattedAddress,shortFormattedAddress,location,rating,userRatingCount,types,primaryType,priceLevel,businessStatus,photos,nationalPhoneNumber,internationalPhoneNumber,websiteUri,googleMapsUri,regularOpeningHours,currentOpeningHours,currentSecondaryOpeningHours,regularSecondaryOpeningHours,addressComponents,adrFormatAddress,plusCode,postalAddress,primaryTypeDisplayName,viewport,attributions,googleMapsTypeLabel,editorialSummary,iconMaskBaseUri,iconBackgroundColor,openingDate,utcOffsetMinutes,pureServiceAreaBusiness,movedPlace,movedPlaceId,reviews,takeout,delivery,dineIn,curbsidePickup,reservable,servesBreakfast,servesLunch,servesDinner,servesBeer,servesWine,servesBrunch,servesVegetarianFood,outdoorSeating,liveMusic,menuForChildren,servesCocktails,servesDessert,servesCoffee,goodForChildren,allowsDogs,restroom,goodForGroups,goodForWatchingSports,paymentOptions,parkingOptions,accessibilityOptions,timeZone,generativeSummary,reviewSummary,consumerAlert,googleMapsLinks,priceRange,evChargeOptions,addressDescriptor",
+          "selector_place_ids": [
+            "ChIJS_zBNNbXAhURy-FuRT5ib9k"
+          ],
+          "source_body_sha256": "8a994093c4055d5dfa5e13936a0b59fdc778cbbb2c8dcb09b4314d6beab8ef63",
+          "fixture_sha256": "5b83a024c2cf215e4b0b9ba4d71d55999a2096e9ec0bcf682d01a2df10cb7fb4",
+          "size_bytes": 2835,
+          "size_exception": null,
+          "trims": [
+            {
+              "path": "photos",
+              "kind": "array_cut_to_first",
+              "original_length": 10
+            }
+          ],
+          "redactions": {
+            "paths": [
+              "photos[0].authorAttributions[0].displayName",
+              "photos[0].authorAttributions[0].uri",
+              "photos[0].authorAttributions[0].photoUri"
+            ],
+            "review_text_lengths": {}
+          }
+        }
+      ],
+      "tests": [
+        "test_recorded_p8_no_rating_at_search_and_details_depth"
+      ]
+    },
+    {
+      "id": "P9",
+      "label": "Pure service-area business",
+      "state": "hunted and missed in R12",
+      "hunt_note": "The Chicago plumbers hunt in session 2 cassette 20 returned twenty places with no pureServiceAreaBusiness key at all, so the follow up details call was never spent, and all six session 2 details bodies carry the field as explicit false instead.",
+      "fixtures": [],
+      "tests": []
+    },
+    {
+      "id": "P10",
+      "label": "EV charging station at full detail",
+      "state": "recorded in session 2",
+      "note": "All twenty results in the source body carry evChargeOptions, and the excerpt pins one place whose aggregations carry both number token forms.",
+      "fixtures": [
+        {
+          "file": "recorded_P10_ev_charging_full_detail.json",
+          "session": "S2",
+          "exchange": "03_exchange.json",
+          "endpoint": "searchText",
+          "request_mask": "places.id,places.name,places.displayName,places.formattedAddress,places.location,places.rating,places.userRatingCount,places.types,places.primaryType,places.priceLevel,places.businessStatus,places.photos,nextPageToken,places.evChargeOptions",
+          "selector_place_ids": [
+            "ChIJqy0cdk3GwoARVLngjTmC44A"
+          ],
+          "source_body_sha256": "adb29c30a0702938a02c99764f75c059c0faa655f2792c2bc96c64f3513b48a9",
+          "fixture_sha256": "9abf8cadf95abe9deed0ddca41b4f33bb2bd10b91213a390fe61820c61ed17de",
+          "size_bytes": 1078,
+          "size_exception": null,
+          "trims": [
+            {
+              "path": "nextPageToken",
+              "kind": "value_removed"
+            }
+          ],
+          "redactions": {
+            "paths": [],
+            "review_text_lengths": {}
+          }
+        }
+      ],
+      "tests": [
+        "test_recorded_p10_ev_charging_full_detail"
+      ]
+    },
+    {
+      "id": "P11",
+      "label": "Gas station with fuel options",
+      "state": "recorded in session 2",
+      "note": "Prevalence basis, fifteen of twenty results in the source body carry fuelOptions with price entries and update stamps.",
+      "fixtures": [
+        {
+          "file": "recorded_P11_fuel_options.json",
+          "session": "S2",
+          "exchange": "04_exchange.json",
+          "endpoint": "searchText",
+          "request_mask": "places.id,places.name,places.displayName,places.formattedAddress,places.location,places.rating,places.userRatingCount,places.types,places.primaryType,places.priceLevel,places.businessStatus,places.photos,nextPageToken,places.fuelOptions",
+          "selector_place_ids": [
+            "ChIJA6GX3IEzsYkRz8NMql4bGB8"
+          ],
+          "source_body_sha256": "77094a6db410f5d59c39889f3697f1c64dcab76b84971ef01e12fe7b604217db",
+          "fixture_sha256": "7559ff09807844cdd80b5bfa9fcd8cc897e137251a9a547dc4a58b7acbfe67c5",
+          "size_bytes": 2088,
+          "size_exception": null,
+          "trims": [
+            {
+              "path": "nextPageToken",
+              "kind": "value_removed"
+            },
+            {
+              "path": "places[0].photos",
+              "kind": "array_cut_to_first",
+              "original_length": 10
+            }
+          ],
+          "redactions": {
+            "paths": [
+              "places[0].photos[0].authorAttributions[0].displayName",
+              "places[0].photos[0].authorAttributions[0].uri",
+              "places[0].photos[0].authorAttributions[0].photoUri"
+            ],
+            "review_text_lengths": {}
+          }
+        }
+      ],
+      "tests": [
+        "test_recorded_p11_fuel_options_in_raw"
+      ]
+    },
+    {
+      "id": "P12",
+      "label": "Contained place and sub destinations",
+      "state": "recorded in session 2",
+      "note": "The address descriptor on this body decodes typed, and the containing places, entrances, and navigation points ride in raw.",
+      "partial_note": "Partial. The contained place half is recorded, and the subDestinations half has no live sample anywhere, since the key is absent from the source body and appears only in its request mask.",
+      "fixtures": [
+        {
+          "file": "recorded_P12_contained_place.json",
+          "session": "S2",
+          "exchange": "02_exchange.json",
+          "endpoint": "placeDetails",
+          "request_mask": "id,name,displayName,formattedAddress,shortFormattedAddress,location,rating,userRatingCount,types,primaryType,priceLevel,businessStatus,photos,nationalPhoneNumber,internationalPhoneNumber,websiteUri,googleMapsUri,regularOpeningHours,currentOpeningHours,currentSecondaryOpeningHours,regularSecondaryOpeningHours,addressComponents,adrFormatAddress,plusCode,postalAddress,primaryTypeDisplayName,viewport,attributions,googleMapsTypeLabel,editorialSummary,iconMaskBaseUri,iconBackgroundColor,openingDate,utcOffsetMinutes,pureServiceAreaBusiness,movedPlace,movedPlaceId,reviews,takeout,delivery,dineIn,curbsidePickup,reservable,servesBreakfast,servesLunch,servesDinner,servesBeer,servesWine,servesBrunch,servesVegetarianFood,outdoorSeating,liveMusic,menuForChildren,servesCocktails,servesDessert,servesCoffee,goodForChildren,allowsDogs,restroom,goodForGroups,goodForWatchingSports,paymentOptions,parkingOptions,accessibilityOptions,timeZone,generativeSummary,reviewSummary,consumerAlert,googleMapsLinks,priceRange,evChargeOptions,addressDescriptor,containingPlaces,subDestinations,transitStation,entrances,navigationPoints",
+          "selector_place_ids": [
+            "ChIJ8WvuSB7Lj4ARFyHppkxDRQ4"
+          ],
+          "source_body_sha256": "249830b80c898a33c0b1550a009eafe992f380a366bc067887b1c4eefd73d9bc",
+          "fixture_sha256": "d159e5a322273ea4d4af15b09abaa8adc1112f41da04407301cae6ff9af3f99b",
+          "size_bytes": 26560,
+          "size_exception": null,
+          "trims": [
+            {
+              "path": "photos",
+              "kind": "array_cut_to_first",
+              "original_length": 10
+            }
+          ],
+          "redactions": {
+            "paths": [
+              "reviews[0].text.text",
+              "reviews[0].originalText.text",
+              "reviews[0].authorAttribution.displayName",
+              "reviews[0].authorAttribution.uri",
+              "reviews[0].authorAttribution.photoUri",
+              "reviews[1].text.text",
+              "reviews[1].originalText.text",
+              "reviews[1].authorAttribution.displayName",
+              "reviews[1].authorAttribution.uri",
+              "reviews[1].authorAttribution.photoUri",
+              "reviews[2].text.text",
+              "reviews[2].originalText.text",
+              "reviews[2].authorAttribution.displayName",
+              "reviews[2].authorAttribution.uri",
+              "reviews[2].authorAttribution.photoUri",
+              "reviews[3].text.text",
+              "reviews[3].originalText.text",
+              "reviews[3].authorAttribution.displayName",
+              "reviews[3].authorAttribution.uri",
+              "reviews[3].authorAttribution.photoUri",
+              "reviews[4].text.text",
+              "reviews[4].originalText.text",
+              "reviews[4].authorAttribution.displayName",
+              "reviews[4].authorAttribution.uri",
+              "reviews[4].authorAttribution.photoUri",
+              "photos[0].authorAttributions[0].displayName",
+              "photos[0].authorAttributions[0].uri",
+              "photos[0].authorAttributions[0].photoUri"
+            ],
+            "review_text_lengths": {
+              "reviews[0].text.text": 2158,
+              "reviews[0].originalText.text": 2158,
+              "reviews[1].text.text": 123,
+              "reviews[1].originalText.text": 123,
+              "reviews[2].text.text": 367,
+              "reviews[2].originalText.text": 367,
+              "reviews[3].text.text": 594,
+              "reviews[3].originalText.text": 594,
+              "reviews[4].text.text": 553,
+              "reviews[4].originalText.text": 553
+            }
+          }
+        }
+      ],
+      "tests": [
+        "test_recorded_p12_contained_place_partial"
+      ]
+    },
+    {
+      "id": "P13",
+      "label": "Consumer alert",
+      "state": "synthesized candidate",
+      "note": "Six session 2 details calls requested consumerAlert in the mask and no body in either session carries the key.",
+      "fixtures": [
+        {
+          "file": "synthesized_P13_consumer_alert.json",
+          "origin": "synthesized",
+          "basis": "documented consumerAlert group",
+          "statement": "No recording of this shape exists. Every recorded details call that requested the consumer alert field returned a body without the key.",
+          "fixture_sha256": "74efa5f2ec7c05af4903491912afe2f5ac8b020d9c65bc790583597861234874",
+          "size_bytes": 771,
+          "size_exception": null
+        }
+      ],
+      "tests": [
+        "test_synthesized_p13_consumer_alert_decodes"
+      ]
+    },
+    {
+      "id": "P14",
+      "label": "Place with provider attributions",
+      "state": "hunted and missed in R12",
+      "hunt_note": "The documented Saigon hotel call in session 2 cassette 01 requested attributions in its mask and the response body omits the key entirely, and session 1 cassette 02 repeats the same shape.",
+      "fixtures": [],
+      "tests": []
+    },
+    {
+      "id": "P15",
+      "label": "Summaries present at details depth",
+      "state": "recorded in session 2",
+      "partial_note": "Partial. Three of the four summary kinds are recorded across the pair, and neighborhoodSummary appears in no body in either session.",
+      "fixtures": [
+        {
+          "file": "recorded_P15_details_depth_saigon.json",
+          "session": "S2",
+          "exchange": "01_exchange.json",
+          "endpoint": "placeDetails",
+          "request_mask": "id,name,displayName,formattedAddress,shortFormattedAddress,location,rating,userRatingCount,types,primaryType,priceLevel,businessStatus,photos,nationalPhoneNumber,internationalPhoneNumber,websiteUri,googleMapsUri,regularOpeningHours,currentOpeningHours,currentSecondaryOpeningHours,regularSecondaryOpeningHours,addressComponents,adrFormatAddress,plusCode,postalAddress,primaryTypeDisplayName,viewport,attributions,googleMapsTypeLabel,editorialSummary,iconMaskBaseUri,iconBackgroundColor,openingDate,utcOffsetMinutes,pureServiceAreaBusiness,movedPlace,movedPlaceId,reviews,takeout,delivery,dineIn,curbsidePickup,reservable,servesBreakfast,servesLunch,servesDinner,servesBeer,servesWine,servesBrunch,servesVegetarianFood,outdoorSeating,liveMusic,menuForChildren,servesCocktails,servesDessert,servesCoffee,goodForChildren,allowsDogs,restroom,goodForGroups,goodForWatchingSports,paymentOptions,parkingOptions,accessibilityOptions,timeZone,generativeSummary,reviewSummary,consumerAlert,googleMapsLinks,priceRange,evChargeOptions,addressDescriptor",
+          "selector_place_ids": [
+            "ChIJV4k8_9UodTERU5KXbkYpSYs"
+          ],
+          "source_body_sha256": "629f5a3574cb89cee8b6abfb92495ffb22758c27d04190897f9d656f9213a10c",
+          "fixture_sha256": "72fe682cb0ba35a28b50418aface6b4b97ae156f67f7f2c16839d8cbde8a3536",
+          "size_bytes": 19973,
+          "size_exception": null,
+          "trims": [
+            {
+              "path": "photos",
+              "kind": "array_cut_to_first",
+              "original_length": 10
+            }
+          ],
+          "redactions": {
+            "paths": [
+              "reviews[0].text.text",
+              "reviews[0].originalText.text",
+              "reviews[0].authorAttribution.displayName",
+              "reviews[0].authorAttribution.uri",
+              "reviews[0].authorAttribution.photoUri",
+              "reviews[1].text.text",
+              "reviews[1].originalText.text",
+              "reviews[1].authorAttribution.displayName",
+              "reviews[1].authorAttribution.uri",
+              "reviews[1].authorAttribution.photoUri",
+              "reviews[2].text.text",
+              "reviews[2].originalText.text",
+              "reviews[2].authorAttribution.displayName",
+              "reviews[2].authorAttribution.uri",
+              "reviews[2].authorAttribution.photoUri",
+              "reviews[3].text.text",
+              "reviews[3].originalText.text",
+              "reviews[3].authorAttribution.displayName",
+              "reviews[3].authorAttribution.uri",
+              "reviews[3].authorAttribution.photoUri",
+              "reviews[4].text.text",
+              "reviews[4].originalText.text",
+              "reviews[4].authorAttribution.displayName",
+              "reviews[4].authorAttribution.uri",
+              "reviews[4].authorAttribution.photoUri",
+              "photos[0].authorAttributions[0].displayName",
+              "photos[0].authorAttributions[0].uri",
+              "photos[0].authorAttributions[0].photoUri"
+            ],
+            "review_text_lengths": {
+              "reviews[0].text.text": 518,
+              "reviews[0].originalText.text": 518,
+              "reviews[1].text.text": 600,
+              "reviews[1].originalText.text": 600,
+              "reviews[2].text.text": 1369,
+              "reviews[2].originalText.text": 1369,
+              "reviews[3].text.text": 1293,
+              "reviews[3].originalText.text": 1293,
+              "reviews[4].text.text": 417,
+              "reviews[4].originalText.text": 417
+            }
+          }
+        },
+        {
+          "file": "recorded_P15_richest_mall_store.json",
+          "session": "S2",
+          "exchange": "02_exchange.json",
+          "endpoint": "placeDetails",
+          "request_mask": "id,name,displayName,formattedAddress,shortFormattedAddress,location,rating,userRatingCount,types,primaryType,priceLevel,businessStatus,photos,nationalPhoneNumber,internationalPhoneNumber,websiteUri,googleMapsUri,regularOpeningHours,currentOpeningHours,currentSecondaryOpeningHours,regularSecondaryOpeningHours,addressComponents,adrFormatAddress,plusCode,postalAddress,primaryTypeDisplayName,viewport,attributions,googleMapsTypeLabel,editorialSummary,iconMaskBaseUri,iconBackgroundColor,openingDate,utcOffsetMinutes,pureServiceAreaBusiness,movedPlace,movedPlaceId,reviews,takeout,delivery,dineIn,curbsidePickup,reservable,servesBreakfast,servesLunch,servesDinner,servesBeer,servesWine,servesBrunch,servesVegetarianFood,outdoorSeating,liveMusic,menuForChildren,servesCocktails,servesDessert,servesCoffee,goodForChildren,allowsDogs,restroom,goodForGroups,goodForWatchingSports,paymentOptions,parkingOptions,accessibilityOptions,timeZone,generativeSummary,reviewSummary,consumerAlert,googleMapsLinks,priceRange,evChargeOptions,addressDescriptor,containingPlaces,subDestinations,transitStation,entrances,navigationPoints",
+          "selector_place_ids": [
+            "ChIJ8WvuSB7Lj4ARFyHppkxDRQ4"
+          ],
+          "source_body_sha256": "249830b80c898a33c0b1550a009eafe992f380a366bc067887b1c4eefd73d9bc",
+          "fixture_sha256": "d159e5a322273ea4d4af15b09abaa8adc1112f41da04407301cae6ff9af3f99b",
+          "size_bytes": 26560,
+          "size_exception": null,
+          "trims": [
+            {
+              "path": "photos",
+              "kind": "array_cut_to_first",
+              "original_length": 10
+            }
+          ],
+          "redactions": {
+            "paths": [
+              "reviews[0].text.text",
+              "reviews[0].originalText.text",
+              "reviews[0].authorAttribution.displayName",
+              "reviews[0].authorAttribution.uri",
+              "reviews[0].authorAttribution.photoUri",
+              "reviews[1].text.text",
+              "reviews[1].originalText.text",
+              "reviews[1].authorAttribution.displayName",
+              "reviews[1].authorAttribution.uri",
+              "reviews[1].authorAttribution.photoUri",
+              "reviews[2].text.text",
+              "reviews[2].originalText.text",
+              "reviews[2].authorAttribution.displayName",
+              "reviews[2].authorAttribution.uri",
+              "reviews[2].authorAttribution.photoUri",
+              "reviews[3].text.text",
+              "reviews[3].originalText.text",
+              "reviews[3].authorAttribution.displayName",
+              "reviews[3].authorAttribution.uri",
+              "reviews[3].authorAttribution.photoUri",
+              "reviews[4].text.text",
+              "reviews[4].originalText.text",
+              "reviews[4].authorAttribution.displayName",
+              "reviews[4].authorAttribution.uri",
+              "reviews[4].authorAttribution.photoUri",
+              "photos[0].authorAttributions[0].displayName",
+              "photos[0].authorAttributions[0].uri",
+              "photos[0].authorAttributions[0].photoUri"
+            ],
+            "review_text_lengths": {
+              "reviews[0].text.text": 2158,
+              "reviews[0].originalText.text": 2158,
+              "reviews[1].text.text": 123,
+              "reviews[1].originalText.text": 123,
+              "reviews[2].text.text": 367,
+              "reviews[2].originalText.text": 367,
+              "reviews[3].text.text": 594,
+              "reviews[3].originalText.text": 594,
+              "reviews[4].text.text": 553,
+              "reviews[4].originalText.text": 553
+            }
+          }
+        }
+      ],
+      "tests": [
+        "test_recorded_p15_summaries_at_details_depth"
+      ]
+    },
+    {
+      "id": "H1",
+      "label": "Open 24 hours",
+      "state": "recorded in session 2",
+      "note": "The single period shape with no close point repeats across the source body.",
+      "fixtures": [
+        {
+          "file": "recorded_H1_open_24_hours.json",
+          "session": "S2",
+          "exchange": "05_exchange.json",
+          "endpoint": "searchText",
+          "request_mask": "places.id,places.name,places.displayName,places.formattedAddress,places.location,places.rating,places.userRatingCount,places.types,places.primaryType,places.priceLevel,places.businessStatus,places.photos,nextPageToken,places.regularOpeningHours",
+          "selector_place_ids": [
+            "ChIJdzXgRn8E9YgRZCIoanr8GPw"
+          ],
+          "source_body_sha256": "eb9c63df66f12d030e1bd9fcb86397aed809ccf66fea62537ea4a0dd6f97bdbc",
+          "fixture_sha256": "3898960a282853b903b3d3094e1c82cdc12890be42a19f7856d912cf57a10c5e",
+          "size_bytes": 1851,
+          "size_exception": null,
+          "trims": [
+            {
+              "path": "nextPageToken",
+              "kind": "value_removed"
+            },
+            {
+              "path": "places[0].photos",
+              "kind": "array_cut_to_first",
+              "original_length": 10
+            }
+          ],
+          "redactions": {
+            "paths": [
+              "places[0].photos[0].authorAttributions[0].displayName",
+              "places[0].photos[0].authorAttributions[0].uri",
+              "places[0].photos[0].authorAttributions[0].photoUri"
+            ],
+            "review_text_lengths": {}
+          }
+        }
+      ],
+      "tests": [
+        "test_recorded_h1_open_24_hours"
+      ]
+    },
+    {
+      "id": "H2",
+      "label": "Split hours",
+      "state": "recorded in session 2",
+      "note": "Several places in the source body carry split days, and the excerpt pins the place with two periods on every day.",
+      "fixtures": [
+        {
+          "file": "recorded_H2_split_hours.json",
+          "session": "S2",
+          "exchange": "06_exchange.json",
+          "endpoint": "searchText",
+          "request_mask": "places.id,places.name,places.displayName,places.formattedAddress,places.location,places.rating,places.userRatingCount,places.types,places.primaryType,places.priceLevel,places.businessStatus,places.photos,nextPageToken,places.currentOpeningHours,places.regularOpeningHours",
+          "selector_place_ids": [
+            "ChIJ-RAVYVVQqEcRIfxE6EjRZ38"
+          ],
+          "source_body_sha256": "aaa29cbf2b7d758169c5b412b4fd08cb0681f0538ac6a5709b39b77d99cbfaf7",
+          "fixture_sha256": "21b54b54934bbb0887d2354a74769f48b216f9d85bf56548fb5968dd223bbcf9",
+          "size_bytes": 6414,
+          "size_exception": null,
+          "trims": [
+            {
+              "path": "nextPageToken",
+              "kind": "value_removed"
+            },
+            {
+              "path": "places[0].photos",
+              "kind": "array_cut_to_first",
+              "original_length": 10
+            }
+          ],
+          "redactions": {
+            "paths": [
+              "places[0].photos[0].authorAttributions[0].displayName",
+              "places[0].photos[0].authorAttributions[0].uri",
+              "places[0].photos[0].authorAttributions[0].photoUri"
+            ],
+            "review_text_lengths": {}
+          }
+        }
+      ],
+      "tests": [
+        "test_recorded_h2_split_hours"
+      ]
+    },
+    {
+      "id": "H3",
+      "label": "Overnight hours",
+      "state": "recorded in session 2",
+      "note": "Prevalence basis, forty three periods across the source body close after midnight on the next day, and the excerpt pins one place.",
+      "fixtures": [
+        {
+          "file": "recorded_H3_overnight_hours.json",
+          "session": "S2",
+          "exchange": "06_exchange.json",
+          "endpoint": "searchText",
+          "request_mask": "places.id,places.name,places.displayName,places.formattedAddress,places.location,places.rating,places.userRatingCount,places.types,places.primaryType,places.priceLevel,places.businessStatus,places.photos,nextPageToken,places.currentOpeningHours,places.regularOpeningHours",
+          "selector_place_ids": [
+            "ChIJZ5QEJ19PqEcR0ciT7zE11sE"
+          ],
+          "source_body_sha256": "aaa29cbf2b7d758169c5b412b4fd08cb0681f0538ac6a5709b39b77d99cbfaf7",
+          "fixture_sha256": "30061d1a9958bf24181ddf4a00b53a108e0cbf0b5d238a388e07386028067f23",
+          "size_bytes": 4443,
+          "size_exception": null,
+          "trims": [
+            {
+              "path": "nextPageToken",
+              "kind": "value_removed"
+            },
+            {
+              "path": "places[0].photos",
+              "kind": "array_cut_to_first",
+              "original_length": 10
+            }
+          ],
+          "redactions": {
+            "paths": [
+              "places[0].photos[0].authorAttributions[0].displayName",
+              "places[0].photos[0].authorAttributions[0].uri",
+              "places[0].photos[0].authorAttributions[0].photoUri"
+            ],
+            "review_text_lengths": {}
+          }
+        }
+      ],
+      "tests": [
+        "test_recorded_h3_overnight_hours"
+      ]
+    },
+    {
+      "id": "H4",
+      "label": "Special days",
+      "state": "still open",
+      "open_note": "The seasonal recording call was held for a holiday week and never ran, and the specialDays key appears in no body in either session, so nothing hunted this case.",
+      "fixtures": [],
+      "tests": []
+    },
+    {
+      "id": "H5",
+      "label": "Empty periods, never open",
+      "state": "hunted and missed in R12",
+      "hunt_note": "The route ran through the closed place hunts in session 2 cassettes 18 and 19, and those scans found no closed candidate and the follow up details call was never spent, and an empty periods list appears in no body in either session.",
+      "fixtures": [],
+      "tests": []
+    },
+    {
+      "id": "H6",
+      "label": "Truncated period points",
+      "state": "recorded in session 2",
+      "note": "Truncated points are a routine window boundary shape in the source bodies rather than a rare one.",
+      "fixtures": [
+        {
+          "file": "recorded_H6_truncated_period_points.json",
+          "session": "S2",
+          "exchange": "06_exchange.json",
+          "endpoint": "searchText",
+          "request_mask": "places.id,places.name,places.displayName,places.formattedAddress,places.location,places.rating,places.userRatingCount,places.types,places.primaryType,places.priceLevel,places.businessStatus,places.photos,nextPageToken,places.currentOpeningHours,places.regularOpeningHours",
+          "selector_place_ids": [
+            "ChIJZ5QEJ19PqEcR0ciT7zE11sE"
+          ],
+          "source_body_sha256": "aaa29cbf2b7d758169c5b412b4fd08cb0681f0538ac6a5709b39b77d99cbfaf7",
+          "fixture_sha256": "30061d1a9958bf24181ddf4a00b53a108e0cbf0b5d238a388e07386028067f23",
+          "size_bytes": 4443,
+          "size_exception": null,
+          "trims": [
+            {
+              "path": "nextPageToken",
+              "kind": "value_removed"
+            },
+            {
+              "path": "places[0].photos",
+              "kind": "array_cut_to_first",
+              "original_length": 10
+            }
+          ],
+          "redactions": {
+            "paths": [
+              "places[0].photos[0].authorAttributions[0].displayName",
+              "places[0].photos[0].authorAttributions[0].uri",
+              "places[0].photos[0].authorAttributions[0].photoUri"
+            ],
+            "review_text_lengths": {}
+          }
+        }
+      ],
+      "tests": [
+        "test_recorded_h6_truncated_period_points"
+      ]
+    },
+    {
+      "id": "H7",
+      "label": "Secondary hours",
+      "state": "recorded in session 2",
+      "note": "Prevalence basis, seven results in the source body carry secondary hours, and the excerpt pins one.",
+      "fixtures": [
+        {
+          "file": "recorded_H7_secondary_hours.json",
+          "session": "S2",
+          "exchange": "24_exchange.json",
+          "endpoint": "searchText",
+          "request_mask": "places.id,places.name,places.displayName,places.formattedAddress,places.location,places.rating,places.userRatingCount,places.types,places.primaryType,places.priceLevel,places.businessStatus,places.photos,nextPageToken,places.currentSecondaryOpeningHours,places.regularSecondaryOpeningHours",
+          "selector_place_ids": [
+            "ChIJjWm3wdJzToYR8efPhAe5lzY"
+          ],
+          "source_body_sha256": "aec7a2d7bdee6f7675a0ada267be0245074d848a93cc8f0f316f7477472e1ba0",
+          "fixture_sha256": "2b6f931863ea5c4a5d83c191cbd5394a89e16ce58671e79c8e79315a4507acab",
+          "size_bytes": 4506,
+          "size_exception": null,
+          "trims": [
+            {
+              "path": "nextPageToken",
+              "kind": "value_removed"
+            },
+            {
+              "path": "places[0].photos",
+              "kind": "array_cut_to_first",
+              "original_length": 10
+            }
+          ],
+          "redactions": {
+            "paths": [
+              "places[0].photos[0].authorAttributions[0].displayName",
+              "places[0].photos[0].authorAttributions[0].uri",
+              "places[0].photos[0].authorAttributions[0].photoUri"
+            ],
+            "review_text_lengths": {}
+          }
+        }
+      ],
+      "tests": [
+        "test_recorded_h7_secondary_hours"
+      ]
+    },
+    {
+      "id": "H8",
+      "label": "Fractional UTC offsets",
+      "state": "recorded in session 2",
+      "note": "Prevalence basis, offset 345 on twenty of twenty places in the source body, with the time zone Asia/Katmandu in the Google spelling.",
+      "fixtures": [
+        {
+          "file": "recorded_H8_fractional_utc_offset.json",
+          "session": "S2",
+          "exchange": "07_exchange.json",
+          "endpoint": "searchText",
+          "request_mask": "places.id,places.name,places.displayName,places.formattedAddress,places.location,places.rating,places.userRatingCount,places.types,places.primaryType,places.priceLevel,places.businessStatus,places.photos,nextPageToken,places.utcOffsetMinutes,places.timeZone",
+          "selector_place_ids": [
+            "ChIJKc7950UZ6zkRIDoTfViKQyw"
+          ],
+          "source_body_sha256": "9e577f93650eb8aa42534fc492cb2936d8c071d46c0dea72959183395adcd57c",
+          "fixture_sha256": "7afdf8e0d8a9d2f21c9dbd5788b214d39d1cc12afe197c8a0de3f4cc7c63c380",
+          "size_bytes": 1521,
+          "size_exception": null,
+          "trims": [
+            {
+              "path": "nextPageToken",
+              "kind": "value_removed"
+            },
+            {
+              "path": "places[0].photos",
+              "kind": "array_cut_to_first",
+              "original_length": 10
+            }
+          ],
+          "redactions": {
+            "paths": [
+              "places[0].photos[0].authorAttributions[0].displayName",
+              "places[0].photos[0].authorAttributions[0].uri",
+              "places[0].photos[0].authorAttributions[0].photoUri"
+            ],
+            "review_text_lengths": {}
+          }
+        }
+      ],
+      "tests": [
+        "test_recorded_h8_fractional_utc_offset"
+      ]
+    },
+    {
+      "id": "H9",
+      "label": "Extreme UTC offsets",
+      "state": "recorded in session 2",
+      "note": "Prevalence basis, offset 840 on six of six places in the source body, and the Apia fallback was not needed.",
+      "fixtures": [
+        {
+          "file": "recorded_H9_extreme_utc_offset.json",
+          "session": "S2",
+          "exchange": "08_exchange.json",
+          "endpoint": "searchText",
+          "request_mask": "places.id,places.name,places.displayName,places.formattedAddress,places.location,places.rating,places.userRatingCount,places.types,places.primaryType,places.priceLevel,places.businessStatus,places.photos,nextPageToken,places.utcOffsetMinutes,places.timeZone",
+          "selector_place_ids": [
+            "ChIJoeTv8C6iAnoR6m3PZFxVVxM"
+          ],
+          "source_body_sha256": "2e9430917fbd79c004aed0f0b5cbe8a8ae26d00714aa8a67c42ff4aa102716b7",
+          "fixture_sha256": "c9948b2310f2f03e6a3fa664c9fa063894e669e8a897936fb719a9c64f0214ac",
+          "size_bytes": 1517,
+          "size_exception": null,
+          "trims": [
+            {
+              "path": "places[0].photos",
+              "kind": "array_cut_to_first",
+              "original_length": 10
+            }
+          ],
+          "redactions": {
+            "paths": [
+              "places[0].photos[0].authorAttributions[0].displayName",
+              "places[0].photos[0].authorAttributions[0].uri",
+              "places[0].photos[0].authorAttributions[0].photoUri"
+            ],
+            "review_text_lengths": {}
+          }
+        }
+      ],
+      "tests": [
+        "test_recorded_h9_extreme_utc_offset"
+      ]
+    },
+    {
+      "id": "H10",
+      "label": "Offset that moves with the season",
+      "state": "recorded in both",
+      "state_note": "The session 2 half captures the offset field itself. The session 1 half rests on the in effect geography basis the taxonomy named, since session 1 geography sits in a daylight saving zone while no session 1 mask requested the offset field and no session 1 body carries one.",
+      "fixtures": [
+        {
+          "file": "recorded_H10_seasonal_offset_sample.json",
+          "session": "S2",
+          "exchange": "01_exchange.json",
+          "endpoint": "placeDetails",
+          "request_mask": "id,name,displayName,formattedAddress,shortFormattedAddress,location,rating,userRatingCount,types,primaryType,priceLevel,businessStatus,photos,nationalPhoneNumber,internationalPhoneNumber,websiteUri,googleMapsUri,regularOpeningHours,currentOpeningHours,currentSecondaryOpeningHours,regularSecondaryOpeningHours,addressComponents,adrFormatAddress,plusCode,postalAddress,primaryTypeDisplayName,viewport,attributions,googleMapsTypeLabel,editorialSummary,iconMaskBaseUri,iconBackgroundColor,openingDate,utcOffsetMinutes,pureServiceAreaBusiness,movedPlace,movedPlaceId,reviews,takeout,delivery,dineIn,curbsidePickup,reservable,servesBreakfast,servesLunch,servesDinner,servesBeer,servesWine,servesBrunch,servesVegetarianFood,outdoorSeating,liveMusic,menuForChildren,servesCocktails,servesDessert,servesCoffee,goodForChildren,allowsDogs,restroom,goodForGroups,goodForWatchingSports,paymentOptions,parkingOptions,accessibilityOptions,timeZone,generativeSummary,reviewSummary,consumerAlert,googleMapsLinks,priceRange,evChargeOptions,addressDescriptor",
+          "selector_place_ids": [
+            "ChIJV4k8_9UodTERU5KXbkYpSYs"
+          ],
+          "source_body_sha256": "629f5a3574cb89cee8b6abfb92495ffb22758c27d04190897f9d656f9213a10c",
+          "fixture_sha256": "72fe682cb0ba35a28b50418aface6b4b97ae156f67f7f2c16839d8cbde8a3536",
+          "size_bytes": 19973,
+          "size_exception": null,
+          "trims": [
+            {
+              "path": "photos",
+              "kind": "array_cut_to_first",
+              "original_length": 10
+            }
+          ],
+          "redactions": {
+            "paths": [
+              "reviews[0].text.text",
+              "reviews[0].originalText.text",
+              "reviews[0].authorAttribution.displayName",
+              "reviews[0].authorAttribution.uri",
+              "reviews[0].authorAttribution.photoUri",
+              "reviews[1].text.text",
+              "reviews[1].originalText.text",
+              "reviews[1].authorAttribution.displayName",
+              "reviews[1].authorAttribution.uri",
+              "reviews[1].authorAttribution.photoUri",
+              "reviews[2].text.text",
+              "reviews[2].originalText.text",
+              "reviews[2].authorAttribution.displayName",
+              "reviews[2].authorAttribution.uri",
+              "reviews[2].authorAttribution.photoUri",
+              "reviews[3].text.text",
+              "reviews[3].originalText.text",
+              "reviews[3].authorAttribution.displayName",
+              "reviews[3].authorAttribution.uri",
+              "reviews[3].authorAttribution.photoUri",
+              "reviews[4].text.text",
+              "reviews[4].originalText.text",
+              "reviews[4].authorAttribution.displayName",
+              "reviews[4].authorAttribution.uri",
+              "reviews[4].authorAttribution.photoUri",
+              "photos[0].authorAttributions[0].displayName",
+              "photos[0].authorAttributions[0].uri",
+              "photos[0].authorAttributions[0].photoUri"
+            ],
+            "review_text_lengths": {
+              "reviews[0].text.text": 518,
+              "reviews[0].originalText.text": 518,
+              "reviews[1].text.text": 600,
+              "reviews[1].originalText.text": 600,
+              "reviews[2].text.text": 1369,
+              "reviews[2].originalText.text": 1369,
+              "reviews[3].text.text": 1293,
+              "reviews[3].originalText.text": 1293,
+              "reviews[4].text.text": 417,
+              "reviews[4].originalText.text": 417
+            }
+          }
+        }
+      ],
+      "tests": [
+        "test_recorded_h10_offset_sample_in_effect_basis"
+      ]
+    },
+    {
+      "id": "H11",
+      "label": "Period order and description order disagree",
+      "state": "recorded in session 2",
+      "note": "The same Monday first description order appears against the same day 0 anchor in the English Saigon body.",
+      "fixtures": [
+        {
+          "file": "recorded_H11_description_order_vs_period_anchor.json",
+          "session": "S2",
+          "exchange": "25_exchange.json",
+          "endpoint": "placeDetails",
+          "request_mask": "id,name,displayName,formattedAddress,shortFormattedAddress,location,rating,userRatingCount,types,primaryType,priceLevel,businessStatus,photos,nationalPhoneNumber,internationalPhoneNumber,websiteUri,googleMapsUri,regularOpeningHours,currentOpeningHours,currentSecondaryOpeningHours,regularSecondaryOpeningHours,addressComponents,adrFormatAddress,plusCode,postalAddress,primaryTypeDisplayName,viewport,attributions,googleMapsTypeLabel,editorialSummary,iconMaskBaseUri,iconBackgroundColor,openingDate,utcOffsetMinutes,pureServiceAreaBusiness,movedPlace,movedPlaceId,reviews,takeout,delivery,dineIn,curbsidePickup,reservable,servesBreakfast,servesLunch,servesDinner,servesBeer,servesWine,servesBrunch,servesVegetarianFood,outdoorSeating,liveMusic,menuForChildren,servesCocktails,servesDessert,servesCoffee,goodForChildren,allowsDogs,restroom,goodForGroups,goodForWatchingSports,paymentOptions,parkingOptions,accessibilityOptions,timeZone,generativeSummary,reviewSummary,consumerAlert,googleMapsLinks,priceRange,evChargeOptions,addressDescriptor",
+          "selector_place_ids": [
+            "ChIJV4k8_9UodTERU5KXbkYpSYs"
+          ],
+          "source_body_sha256": "bf0c10fbd7b570feaf95bc663327ad4f2d3b48386405dc7b06628fd26ddda3dd",
+          "fixture_sha256": "517f921b7f78d632342ff502392cbc8d17de51219a2c73d207db063880327b04",
+          "size_bytes": 12412,
+          "size_exception": null,
+          "trims": [
+            {
+              "path": "photos",
+              "kind": "array_cut_to_first",
+              "original_length": 10
+            }
+          ],
+          "redactions": {
+            "paths": [
+              "reviews[0].text.text",
+              "reviews[0].originalText.text",
+              "reviews[0].authorAttribution.displayName",
+              "reviews[0].authorAttribution.uri",
+              "reviews[0].authorAttribution.photoUri",
+              "reviews[1].text.text",
+              "reviews[1].originalText.text",
+              "reviews[1].authorAttribution.displayName",
+              "reviews[1].authorAttribution.uri",
+              "reviews[1].authorAttribution.photoUri",
+              "reviews[2].text.text",
+              "reviews[2].originalText.text",
+              "reviews[2].authorAttribution.displayName",
+              "reviews[2].authorAttribution.uri",
+              "reviews[2].authorAttribution.photoUri",
+              "reviews[3].text.text",
+              "reviews[3].originalText.text",
+              "reviews[3].authorAttribution.displayName",
+              "reviews[3].authorAttribution.uri",
+              "reviews[3].authorAttribution.photoUri",
+              "reviews[4].text.text",
+              "reviews[4].originalText.text",
+              "reviews[4].authorAttribution.displayName",
+              "reviews[4].authorAttribution.uri",
+              "reviews[4].authorAttribution.photoUri",
+              "photos[0].authorAttributions[0].displayName",
+              "photos[0].authorAttributions[0].uri",
+              "photos[0].authorAttributions[0].photoUri"
+            ],
+            "review_text_lengths": {
+              "reviews[0].text.text": 259,
+              "reviews[0].originalText.text": 259,
+              "reviews[1].text.text": 110,
+              "reviews[1].originalText.text": 110,
+              "reviews[2].text.text": 85,
+              "reviews[2].originalText.text": 85,
+              "reviews[3].text.text": 50,
+              "reviews[3].originalText.text": 50,
+              "reviews[4].text.text": 79,
+              "reviews[4].originalText.text": 79
+            }
+          }
+        }
+      ],
+      "tests": [
+        "test_recorded_h11_description_order_disagrees_with_period_anchor"
+      ]
+    },
+    {
+      "id": "V1",
+      "label": "Rating absent against rating whole",
+      "state": "recorded in both",
+      "note": "Recorded in both sessions. The fixture is drawn from session 1, where one of nineteen places carries no rating and one carries the whole number rating five.",
+      "fixtures": [
+        {
+          "file": "recorded_V1_rating_absent_against_whole.json",
+          "session": "S1",
+          "exchange": "03_exchange.json",
+          "endpoint": "searchNearby",
+          "request_mask": "places.id,places.name,places.displayName,places.formattedAddress,places.location,places.rating,places.userRatingCount,places.types,places.primaryType,places.priceLevel,places.businessStatus,places.photos",
+          "selector_place_ids": [
+            "ChIJL-0tDU9bwokRNIqrbAnPVuc",
+            "ChIJTSFxKQBbwokRnlW6hfLADH8"
+          ],
+          "source_body_sha256": "4863191111f751fdd20b63b147f0fa06420d155f781c53c347caedcc73503166",
+          "fixture_sha256": "7ab455eb690b5f8b75c77aec5220bc58c33ea7a085f19cd14cccb9e6413c7d1d",
+          "size_bytes": 2955,
+          "size_exception": null,
+          "trims": [
+            {
+              "path": "places[0].photos",
+              "kind": "array_cut_to_first",
+              "original_length": 10
+            }
+          ],
+          "redactions": {
+            "paths": [
+              "places[0].photos[0].authorAttributions[0].displayName",
+              "places[0].photos[0].authorAttributions[0].uri",
+              "places[0].photos[0].authorAttributions[0].photoUri",
+              "places[1].photos[0].authorAttributions[0].displayName",
+              "places[1].photos[0].authorAttributions[0].uri",
+              "places[1].photos[0].authorAttributions[0].photoUri"
+            ],
+            "review_text_lengths": {}
+          }
+        }
+      ],
+      "tests": [
+        "test_recorded_v1_rating_absent_against_rating_whole"
+      ]
+    },
+    {
+      "id": "V2",
+      "label": "Free price level",
+      "state": "hunted and missed in R12",
+      "hunt_note": "The museum hunt in session 2 cassette 26 requested priceLevel and all twenty results omit the key entirely, and PRICE_LEVEL_FREE appears in no body in either session.",
+      "fixtures": [],
+      "tests": []
+    },
+    {
+      "id": "V3",
+      "label": "Top price levels",
+      "state": "recorded in session 2",
+      "note": "The Berlin body carries seven expensive places and two very expensive places, and the excerpt pins one very expensive place.",
+      "fixtures": [
+        {
+          "file": "recorded_V3_top_price_levels.json",
+          "session": "S2",
+          "exchange": "06_exchange.json",
+          "endpoint": "searchText",
+          "request_mask": "places.id,places.name,places.displayName,places.formattedAddress,places.location,places.rating,places.userRatingCount,places.types,places.primaryType,places.priceLevel,places.businessStatus,places.photos,nextPageToken,places.currentOpeningHours,places.regularOpeningHours",
+          "selector_place_ids": [
+            "ChIJA-K5lEpQqEcRHGv7ScsVIXs"
+          ],
+          "source_body_sha256": "aaa29cbf2b7d758169c5b412b4fd08cb0681f0538ac6a5709b39b77d99cbfaf7",
+          "fixture_sha256": "a4171c2618ff95239136b5d77ef4a4e16bec8dd927f3279cf92818c1aa096143",
+          "size_bytes": 5004,
+          "size_exception": null,
+          "trims": [
+            {
+              "path": "nextPageToken",
+              "kind": "value_removed"
+            },
+            {
+              "path": "places[0].photos",
+              "kind": "array_cut_to_first",
+              "original_length": 10
+            }
+          ],
+          "redactions": {
+            "paths": [
+              "places[0].photos[0].authorAttributions[0].displayName",
+              "places[0].photos[0].authorAttributions[0].uri",
+              "places[0].photos[0].authorAttributions[0].photoUri"
+            ],
+            "review_text_lengths": {}
+          }
+        }
+      ],
+      "tests": [
+        "test_recorded_v3_top_price_levels"
+      ]
+    },
+    {
+      "id": "V4",
+      "label": "Price range present",
+      "state": "hunted and missed in R12",
+      "hunt_note": "The opportunistic route ran inside the six session 2 details calls and every one of them requested priceRange in the mask, and no body in either session carries a priceRange key.",
+      "fixtures": [],
+      "tests": []
+    },
+    {
+      "id": "V5",
+      "label": "Plus code without a compound code",
+      "state": "recorded in session 2",
+      "note": "Recorded at Mount Everest after the Taveuni attempt missed, and the plus code object holds only the global code.",
+      "fixtures": [
+        {
+          "file": "recorded_V5_plus_code_global_only.json",
+          "session": "S2",
+          "exchange": "22_exchange.json",
+          "endpoint": "searchText",
+          "request_mask": "places.id,places.name,places.displayName,places.formattedAddress,places.location,places.rating,places.userRatingCount,places.types,places.primaryType,places.priceLevel,places.businessStatus,places.photos,nextPageToken,places.addressComponents,places.plusCode",
+          "selector_place_ids": [
+            "ChIJvZ69FaJU6DkRsrqrBvjcdgU"
+          ],
+          "source_body_sha256": "3b25e185fa46307007e0a9b552596b838b3654297d99d5f7391f0479dbf122f1",
+          "fixture_sha256": "e4f3edd2d4ef528b8cd032972e82afc1aa066f50156197f2e28aad22e64e2c82",
+          "size_bytes": 1540,
+          "size_exception": null,
+          "trims": [
+            {
+              "path": "places[0].photos",
+              "kind": "array_cut_to_first",
+              "original_length": 10
+            }
+          ],
+          "redactions": {
+            "paths": [
+              "places[0].photos[0].authorAttributions[0].displayName",
+              "places[0].photos[0].authorAttributions[0].uri",
+              "places[0].photos[0].authorAttributions[0].photoUri"
+            ],
+            "review_text_lengths": {}
+          }
+        }
+      ],
+      "tests": [
+        "test_recorded_v5_plus_code_without_compound_code"
+      ]
+    },
+    {
+      "id": "V6",
+      "label": "Single point viewport",
+      "state": "synthesized candidate",
+      "note": "A scan of every viewport in both sessions found none whose low corner equals its high corner, and no bounded hunt targeted the shape.",
+      "fixtures": [
+        {
+          "file": "synthesized_V6_single_point_viewport.json",
+          "origin": "synthesized",
+          "basis": "documented viewport shape",
+          "statement": "No recording of this shape exists. A scan of every recorded viewport found none whose low corner equals its high corner.",
+          "fixture_sha256": "4100470b30fb9813fea6929a8e3ea23260a8e480c38b6ef1d7e9e6eac07b0857",
+          "size_bytes": 641,
+          "size_exception": null
+        }
+      ],
+      "tests": [
+        "test_synthesized_v6_single_point_viewport_decodes"
+      ]
+    },
+    {
+      "id": "V7",
+      "label": "Antimeridian viewport",
+      "state": "hunted and missed in R12",
+      "hunt_note": "The Taveuni hunt in session 2 cassette 09 returned twenty viewports and every one sits west of the antimeridian with low below high, so none straddles the 180 degree line.",
+      "fixtures": [],
+      "tests": []
+    },
+    {
+      "id": "V8",
+      "label": "Review text in two languages",
+      "state": "hunted and missed in R12",
+      "hunt_note": "Fifteen recorded reviews ride in session 2 cassettes 01, 02, and 25, and the text language code matches the original text language code in every one.",
+      "fixtures": [],
+      "tests": []
+    },
+    {
+      "id": "V9",
+      "label": "Review visit date",
+      "state": "hunted and missed in R12",
+      "hunt_note": "The same fifteen recorded reviews carry no visitDate key, since their keys run to publishTime and relativePublishTimeDescription instead.",
+      "fixtures": [],
+      "tests": []
+    },
+    {
+      "id": "V10",
+      "label": "Long form place ID accepted by details",
+      "state": "recorded in session 2",
+      "note": "The details call spent the long base64 style id that session 1 recorded, and the decoded id matches the requested id unchanged.",
+      "fixtures": [
+        {
+          "file": "recorded_V10_long_form_place_id.json",
+          "session": "S2",
+          "exchange": "21_exchange.json",
+          "endpoint": "placeDetails",
+          "request_mask": "id,name,displayName,formattedAddress,shortFormattedAddress,location,rating,userRatingCount,types,primaryType,priceLevel,businessStatus,photos,nationalPhoneNumber,internationalPhoneNumber,websiteUri,googleMapsUri,regularOpeningHours,currentOpeningHours,currentSecondaryOpeningHours,regularSecondaryOpeningHours,addressComponents,adrFormatAddress,plusCode,postalAddress,primaryTypeDisplayName,viewport,attributions,googleMapsTypeLabel,editorialSummary,iconMaskBaseUri,iconBackgroundColor,openingDate,utcOffsetMinutes,pureServiceAreaBusiness,movedPlace,movedPlaceId,reviews,takeout,delivery,dineIn,curbsidePickup,reservable,servesBreakfast,servesLunch,servesDinner,servesBeer,servesWine,servesBrunch,servesVegetarianFood,outdoorSeating,liveMusic,menuForChildren,servesCocktails,servesDessert,servesCoffee,goodForChildren,allowsDogs,restroom,goodForGroups,goodForWatchingSports,paymentOptions,parkingOptions,accessibilityOptions,timeZone,generativeSummary,reviewSummary,consumerAlert,googleMapsLinks,priceRange,evChargeOptions,addressDescriptor",
+          "selector_place_ids": [
+            "EiZXaWxsaWFtc2J1cmcgQnJpZGdlLCBOZXcgWW9yaywgTlksIFVTQSIuKiwKFAoSCccn3dnXW8KJEdugE_vLf17YEhQKEgk7CD_TpU_CiRFi_nfhBo8LyA"
+          ],
+          "source_body_sha256": "879dbe784cca946ea0426203abf4131a519d886bf6c365007f0a9a0a6a66d6b4",
+          "fixture_sha256": "054edf6a0b0a8cb061d701de8ca2db7f23fdcc87e063e5dd5d16d7007d2b3cf4",
+          "size_bytes": 3263,
+          "size_exception": null,
+          "trims": [
+            {
+              "path": "photos",
+              "kind": "array_cut_to_first",
+              "original_length": 10
+            }
+          ],
+          "redactions": {
+            "paths": [
+              "photos[0].authorAttributions[0].displayName",
+              "photos[0].authorAttributions[0].uri",
+              "photos[0].authorAttributions[0].photoUri"
+            ],
+            "review_text_lengths": {}
+          }
+        }
+      ],
+      "tests": [
+        "test_recorded_v10_long_form_place_id_accepted_by_details"
+      ]
+    },
+    {
+      "id": "V11",
+      "label": "nextOpenTime populated",
+      "state": "recorded in session 2",
+      "note": "Prevalence basis, twenty of twenty places in the source body were closed at the call instant and carry nextOpenTime in both hours objects.",
+      "fixtures": [
+        {
+          "file": "recorded_V11_next_open_time_populated.json",
+          "session": "S2",
+          "exchange": "06_exchange.json",
+          "endpoint": "searchText",
+          "request_mask": "places.id,places.name,places.displayName,places.formattedAddress,places.location,places.rating,places.userRatingCount,places.types,places.primaryType,places.priceLevel,places.businessStatus,places.photos,nextPageToken,places.currentOpeningHours,places.regularOpeningHours",
+          "selector_place_ids": [
+            "ChIJywdI5etRqEcRUVD-ycuGL6M"
+          ],
+          "source_body_sha256": "aaa29cbf2b7d758169c5b412b4fd08cb0681f0538ac6a5709b39b77d99cbfaf7",
+          "fixture_sha256": "24f6e2e32dc2a7952a3f2e8e9cdc30d10c45732037068fe0a3b5c9e8f247192f",
+          "size_bytes": 4168,
+          "size_exception": null,
+          "trims": [
+            {
+              "path": "nextPageToken",
+              "kind": "value_removed"
+            },
+            {
+              "path": "places[0].photos",
+              "kind": "array_cut_to_first",
+              "original_length": 10
+            }
+          ],
+          "redactions": {
+            "paths": [
+              "places[0].photos[0].authorAttributions[0].displayName",
+              "places[0].photos[0].authorAttributions[0].uri",
+              "places[0].photos[0].authorAttributions[0].photoUri"
+            ],
+            "review_text_lengths": {}
+          }
+        }
+      ],
+      "tests": [
+        "test_recorded_v11_next_open_time_populated"
+      ]
+    },
+    {
+      "id": "A1",
+      "label": "No street number",
+      "state": "recorded in session 2",
+      "note": "Twenty six component bearing places across the session 2 sets share the route with no number shape.",
+      "fixtures": [
+        {
+          "file": "recorded_A1_no_street_number.json",
+          "session": "S2",
+          "exchange": "21_exchange.json",
+          "endpoint": "placeDetails",
+          "request_mask": "id,name,displayName,formattedAddress,shortFormattedAddress,location,rating,userRatingCount,types,primaryType,priceLevel,businessStatus,photos,nationalPhoneNumber,internationalPhoneNumber,websiteUri,googleMapsUri,regularOpeningHours,currentOpeningHours,currentSecondaryOpeningHours,regularSecondaryOpeningHours,addressComponents,adrFormatAddress,plusCode,postalAddress,primaryTypeDisplayName,viewport,attributions,googleMapsTypeLabel,editorialSummary,iconMaskBaseUri,iconBackgroundColor,openingDate,utcOffsetMinutes,pureServiceAreaBusiness,movedPlace,movedPlaceId,reviews,takeout,delivery,dineIn,curbsidePickup,reservable,servesBreakfast,servesLunch,servesDinner,servesBeer,servesWine,servesBrunch,servesVegetarianFood,outdoorSeating,liveMusic,menuForChildren,servesCocktails,servesDessert,servesCoffee,goodForChildren,allowsDogs,restroom,goodForGroups,goodForWatchingSports,paymentOptions,parkingOptions,accessibilityOptions,timeZone,generativeSummary,reviewSummary,consumerAlert,googleMapsLinks,priceRange,evChargeOptions,addressDescriptor",
+          "selector_place_ids": [
+            "EiZXaWxsaWFtc2J1cmcgQnJpZGdlLCBOZXcgWW9yaywgTlksIFVTQSIuKiwKFAoSCccn3dnXW8KJEdugE_vLf17YEhQKEgk7CD_TpU_CiRFi_nfhBo8LyA"
+          ],
+          "source_body_sha256": "879dbe784cca946ea0426203abf4131a519d886bf6c365007f0a9a0a6a66d6b4",
+          "fixture_sha256": "054edf6a0b0a8cb061d701de8ca2db7f23fdcc87e063e5dd5d16d7007d2b3cf4",
+          "size_bytes": 3263,
+          "size_exception": null,
+          "trims": [
+            {
+              "path": "photos",
+              "kind": "array_cut_to_first",
+              "original_length": 10
+            }
+          ],
+          "redactions": {
+            "paths": [
+              "photos[0].authorAttributions[0].displayName",
+              "photos[0].authorAttributions[0].uri",
+              "photos[0].authorAttributions[0].photoUri"
+            ],
+            "review_text_lengths": {}
+          }
+        }
+      ],
+      "tests": [
+        "test_recorded_a1_no_street_number"
+      ]
+    },
+    {
+      "id": "A2",
+      "label": "No locality component, sublocality carries the city",
+      "state": "recorded in session 1",
+      "note": "The same body carries the place attributions omission that a side assertion in its test pins.",
+      "fixtures": [
+        {
+          "file": "recorded_A2_no_locality_sublocality_city.json",
+          "session": "S1",
+          "exchange": "02_exchange.json",
+          "endpoint": "placeDetails",
+          "request_mask": "id,name,displayName,formattedAddress,shortFormattedAddress,location,rating,userRatingCount,types,primaryType,priceLevel,businessStatus,photos,nationalPhoneNumber,internationalPhoneNumber,websiteUri,googleMapsUri,regularOpeningHours,currentOpeningHours,addressComponents,adrFormatAddress,plusCode,postalAddress,primaryTypeDisplayName,viewport,attributions",
+          "selector_place_ids": [
+            "ChIJzRBPAz5ZwokRd0AUXGm-2f8"
+          ],
+          "source_body_sha256": "e56b8775d87e0753a89f5db082ce288bdf3173dae19ea1bcc6510e4cd327057c",
+          "fixture_sha256": "2f59563f4ab73440554795e3d066c6384a3d9fb5305ebd7dba55d3df7c5aabad",
+          "size_bytes": 6159,
+          "size_exception": null,
+          "trims": [
+            {
+              "path": "photos",
+              "kind": "array_cut_to_first",
+              "original_length": 10
+            }
+          ],
+          "redactions": {
+            "paths": [
+              "photos[0].authorAttributions[0].displayName",
+              "photos[0].authorAttributions[0].uri",
+              "photos[0].authorAttributions[0].photoUri"
+            ],
+            "review_text_lengths": {}
+          }
+        }
+      ],
+      "tests": [
+        "test_recorded_a2_no_locality_sublocality_carries_city"
+      ]
+    },
+    {
+      "id": "A3",
+      "label": "Postal town carries the city",
+      "state": "recorded in session 2",
+      "note": "Prevalence basis, twenty of twenty results in the source body carry a postal town component.",
+      "fixtures": [
+        {
+          "file": "recorded_A3_postal_town_carries_city.json",
+          "session": "S2",
+          "exchange": "13_exchange.json",
+          "endpoint": "searchText",
+          "request_mask": "places.id,places.name,places.displayName,places.formattedAddress,places.location,places.rating,places.userRatingCount,places.types,places.primaryType,places.priceLevel,places.businessStatus,places.photos,nextPageToken,places.addressComponents",
+          "selector_place_ids": [
+            "ChIJGZS3NZwlcUgRZF3cPB1OFGk"
+          ],
+          "source_body_sha256": "48d61b93df6fd893380bbf1cbeed68bc67380b9c2e7f59de33e0bcbfaa10bd62",
+          "fixture_sha256": "568b2f6d5c09218a2bb25dfb1b7bd1aaa06429048cddf94246ec90971660094d",
+          "size_bytes": 2399,
+          "size_exception": null,
+          "trims": [
+            {
+              "path": "nextPageToken",
+              "kind": "value_removed"
+            },
+            {
+              "path": "places[0].photos",
+              "kind": "array_cut_to_first",
+              "original_length": 10
+            }
+          ],
+          "redactions": {
+            "paths": [
+              "places[0].photos[0].authorAttributions[0].displayName",
+              "places[0].photos[0].authorAttributions[0].uri",
+              "places[0].photos[0].authorAttributions[0].photoUri"
+            ],
+            "review_text_lengths": {}
+          }
+        }
+      ],
+      "tests": [
+        "test_recorded_a3_postal_town_carries_the_city"
+      ]
+    },
+    {
+      "id": "A4",
+      "label": "Locality and postal town disagree",
+      "state": "recorded in session 2",
+      "note": "Prevalence basis, twenty of twenty results in the source body carry locality Bourton-on-the-Water against postal town Cheltenham on the same component list.",
+      "fixtures": [
+        {
+          "file": "recorded_A4_locality_postal_town_disagree.json",
+          "session": "S2",
+          "exchange": "13_exchange.json",
+          "endpoint": "searchText",
+          "request_mask": "places.id,places.name,places.displayName,places.formattedAddress,places.location,places.rating,places.userRatingCount,places.types,places.primaryType,places.priceLevel,places.businessStatus,places.photos,nextPageToken,places.addressComponents",
+          "selector_place_ids": [
+            "ChIJGZS3NZwlcUgRZF3cPB1OFGk"
+          ],
+          "source_body_sha256": "48d61b93df6fd893380bbf1cbeed68bc67380b9c2e7f59de33e0bcbfaa10bd62",
+          "fixture_sha256": "568b2f6d5c09218a2bb25dfb1b7bd1aaa06429048cddf94246ec90971660094d",
+          "size_bytes": 2399,
+          "size_exception": null,
+          "trims": [
+            {
+              "path": "nextPageToken",
+              "kind": "value_removed"
+            },
+            {
+              "path": "places[0].photos",
+              "kind": "array_cut_to_first",
+              "original_length": 10
+            }
+          ],
+          "redactions": {
+            "paths": [
+              "places[0].photos[0].authorAttributions[0].displayName",
+              "places[0].photos[0].authorAttributions[0].uri",
+              "places[0].photos[0].authorAttributions[0].photoUri"
+            ],
+            "review_text_lengths": {}
+          }
+        }
+      ],
+      "tests": [
+        "test_recorded_a4_locality_and_postal_town_disagree"
+      ]
+    },
+    {
+      "id": "A5",
+      "label": "Sublocality chains",
+      "state": "recorded in session 2",
+      "note": "The first result stacks sublocality with levels two, three, and four in one component list, and the English twin in the A8 pair repeats the chain.",
+      "fixtures": [
+        {
+          "file": "recorded_A5_sublocality_chains.json",
+          "session": "S2",
+          "exchange": "10_exchange.json",
+          "endpoint": "searchText",
+          "request_mask": "places.id,places.name,places.displayName,places.formattedAddress,places.location,places.rating,places.userRatingCount,places.types,places.primaryType,places.priceLevel,places.businessStatus,places.photos,nextPageToken,places.addressComponents,places.postalAddress",
+          "selector_place_ids": [
+            "ChIJzVXOw5SPGGAR7yVtRAihT7o"
+          ],
+          "source_body_sha256": "2d46da9f928414016ede45e8ad59e7614a6b6087d88f02a2d57d102660b56acf",
+          "fixture_sha256": "c9143e400d1f226856001a4738d7a0744c1014a676449ed342d99e4eb9a81393",
+          "size_bytes": 2784,
+          "size_exception": null,
+          "trims": [
+            {
+              "path": "nextPageToken",
+              "kind": "value_removed"
+            },
+            {
+              "path": "places[0].photos",
+              "kind": "array_cut_to_first",
+              "original_length": 10
+            }
+          ],
+          "redactions": {
+            "paths": [
+              "places[0].photos[0].authorAttributions[0].displayName",
+              "places[0].photos[0].authorAttributions[0].uri",
+              "places[0].photos[0].authorAttributions[0].photoUri"
+            ],
+            "review_text_lengths": {}
+          }
+        }
+      ],
+      "tests": [
+        "test_recorded_a5_sublocality_chains"
+      ]
+    },
+    {
+      "id": "A6",
+      "label": "Japanese block addressing",
+      "state": "recorded in session 2",
+      "note": "The chain descends through ward and district and block number fragments with a seven digit postal code and full width digit characters.",
+      "fixtures": [
+        {
+          "file": "recorded_A6_japanese_block_addressing.json",
+          "session": "S2",
+          "exchange": "10_exchange.json",
+          "endpoint": "searchText",
+          "request_mask": "places.id,places.name,places.displayName,places.formattedAddress,places.location,places.rating,places.userRatingCount,places.types,places.primaryType,places.priceLevel,places.businessStatus,places.photos,nextPageToken,places.addressComponents,places.postalAddress",
+          "selector_place_ids": [
+            "ChIJzVXOw5SPGGAR7yVtRAihT7o"
+          ],
+          "source_body_sha256": "2d46da9f928414016ede45e8ad59e7614a6b6087d88f02a2d57d102660b56acf",
+          "fixture_sha256": "c9143e400d1f226856001a4738d7a0744c1014a676449ed342d99e4eb9a81393",
+          "size_bytes": 2784,
+          "size_exception": null,
+          "trims": [
+            {
+              "path": "nextPageToken",
+              "kind": "value_removed"
+            },
+            {
+              "path": "places[0].photos",
+              "kind": "array_cut_to_first",
+              "original_length": 10
+            }
+          ],
+          "redactions": {
+            "paths": [
+              "places[0].photos[0].authorAttributions[0].displayName",
+              "places[0].photos[0].authorAttributions[0].uri",
+              "places[0].photos[0].authorAttributions[0].photoUri"
+            ],
+            "review_text_lengths": {}
+          }
+        }
+      ],
+      "tests": [
+        "test_recorded_a6_japanese_block_addressing"
+      ]
+    },
+    {
+      "id": "A7",
+      "label": "Right-to-left script address",
+      "state": "recorded in session 2",
+      "note": "Two places ride in one fixture because the corpus address length record and the plus code component type sit on different places in the same body and no single place carries both.",
+      "fixtures": [
+        {
+          "file": "recorded_A7_rtl_script_address.json",
+          "session": "S2",
+          "exchange": "12_exchange.json",
+          "endpoint": "searchText",
+          "request_mask": "places.id,places.name,places.displayName,places.formattedAddress,places.location,places.rating,places.userRatingCount,places.types,places.primaryType,places.priceLevel,places.businessStatus,places.photos,nextPageToken,places.addressComponents,places.postalAddress",
+          "selector_place_ids": [
+            "ChIJ4TyFlYFCXz4RNMf0stgxhLc",
+            "ChIJUUpqvgVDXz4RgVl27UZC1ko"
+          ],
+          "source_body_sha256": "eb815704f09530a318db11fb2d3934dd20668e9f61f9b8e6643ab9c0d4fb44c4",
+          "fixture_sha256": "8e6c7329841854a4c7808d7f541cae98797768948ebd5d60d95ceec47e7e497e",
+          "size_bytes": 7083,
+          "size_exception": null,
+          "trims": [
+            {
+              "path": "nextPageToken",
+              "kind": "value_removed"
+            },
+            {
+              "path": "places[0].photos",
+              "kind": "array_cut_to_first",
+              "original_length": 10
+            },
+            {
+              "path": "places[1].photos",
+              "kind": "array_cut_to_first",
+              "original_length": 10
+            }
+          ],
+          "redactions": {
+            "paths": [
+              "places[0].photos[0].authorAttributions[0].displayName",
+              "places[0].photos[0].authorAttributions[0].uri",
+              "places[0].photos[0].authorAttributions[0].photoUri",
+              "places[1].photos[0].authorAttributions[0].displayName",
+              "places[1].photos[0].authorAttributions[0].uri",
+              "places[1].photos[0].authorAttributions[0].photoUri"
+            ],
+            "review_text_lengths": {}
+          }
+        }
+      ],
+      "tests": [
+        "test_recorded_a7_right_to_left_script_address"
+      ]
+    },
+    {
+      "id": "A8",
+      "label": "Multi-script names for one place",
+      "state": "recorded in session 2",
+      "note": "One place under two request languages, with the formatted address, the component scripts, and the address order differing between the pair while the roman display name stays the same.",
+      "fixtures": [
+        {
+          "file": "recorded_A8_tokyo_japanese.json",
+          "session": "S2",
+          "exchange": "10_exchange.json",
+          "endpoint": "searchText",
+          "request_mask": "places.id,places.name,places.displayName,places.formattedAddress,places.location,places.rating,places.userRatingCount,places.types,places.primaryType,places.priceLevel,places.businessStatus,places.photos,nextPageToken,places.addressComponents,places.postalAddress",
+          "selector_place_ids": [
+            "ChIJzVXOw5SPGGAR7yVtRAihT7o"
+          ],
+          "source_body_sha256": "2d46da9f928414016ede45e8ad59e7614a6b6087d88f02a2d57d102660b56acf",
+          "fixture_sha256": "c9143e400d1f226856001a4738d7a0744c1014a676449ed342d99e4eb9a81393",
+          "size_bytes": 2784,
+          "size_exception": null,
+          "trims": [
+            {
+              "path": "nextPageToken",
+              "kind": "value_removed"
+            },
+            {
+              "path": "places[0].photos",
+              "kind": "array_cut_to_first",
+              "original_length": 10
+            }
+          ],
+          "redactions": {
+            "paths": [
+              "places[0].photos[0].authorAttributions[0].displayName",
+              "places[0].photos[0].authorAttributions[0].uri",
+              "places[0].photos[0].authorAttributions[0].photoUri"
+            ],
+            "review_text_lengths": {}
+          }
+        },
+        {
+          "file": "recorded_A8_tokyo_english.json",
+          "session": "S2",
+          "exchange": "11_exchange.json",
+          "endpoint": "searchText",
+          "request_mask": "places.id,places.name,places.displayName,places.formattedAddress,places.location,places.rating,places.userRatingCount,places.types,places.primaryType,places.priceLevel,places.businessStatus,places.photos,nextPageToken,places.addressComponents,places.postalAddress",
+          "selector_place_ids": [
+            "ChIJzVXOw5SPGGAR7yVtRAihT7o"
+          ],
+          "source_body_sha256": "827e89acc759211c65ae256e8ae9229467a115fc5fa1f108e642bc49521ce9d1",
+          "fixture_sha256": "2cb2d29618536373a25d6856aa75e86a520f06c5a278e575710410c45d3712f1",
+          "size_bytes": 2578,
+          "size_exception": null,
+          "trims": [
+            {
+              "path": "nextPageToken",
+              "kind": "value_removed"
+            },
+            {
+              "path": "places[0].photos",
+              "kind": "array_cut_to_first",
+              "original_length": 10
+            }
+          ],
+          "redactions": {
+            "paths": [
+              "places[0].photos[0].authorAttributions[0].displayName",
+              "places[0].photos[0].authorAttributions[0].uri",
+              "places[0].photos[0].authorAttributions[0].photoUri"
+            ],
+            "review_text_lengths": {}
+          }
+        }
+      ],
+      "tests": [
+        "test_recorded_a8_multi_script_names_for_one_place"
+      ]
+    },
+    {
+      "id": "A9",
+      "label": "Country without postal codes",
+      "state": "recorded in session 2",
+      "note": "Prevalence basis, none of the twenty places carries a postal code component and none of the twenty postal addresses carries a postal code field.",
+      "fixtures": [
+        {
+          "file": "recorded_A9_country_without_postal_codes.json",
+          "session": "S2",
+          "exchange": "12_exchange.json",
+          "endpoint": "searchText",
+          "request_mask": "places.id,places.name,places.displayName,places.formattedAddress,places.location,places.rating,places.userRatingCount,places.types,places.primaryType,places.priceLevel,places.businessStatus,places.photos,nextPageToken,places.addressComponents,places.postalAddress",
+          "selector_place_ids": [
+            "ChIJ98qoMwBDXz4RXUcEE0Tvwug"
+          ],
+          "source_body_sha256": "eb815704f09530a318db11fb2d3934dd20668e9f61f9b8e6643ab9c0d4fb44c4",
+          "fixture_sha256": "61416a57b165f7512c682558718755836ae6ae04c099494578731f4145355f32",
+          "size_bytes": 3610,
+          "size_exception": null,
+          "trims": [
+            {
+              "path": "nextPageToken",
+              "kind": "value_removed"
+            },
+            {
+              "path": "places[0].photos",
+              "kind": "array_cut_to_first",
+              "original_length": 10
+            }
+          ],
+          "redactions": {
+            "paths": [
+              "places[0].photos[0].authorAttributions[0].displayName",
+              "places[0].photos[0].authorAttributions[0].uri",
+              "places[0].photos[0].authorAttributions[0].photoUri"
+            ],
+            "review_text_lengths": {}
+          }
+        }
+      ],
+      "tests": [
+        "test_recorded_a9_country_without_postal_codes"
+      ]
+    },
+    {
+      "id": "A10",
+      "label": "Disputed and in-flux administrative areas",
+      "state": "recorded in session 2",
+      "note": "The expected variance did not occur, and the only body differences between the pair sit in the photo entries, which the photo trim reduces to the first entry in each fixture.",
+      "fixtures": [
+        {
+          "file": "recorded_A10_jerusalem_no_region_code.json",
+          "session": "S2",
+          "exchange": "16_exchange.json",
+          "endpoint": "placeDetails",
+          "request_mask": "id,name,displayName,formattedAddress,shortFormattedAddress,location,rating,userRatingCount,types,primaryType,priceLevel,businessStatus,photos,nationalPhoneNumber,internationalPhoneNumber,websiteUri,googleMapsUri,regularOpeningHours,currentOpeningHours,currentSecondaryOpeningHours,regularSecondaryOpeningHours,addressComponents,adrFormatAddress,plusCode,postalAddress,primaryTypeDisplayName,viewport,attributions,googleMapsTypeLabel,editorialSummary,iconMaskBaseUri,iconBackgroundColor,openingDate,utcOffsetMinutes,pureServiceAreaBusiness,movedPlace,movedPlaceId,reviews,takeout,delivery,dineIn,curbsidePickup,reservable,servesBreakfast,servesLunch,servesDinner,servesBeer,servesWine,servesBrunch,servesVegetarianFood,outdoorSeating,liveMusic,menuForChildren,servesCocktails,servesDessert,servesCoffee,goodForChildren,allowsDogs,restroom,goodForGroups,goodForWatchingSports,paymentOptions,parkingOptions,accessibilityOptions,timeZone,generativeSummary,reviewSummary,consumerAlert,googleMapsLinks,priceRange,evChargeOptions,addressDescriptor",
+          "selector_place_ids": [
+            "ChIJS_zBNNbXAhURy-FuRT5ib9k"
+          ],
+          "source_body_sha256": "8a994093c4055d5dfa5e13936a0b59fdc778cbbb2c8dcb09b4314d6beab8ef63",
+          "fixture_sha256": "5b83a024c2cf215e4b0b9ba4d71d55999a2096e9ec0bcf682d01a2df10cb7fb4",
+          "size_bytes": 2835,
+          "size_exception": null,
+          "trims": [
+            {
+              "path": "photos",
+              "kind": "array_cut_to_first",
+              "original_length": 10
+            }
+          ],
+          "redactions": {
+            "paths": [
+              "photos[0].authorAttributions[0].displayName",
+              "photos[0].authorAttributions[0].uri",
+              "photos[0].authorAttributions[0].photoUri"
+            ],
+            "review_text_lengths": {}
+          }
+        },
+        {
+          "file": "recorded_A10_jerusalem_region_ps.json",
+          "session": "S2",
+          "exchange": "17_exchange.json",
+          "endpoint": "placeDetails",
+          "request_mask": "id,name,displayName,formattedAddress,shortFormattedAddress,location,rating,userRatingCount,types,primaryType,priceLevel,businessStatus,photos,nationalPhoneNumber,internationalPhoneNumber,websiteUri,googleMapsUri,regularOpeningHours,currentOpeningHours,currentSecondaryOpeningHours,regularSecondaryOpeningHours,addressComponents,adrFormatAddress,plusCode,postalAddress,primaryTypeDisplayName,viewport,attributions,googleMapsTypeLabel,editorialSummary,iconMaskBaseUri,iconBackgroundColor,openingDate,utcOffsetMinutes,pureServiceAreaBusiness,movedPlace,movedPlaceId,reviews,takeout,delivery,dineIn,curbsidePickup,reservable,servesBreakfast,servesLunch,servesDinner,servesBeer,servesWine,servesBrunch,servesVegetarianFood,outdoorSeating,liveMusic,menuForChildren,servesCocktails,servesDessert,servesCoffee,goodForChildren,allowsDogs,restroom,goodForGroups,goodForWatchingSports,paymentOptions,parkingOptions,accessibilityOptions,timeZone,generativeSummary,reviewSummary,consumerAlert,googleMapsLinks,priceRange,evChargeOptions,addressDescriptor",
+          "selector_place_ids": [
+            "ChIJS_zBNNbXAhURy-FuRT5ib9k"
+          ],
+          "source_body_sha256": "47b3a802bad1a4161f2246fc6fbdd5d66b88a51590d713b8cf6b8da5de07b923",
+          "fixture_sha256": "33910f1187e518aa6617915c9c9e66c302752b374cd26520be43799d46fb8878",
+          "size_bytes": 2841,
+          "size_exception": null,
+          "trims": [
+            {
+              "path": "photos",
+              "kind": "array_cut_to_first",
+              "original_length": 10
+            }
+          ],
+          "redactions": {
+            "paths": [
+              "photos[0].authorAttributions[0].displayName",
+              "photos[0].authorAttributions[0].uri",
+              "photos[0].authorAttributions[0].photoUri"
+            ],
+            "review_text_lengths": {}
+          }
+        }
+      ],
+      "tests": [
+        "test_recorded_a10_disputed_administrative_area_pair"
+      ]
+    },
+    {
+      "id": "A11",
+      "label": "Component present but empty",
+      "state": "synthesized candidate",
+      "note": "A scan of every component in both sessions found no empty long text, no empty short text, and no empty address components list.",
+      "fixtures": [
+        {
+          "file": "synthesized_A11_component_present_but_empty.json",
+          "origin": "synthesized",
+          "basis": "documented addressComponents shape",
+          "statement": "No recording of this shape exists. A scan of every recorded component found no empty text field and no empty component list.",
+          "fixture_sha256": "2f4577bbd85f61c0b66500a9f3d8d100a577539f38ca1fc0ab6f33e3cd3acc1f",
+          "size_bytes": 832,
+          "size_exception": null
+        }
+      ],
+      "tests": [
+        "test_synthesized_a11_component_present_but_empty_decodes"
+      ]
+    },
+    {
+      "id": "A12",
+      "label": "Very long formatted address",
+      "state": "recorded in session 2",
+      "note": "The record must not describe the Welsh addresses as the longest in the corpus, since the Arabic addresses behind the A7 observation run far longer.",
+      "cross_reference": "The long formatted address evidence for this case label sits in observation OBS6, hosted on the A7 fixture, where the Arabic formatted addresses run from 126 to 130 characters.",
+      "fixtures": [
+        {
+          "file": "recorded_A12_long_village_name.json",
+          "session": "S2",
+          "exchange": "14_exchange.json",
+          "endpoint": "searchText",
+          "request_mask": "places.id,places.name,places.displayName,places.formattedAddress,places.location,places.rating,places.userRatingCount,places.types,places.primaryType,places.priceLevel,places.businessStatus,places.photos,nextPageToken",
+          "selector_place_ids": [
+            "ChIJaXoVnASpZUgRwmxnGAkXgx4",
+            "ChIJ6UJwtHmpZUgR0gUI1R5g0D4"
+          ],
+          "source_body_sha256": "ac8a1c86d8b6a93e836abdc3fc21e6b9d75a8d6a77b27dc3b07bf6e8d2ea06de",
+          "fixture_sha256": "bfe76a808bbf1a9c2abff694eb2369e34288a6a1361615ce9912ced9aa1017d8",
+          "size_bytes": 2970,
+          "size_exception": null,
+          "trims": [
+            {
+              "path": "places[0].photos",
+              "kind": "array_cut_to_first",
+              "original_length": 10
+            },
+            {
+              "path": "places[1].photos",
+              "kind": "array_cut_to_first",
+              "original_length": 10
+            }
+          ],
+          "redactions": {
+            "paths": [
+              "places[0].photos[0].authorAttributions[0].displayName",
+              "places[0].photos[0].authorAttributions[0].uri",
+              "places[0].photos[0].authorAttributions[0].photoUri",
+              "places[1].photos[0].authorAttributions[0].displayName",
+              "places[1].photos[0].authorAttributions[0].uri",
+              "places[1].photos[0].authorAttributions[0].photoUri"
+            ],
+            "review_text_lengths": {}
+          }
+        }
+      ],
+      "tests": [
+        "test_recorded_a12_very_long_name_and_address_ceiling"
+      ]
+    },
+    {
+      "id": "A13",
+      "label": "Premise and subpremise",
+      "state": "recorded in session 2",
+      "note": "Premise and subpremise co-occur in this one Tokyo body, and subpremise components also run across the Dubai set.",
+      "fixtures": [
+        {
+          "file": "recorded_A13_premise_and_subpremise.json",
+          "session": "S2",
+          "exchange": "10_exchange.json",
+          "endpoint": "searchText",
+          "request_mask": "places.id,places.name,places.displayName,places.formattedAddress,places.location,places.rating,places.userRatingCount,places.types,places.primaryType,places.priceLevel,places.businessStatus,places.photos,nextPageToken,places.addressComponents,places.postalAddress",
+          "selector_place_ids": [
+            "ChIJUXs3NtOPGGARhehCaUQo5J8"
+          ],
+          "source_body_sha256": "2d46da9f928414016ede45e8ad59e7614a6b6087d88f02a2d57d102660b56acf",
+          "fixture_sha256": "9d52b9f8b3b0c097f46578b06b6451417b131902eb1c3bba557a8dea73ff9bb1",
+          "size_bytes": 2930,
+          "size_exception": null,
+          "trims": [
+            {
+              "path": "nextPageToken",
+              "kind": "value_removed"
+            },
+            {
+              "path": "places[0].photos",
+              "kind": "array_cut_to_first",
+              "original_length": 10
+            }
+          ],
+          "redactions": {
+            "paths": [
+              "places[0].photos[0].authorAttributions[0].displayName",
+              "places[0].photos[0].authorAttributions[0].uri",
+              "places[0].photos[0].authorAttributions[0].photoUri"
+            ],
+            "review_text_lengths": {}
+          }
+        }
+      ],
+      "tests": [
+        "test_recorded_a13_premise_and_subpremise"
+      ]
+    },
+    {
+      "id": "A14",
+      "label": "Intersection as the address",
+      "state": "hunted and missed in R12",
+      "hunt_note": "The neighbouring hunt was the bridge details call in session 2 cassette 21, whose body carries a single route component for a route type place, and no dedicated junction search ran.",
+      "state_basis": "The state rests on a corpus wide absence basis. An intersection component appears in no recorded body in either session, which separates this case from A15, whose shape needed a search type that never ran.",
+      "fixtures": [],
+      "tests": []
+    },
+    {
+      "id": "A15",
+      "label": "Colloquial area and neighborhood only",
+      "state": "still open",
+      "open_note": "The colloquial area component appears in no body in either session, and no call combined a large US city search with an addressComponents mask, so the planned scan instrument never pointed at this case.",
+      "fixtures": [],
+      "tests": []
+    },
+    {
+      "id": "A16",
+      "label": "Postal code prefix and suffix forms",
+      "state": "hunted and missed in R12",
+      "hunt_note": "The suffix side rode inside the session 2 details calls in cassettes 02 and 21, and those bodies carry a plain postal code or none, and the prefix side was never targeted on its own.",
+      "fixtures": [],
+      "tests": []
+    },
+    {
+      "id": "A17",
+      "label": "Sorting code in the postal address",
+      "state": "still open",
+      "open_note": "No French address was recorded because the executed plan held no France call, and sortingCode appears in no postal address in either session.",
+      "fixtures": [],
+      "tests": []
+    },
+    {
+      "id": "A18",
+      "label": "Components that change between requests",
+      "state": "still open",
+      "open_note": "The plan deliberately deferred the second day repeat probe, and the same day repeats the sessions did capture returned identical component sets, so no change instance exists in the corpus.",
+      "fixtures": [],
+      "tests": []
+    }
+  ],
+  "observations": [
+    {
+      "id": "OBS1",
+      "summary": "A requested field vanishes across a whole result set",
+      "fixture": "recorded_OBS1_requested_field_vanishes.json",
+      "host_fixtures": [],
+      "session": "S2",
+      "exchange": "26_exchange.json",
+      "endpoint": "searchText",
+      "request_mask": "places.id,places.name,places.displayName,places.formattedAddress,places.location,places.rating,places.userRatingCount,places.types,places.primaryType,places.priceLevel,places.businessStatus,places.photos,nextPageToken",
+      "selector_place_ids": [
+        "ChIJx7K17Ji3t4kRr3VvqMTw7cc"
+      ],
+      "source_body_sha256": "d1a5dd9603311d878f502ac98fda684d2832a4c8e35efa5d623094dcdf15bea2",
+      "fixture_sha256": "cf227c8642bea094da34ae815f3abf71f5e4c13c3da0be099697f90ca57189e4",
+      "size_bytes": 1462,
+      "size_exception": null,
+      "trims": [
+        {
+          "path": "nextPageToken",
+          "kind": "value_removed"
+        },
+        {
+          "path": "places[0].photos",
+          "kind": "array_cut_to_first",
+          "original_length": 10
+        }
+      ],
+      "redactions": {
+        "paths": [
+          "places[0].photos[0].authorAttributions[0].displayName",
+          "places[0].photos[0].authorAttributions[0].uri",
+          "places[0].photos[0].authorAttributions[0].photoUri"
+        ],
+        "review_text_lengths": {}
+      },
+      "tests": [
+        "test_observation_requested_field_vanishes_across_a_result_set"
+      ],
+      "note": "The Washington museums body requested priceLevel in its mask and all twenty results omit the key. The fixture pins one result and this note carries the set wide basis."
+    },
+    {
+      "id": "OBS2",
+      "summary": "Pure service area status splits by endpoint depth",
+      "fixture": "recorded_OBS2_pure_service_area_depth_split.json",
+      "host_fixtures": [],
+      "session": "S2",
+      "exchange": "20_exchange.json",
+      "endpoint": "searchText",
+      "request_mask": "places.id,places.name,places.displayName,places.formattedAddress,places.location,places.rating,places.userRatingCount,places.types,places.primaryType,places.priceLevel,places.businessStatus,places.photos,nextPageToken,places.pureServiceAreaBusiness",
+      "selector_place_ids": [
+        "ChIJkaUn1JPTD4gR7ZWpE9cCuow"
+      ],
+      "source_body_sha256": "079be7a522affc98476a767953e4e5229fed0b88ee3143541cfa6d0b5ae045a3",
+      "fixture_sha256": "397a3002d815474fcaf189b6a2776ddc455eda1c064bc69896a6546547091cdf",
+      "size_bytes": 1449,
+      "size_exception": null,
+      "trims": [
+        {
+          "path": "nextPageToken",
+          "kind": "value_removed"
+        },
+        {
+          "path": "places[0].photos",
+          "kind": "array_cut_to_first",
+          "original_length": 10
+        }
+      ],
+      "redactions": {
+        "paths": [
+          "places[0].photos[0].authorAttributions[0].displayName",
+          "places[0].photos[0].authorAttributions[0].uri",
+          "places[0].photos[0].authorAttributions[0].photoUri"
+        ],
+        "review_text_lengths": {}
+      },
+      "tests": [
+        "test_observation_pure_service_area_business_splits_by_depth"
+      ],
+      "note": "Search results omit the key entirely while every details body in session 2 carries the field as explicit false. The fixture pins the search depth half on one result from a set of twenty that all omit the key."
+    },
+    {
+      "id": "OBS3",
+      "summary": "Secondary hours objects carry their own next close time",
+      "fixture": null,
+      "host_fixtures": [
+        "recorded_H7_secondary_hours.json"
+      ],
+      "tests": [
+        "test_observation_secondary_hours_carry_their_own_next_close_time"
+      ],
+      "note": "The mall store details fixture behind P15 adds a pickup secondary hours object of the same family."
+    },
+    {
+      "id": "OBS4",
+      "summary": "A plus code component type the address taxonomy never named",
+      "fixture": null,
+      "host_fixtures": [
+        "recorded_A7_rtl_script_address.json"
+      ],
+      "tests": [
+        "test_observation_plus_code_component_type"
+      ],
+      "note": "The component rides on the Atmosphere Burj Khalifa place in the A7 fixture."
+    },
+    {
+      "id": "OBS5",
+      "summary": "A landmark component type the address taxonomy never named",
+      "fixture": null,
+      "host_fixtures": [
+        "recorded_A9_country_without_postal_codes.json"
+      ],
+      "tests": [
+        "test_observation_landmark_component_type"
+      ],
+      "note": "The component rides on the Coco Dubai place in the A9 fixture."
+    },
+    {
+      "id": "OBS6",
+      "summary": "The longest formatted addresses in the corpus are Arabic",
+      "fixture": null,
+      "host_fixtures": [
+        "recorded_A7_rtl_script_address.json"
+      ],
+      "tests": [
+        "test_observation_arabic_formatted_address_length_record"
+      ],
+      "note": "Three Dubai formatted addresses run from 126 to 130 characters and stack unit, mall, boulevard, and district segments."
+    },
+    {
+      "id": "OBS7",
+      "summary": "Business status goes absent on non business places",
+      "fixture": null,
+      "host_fixtures": [
+        "recorded_A10_jerusalem_no_region_code.json",
+        "recorded_A10_jerusalem_region_ps.json",
+        "recorded_A1_no_street_number.json"
+      ],
+      "tests": [
+        "test_observation_business_status_absent_on_non_business_places"
+      ],
+      "note": "Six session 2 places, including the Jerusalem pair and the bridge, carry no businessStatus key at all rather than any enum value."
+    },
+    {
+      "id": "OBS8",
+      "summary": "The review sample changes with the request language",
+      "fixture": null,
+      "host_fixtures": [
+        "recorded_P15_details_depth_saigon.json",
+        "recorded_H11_description_order_vs_period_anchor.json"
+      ],
+      "tests": [
+        "test_observation_review_sample_changes_with_request_language"
+      ],
+      "note": "The German call returned five different reviews for the same hotel rather than a translation of the English sample."
+    }
+  ],
+  "legacy_fixtures": [
+    {
+      "file": "place_details.json",
+      "classification": "legacy hand built authored data",
+      "note": "Cited only as authored decode coverage for the typed place attributions model. Never live evidence, never a P14 pin, and never counted toward the recorded thirty five."
+    },
+    {
+      "file": "autocomplete.json",
+      "classification": "legacy hand built stub fixture",
+      "note": "Serves the stub routes for the pre corpus suite and is not part of the Round 13 corpus counts."
+    },
+    {
+      "file": "nearby_search.json",
+      "classification": "legacy hand built stub fixture",
+      "note": "Serves the stub routes for the pre corpus suite and is not part of the Round 13 corpus counts."
+    },
+    {
+      "file": "text_search.json",
+      "classification": "legacy hand built stub fixture",
+      "note": "Serves the stub routes for the pre corpus suite and is not part of the Round 13 corpus counts."
+    },
+    {
+      "file": "error_denied.json",
+      "classification": "legacy hand built stub fixture",
+      "note": "Serves the stub routes for the pre corpus suite and is not part of the Round 13 corpus counts."
+    },
+    {
+      "file": "error_invalid.json",
+      "classification": "legacy hand built stub fixture",
+      "note": "Serves the stub routes for the pre corpus suite and is not part of the Round 13 corpus counts."
+    },
+    {
+      "file": "error_not_found.json",
+      "classification": "legacy hand built stub fixture",
+      "note": "Serves the stub routes for the pre corpus suite and is not part of the Round 13 corpus counts."
+    },
+    {
+      "file": "error_quota.json",
+      "classification": "legacy hand built stub fixture",
+      "note": "Serves the stub routes for the pre corpus suite and is not part of the Round 13 corpus counts."
+    },
+    {
+      "file": "error_unauthenticated.json",
+      "classification": "legacy hand built stub fixture",
+      "note": "Serves the stub routes for the pre corpus suite and is not part of the Round 13 corpus counts."
+    },
+    {
+      "file": "photo.png",
+      "classification": "legacy stub asset",
+      "note": "The offline photo route image and is not a fixture body."
+    }
+  ]
+}
