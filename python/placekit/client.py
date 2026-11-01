@@ -9,6 +9,7 @@ to use inside an event loop. Methods return the typed models in
 from __future__ import annotations
 
 import asyncio
+import json
 import math
 from collections.abc import Mapping
 from typing import Any, Callable, Iterable, Optional
@@ -276,17 +277,18 @@ def _mapping_body(name: str, value: Optional[dict[str, Any]]) -> Optional[dict[s
     return result
 
 
-def _photo_result(tagged: tuple[str, Any, Any]) -> PhotoMedia | PhotoUriResult:
+def _photo_result(tagged: tuple[str, Any, Any, int]) -> PhotoMedia | PhotoUriResult:
     """Turn the core's tagged photo tuple into a public model.
 
-    The uri arm's third element is the whole JSON form the endpoint
-    returned, as a dict. The model is built from it so the full form
-    is preserved on the result's ``raw``. The tuple's first element
-    repeats the URI already inside that dict and is not read.
+    The uri arm carries the typed dict and the response body text.
+    The model decodes its attributes from the dict and its ``raw``
+    from the parsed body, the same split the JSON endpoints use.
+    The status rides as the fourth element of both arms and is
+    consumed by the client's conversion wrapper, not here.
     """
-    tag, first, second = tagged
+    tag, first, second, _status = tagged
     if tag == "uri":
-        return PhotoUriResult.from_api(second)
+        return PhotoUriResult.from_api(first, raw=json.loads(second))
     if tag == "bytes":
         return PhotoMedia(content=first, content_type=second)
     raise DecodeError(f"photo result carried an unknown tag: {tag!r}")
@@ -567,24 +569,60 @@ class _Base:
         return float(value)
 
     @staticmethod
-    def _convert(convert: Callable[[Any], Any], data: Any, context: str):
+    def _convert(
+        convert: Callable[[Any], Any],
+        data: Any,
+        context: str,
+        status: Optional[int] = None,
+    ):
         """Run a model conversion over a decoded response.
 
         The model layer is a second decoder; its builtin failures
         (KeyError, TypeError and friends) are translated into
         DecodeError so callers only ever see the typed hierarchy. The
-        DecodeError carries the calling method as its context.
+        DecodeError carries the calling method as its context. When
+        the caller supplies the HTTP status of the response being
+        converted, which the core threads across with the body, a
+        conversion failure carries that status too, so a payload the
+        Python layer refuses still reports the status it arrived
+        with.
         """
         try:
             return convert(data)
         except DecodeError as exc:
             if exc.context is None:
-                raise DecodeError(str(exc), context=context) from exc
+                exc.context = context
+            if exc.status_code is None and status is not None:
+                exc.status_code = status
             raise
         except (KeyError, TypeError, ValueError, AttributeError, OverflowError) as exc:
             raise DecodeError(
-                f"response failed model conversion: {exc!r}", context=context
+                f"response failed model conversion: {exc!r}",
+                context=context,
+                status_code=status,
             ) from exc
+
+    @staticmethod
+    def _convert_body(
+        convert: Callable[..., Any],
+        payload: tuple[dict[str, Any], str, int],
+        context: str,
+    ):
+        """Convert one native JSON result into its public model.
+
+        The native layer returns the typed dict, the response body
+        text and the HTTP status as one tuple. Attributes decode
+        from the typed dict, and the body is parsed once here and
+        handed down as the raw source at every model level, which
+        is what makes raw the wire payload verbatim through the
+        client.
+        """
+        typed, body_text, status = payload
+
+        def build(data: Any) -> Any:
+            return convert(data, raw=json.loads(body_text))
+
+        return _Base._convert(build, typed, context, status=status)
 
     # Body builders shared by the sync and async method sets.
 
@@ -827,7 +865,7 @@ class Client(_Base):
             data = self._inner.text_search(body, fields_list)
         except _CorePlacesError as exc:
             raise_translated(exc, "text_search")
-        return self._convert(TextSearchResult.from_api, data, "text_search")
+        return self._convert_body(TextSearchResult.from_api, data, "text_search")
 
     def nearby_search(
         self,
@@ -876,7 +914,7 @@ class Client(_Base):
             data = self._inner.nearby_search(body, fields_list)
         except _CorePlacesError as exc:
             raise_translated(exc, "nearby_search")
-        return self._convert(NearbySearchResult.from_api, data, "nearby_search")
+        return self._convert_body(NearbySearchResult.from_api, data, "nearby_search")
 
     def place_details(
         self,
@@ -926,7 +964,7 @@ class Client(_Base):
             )
         except _CorePlacesError as exc:
             raise_translated(exc, context)
-        return self._convert(Place.from_api, data, context)
+        return self._convert_body(Place.from_api, data, context)
 
     def autocomplete(
         self,
@@ -982,7 +1020,7 @@ class Client(_Base):
             data = self._inner.autocomplete(body, fields_list)
         except _CorePlacesError as exc:
             raise_translated(exc, "autocomplete")
-        return self._convert(AutocompleteResult.from_api, data, "autocomplete")
+        return self._convert_body(AutocompleteResult.from_api, data, "autocomplete")
 
     def place_photo(
         self,
@@ -1035,7 +1073,7 @@ class Client(_Base):
             )
         except _CorePlacesError as exc:
             raise_translated(exc, context)
-        return self._convert(_photo_result, tagged, context)
+        return self._convert(_photo_result, tagged, context, status=tagged[3])
 
     def __enter__(self) -> "Client":
         return self
@@ -1113,7 +1151,7 @@ class AsyncClient(_Base):
             data = await self._inner.text_search_async(body, fields_list)
         except _CorePlacesError as exc:
             raise_translated(exc, "text_search")
-        return self._convert(TextSearchResult.from_api, data, "text_search")
+        return self._convert_body(TextSearchResult.from_api, data, "text_search")
 
     async def nearby_search(
         self,
@@ -1156,7 +1194,7 @@ class AsyncClient(_Base):
             data = await self._inner.nearby_search_async(body, fields_list)
         except _CorePlacesError as exc:
             raise_translated(exc, "nearby_search")
-        return self._convert(NearbySearchResult.from_api, data, "nearby_search")
+        return self._convert_body(NearbySearchResult.from_api, data, "nearby_search")
 
     async def place_details(
         self,
@@ -1205,7 +1243,7 @@ class AsyncClient(_Base):
             )
         except _CorePlacesError as exc:
             raise_translated(exc, context)
-        return self._convert(Place.from_api, data, context)
+        return self._convert_body(Place.from_api, data, context)
 
     async def autocomplete(
         self,
@@ -1255,7 +1293,7 @@ class AsyncClient(_Base):
             )
         except _CorePlacesError as exc:
             raise_translated(exc, "autocomplete")
-        return self._convert(AutocompleteResult.from_api, data, "autocomplete")
+        return self._convert_body(AutocompleteResult.from_api, data, "autocomplete")
 
     async def place_photo(
         self,
@@ -1302,7 +1340,7 @@ class AsyncClient(_Base):
             )
         except _CorePlacesError as exc:
             raise_translated(exc, context)
-        return self._convert(_photo_result, tagged, context)
+        return self._convert(_photo_result, tagged, context, status=tagged[3])
 
     async def __aenter__(self) -> "AsyncClient":
         return self

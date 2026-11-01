@@ -17,13 +17,14 @@ the mask never requested and fields the API had no value for,
 which cannot be told apart from the object. List attributes read
 an empty list in the same state, and a few string and number
 attributes read their empty default. The ``raw`` payload answers
-the narrower question of what the response carried, within one
-limit. At the model layer, and for fields this client does not
-model at all, a wire name is a key in ``raw`` exactly when the
-response carried that field. Through the client the core
-reserializes modelled fields, so a modelled field the response
-carried as an explicit null, or as an explicitly empty list,
-does not keep its key in ``raw``. No attribute raises for being
+the narrower question of what the response carried. A wire name
+is a key in ``raw`` exactly when the response carried that field,
+at the model layer and through the client alike. Through the
+client the core returns the response body beside the typed
+value and ``raw`` is built from the body itself, so an explicit
+null, an explicitly empty list, an empty string and a zero value
+all keep their keys, and no value the wire did not send is ever
+fabricated into it. No attribute raises for being
 unreturned, and the
 way to populate the full modelled set is a ``place_details``
 call, whose default mask requests all of it.
@@ -114,6 +115,32 @@ def _str_list(value: Any, model: str, key: str) -> list[str]:
         ) from exc
 
 
+def _raw_subtree(raw: Any, key: str, fallback: Any) -> Any:
+    """The raw source for a child model under one wire key.
+
+    When the raw source carries the key, its subtree is the child's
+    raw source, an explicit null included. When it does not, the
+    attribute source subtree stands in, which is the behaviour
+    direct model layer callers have always seen. Each decoder names
+    the wire key it reads, which is the same key the raw source is
+    read under, so the two trees stay aligned by construction.
+    """
+    if isinstance(raw, dict) and key in raw:
+        return raw[key]
+    return fallback
+
+
+def _raw_element(raw: Any, key: str, index: int, fallback: Any) -> Any:
+    """The raw source for one element of a list child, by wire
+    index, with the attribute element as the fallback when the raw
+    source has no element at that index."""
+    if isinstance(raw, dict):
+        items = raw.get(key)
+        if isinstance(items, list) and index < len(items):
+            return items[index]
+    return fallback
+
+
 def _reject_bare_string(model: str, field_name: str, value: Any) -> None:
     """Direct construction guard (RT5-L3): a list-typed field handed
     a bare string or bytes value would otherwise store it unchecked,
@@ -135,10 +162,13 @@ class LocalizedText:
     raw: dict[str, Any] = field(default_factory=dict, repr=False, compare=False)
 
     @classmethod
-    def from_api(cls, data: dict[str, Any]) -> "LocalizedText":
+    def from_api(
+        cls, data: dict[str, Any], raw: Optional[dict[str, Any]] = None
+    ) -> "LocalizedText":
         data = copy.deepcopy(data)
+        raw = data if raw is None else copy.deepcopy(raw)
         return cls(
-            text=data.get("text", ""), language_code=data.get("languageCode"), raw=data
+            text=data.get("text", ""), language_code=data.get("languageCode"), raw=raw
         )
 
 
@@ -171,14 +201,17 @@ class LatLng:
                 )
 
     @classmethod
-    def from_api(cls, data: dict[str, Any]) -> "LatLng":
+    def from_api(
+        cls, data: dict[str, Any], raw: Optional[dict[str, Any]] = None
+    ) -> "LatLng":
         data = copy.deepcopy(data)
+        raw = data if raw is None else copy.deepcopy(raw)
         return cls(
             latitude=_as_float(_require(data, "latitude", "LatLng"), "LatLng", "latitude"),
             longitude=_as_float(
                 _require(data, "longitude", "LatLng"), "LatLng", "longitude"
             ),
-            raw=data,
+            raw=raw,
         )
 
     def to_api(self) -> dict[str, float]:
@@ -195,13 +228,16 @@ class AuthorAttribution:
     raw: dict[str, Any] = field(default_factory=dict, repr=False, compare=False)
 
     @classmethod
-    def from_api(cls, data: dict[str, Any]) -> "AuthorAttribution":
+    def from_api(
+        cls, data: dict[str, Any], raw: Optional[dict[str, Any]] = None
+    ) -> "AuthorAttribution":
         data = copy.deepcopy(data)
+        raw = data if raw is None else copy.deepcopy(raw)
         return cls(
             display_name=data.get("displayName", ""),
             uri=data.get("uri", ""),
             photo_uri=data.get("photoUri", ""),
-            raw=data,
+            raw=raw,
         )
 
 
@@ -214,12 +250,15 @@ class Attribution:
     raw: dict[str, Any] = field(default_factory=dict, repr=False, compare=False)
 
     @classmethod
-    def from_api(cls, data: dict[str, Any]) -> "Attribution":
+    def from_api(
+        cls, data: dict[str, Any], raw: Optional[dict[str, Any]] = None
+    ) -> "Attribution":
         data = copy.deepcopy(data)
+        raw = data if raw is None else copy.deepcopy(raw)
         return cls(
             provider=data.get("provider", ""),
             provider_uri=data.get("providerUri", ""),
-            raw=data,
+            raw=raw,
         )
 
 
@@ -247,18 +286,24 @@ class Photo:
         _reject_bare_string("Photo", "author_attributions", self.author_attributions)
 
     @classmethod
-    def from_api(cls, data: dict[str, Any]) -> "Photo":
+    def from_api(
+        cls, data: dict[str, Any], raw: Optional[dict[str, Any]] = None
+    ) -> "Photo":
         data = copy.deepcopy(data)
+        raw = data if raw is None else copy.deepcopy(raw)
         return cls(
             name=data.get("name", ""),
             width_px=_as_int(data.get("widthPx", 0), "Photo", "widthPx"),
             height_px=_as_int(data.get("heightPx", 0), "Photo", "heightPx"),
             author_attributions=[
-                AuthorAttribution.from_api(a) for a in data.get("authorAttributions", [])
+                AuthorAttribution.from_api(
+                    a, _raw_element(raw, "authorAttributions", i, a)
+                )
+                for i, a in enumerate(data.get("authorAttributions", []))
             ],
             flag_content_uri=data.get("flagContentUri"),
             google_maps_uri=data.get("googleMapsUri"),
-            raw=data,
+            raw=raw,
         )
 
 
@@ -272,13 +317,16 @@ class Date:
     raw: dict[str, Any] = field(default_factory=dict, repr=False, compare=False)
 
     @classmethod
-    def from_api(cls, data: dict[str, Any]) -> "Date":
+    def from_api(
+        cls, data: dict[str, Any], raw: Optional[dict[str, Any]] = None
+    ) -> "Date":
         data = copy.deepcopy(data)
+        raw = data if raw is None else copy.deepcopy(raw)
         return cls(
             year=_as_int(data.get("year", 0), "Date", "year"),
             month=_as_int(data.get("month", 0), "Date", "month"),
             day=_as_int(data.get("day", 0), "Date", "day"),
-            raw=data,
+            raw=raw,
         )
 
 
@@ -299,16 +347,21 @@ class OpeningPoint:
     raw: dict[str, Any] = field(default_factory=dict, repr=False, compare=False)
 
     @classmethod
-    def from_api(cls, data: dict[str, Any]) -> "OpeningPoint":
+    def from_api(
+        cls, data: dict[str, Any], raw: Optional[dict[str, Any]] = None
+    ) -> "OpeningPoint":
         data = copy.deepcopy(data)
+        raw = data if raw is None else copy.deepcopy(raw)
         date = data.get("date")
         return cls(
-            date=Date.from_api(date) if date else None,
+            date=Date.from_api(date, _raw_subtree(raw, "date", date))
+            if date
+            else None,
             truncated=_optional_bool(data.get("truncated"), "OpeningPoint", "truncated"),
             day=_optional_int(data.get("day"), "OpeningPoint", "day"),
             hour=_optional_int(data.get("hour"), "OpeningPoint", "hour"),
             minute=_optional_int(data.get("minute"), "OpeningPoint", "minute"),
-            raw=data,
+            raw=raw,
         )
 
 
@@ -321,14 +374,25 @@ class Period:
     raw: dict[str, Any] = field(default_factory=dict, repr=False, compare=False)
 
     @classmethod
-    def from_api(cls, data: dict[str, Any]) -> "Period":
+    def from_api(
+        cls, data: dict[str, Any], raw: Optional[dict[str, Any]] = None
+    ) -> "Period":
         data = copy.deepcopy(data)
+        raw = data if raw is None else copy.deepcopy(raw)
         open_point = data.get("open")
         close_point = data.get("close")
         return cls(
-            open=OpeningPoint.from_api(open_point) if open_point else None,
-            close=OpeningPoint.from_api(close_point) if close_point else None,
-            raw=data,
+            open=OpeningPoint.from_api(
+                open_point, _raw_subtree(raw, "open", open_point)
+            )
+            if open_point
+            else None,
+            close=OpeningPoint.from_api(
+                close_point, _raw_subtree(raw, "close", close_point)
+            )
+            if close_point
+            else None,
+            raw=raw,
         )
 
 
@@ -341,10 +405,18 @@ class SpecialDay:
     raw: dict[str, Any] = field(default_factory=dict, repr=False, compare=False)
 
     @classmethod
-    def from_api(cls, data: dict[str, Any]) -> "SpecialDay":
+    def from_api(
+        cls, data: dict[str, Any], raw: Optional[dict[str, Any]] = None
+    ) -> "SpecialDay":
         data = copy.deepcopy(data)
+        raw = data if raw is None else copy.deepcopy(raw)
         date = data.get("date")
-        return cls(date=Date.from_api(date) if date else None, raw=data)
+        return cls(
+            date=Date.from_api(date, _raw_subtree(raw, "date", date))
+            if date
+            else None,
+            raw=raw,
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -374,11 +446,17 @@ class OpeningHours:
         _reject_bare_string("OpeningHours", "special_days", self.special_days)
 
     @classmethod
-    def from_api(cls, data: dict[str, Any]) -> "OpeningHours":
+    def from_api(
+        cls, data: dict[str, Any], raw: Optional[dict[str, Any]] = None
+    ) -> "OpeningHours":
         data = copy.deepcopy(data)
+        raw = data if raw is None else copy.deepcopy(raw)
         return cls(
             open_now=_optional_bool(data.get("openNow"), "OpeningHours", "openNow"),
-            periods=[Period.from_api(p) for p in data.get("periods", [])],
+            periods=[
+                Period.from_api(p, _raw_element(raw, "periods", i, p))
+                for i, p in enumerate(data.get("periods", []))
+            ],
             weekday_descriptions=_str_list(
                 data.get("weekdayDescriptions", []),
                 "OpeningHours",
@@ -387,10 +465,11 @@ class OpeningHours:
             next_close_time=data.get("nextCloseTime"),
             next_open_time=data.get("nextOpenTime"),
             special_days=[
-                SpecialDay.from_api(d) for d in data.get("specialDays", [])
+                SpecialDay.from_api(d, _raw_element(raw, "specialDays", i, d))
+                for i, d in enumerate(data.get("specialDays", []))
             ],
             secondary_hours_type=data.get("secondaryHoursType"),
-            raw=data,
+            raw=raw,
         )
 
 
@@ -408,14 +487,17 @@ class AddressComponent:
         _reject_bare_string("AddressComponent", "types", self.types)
 
     @classmethod
-    def from_api(cls, data: dict[str, Any]) -> "AddressComponent":
+    def from_api(
+        cls, data: dict[str, Any], raw: Optional[dict[str, Any]] = None
+    ) -> "AddressComponent":
         data = copy.deepcopy(data)
+        raw = data if raw is None else copy.deepcopy(raw)
         return cls(
             long_text=data.get("longText", ""),
             short_text=data.get("shortText", ""),
             types=_str_list(data.get("types", []), "AddressComponent", "types"),
             language_code=data.get("languageCode"),
-            raw=data,
+            raw=raw,
         )
 
 
@@ -428,12 +510,15 @@ class PlusCode:
     raw: dict[str, Any] = field(default_factory=dict, repr=False, compare=False)
 
     @classmethod
-    def from_api(cls, data: dict[str, Any]) -> "PlusCode":
+    def from_api(
+        cls, data: dict[str, Any], raw: Optional[dict[str, Any]] = None
+    ) -> "PlusCode":
         data = copy.deepcopy(data)
+        raw = data if raw is None else copy.deepcopy(raw)
         return cls(
             global_code=data.get("globalCode", ""),
             compound_code=data.get("compoundCode"),
-            raw=data,
+            raw=raw,
         )
 
 
@@ -446,12 +531,17 @@ class Viewport:
     raw: dict[str, Any] = field(default_factory=dict, repr=False, compare=False)
 
     @classmethod
-    def from_api(cls, data: dict[str, Any]) -> "Viewport":
+    def from_api(
+        cls, data: dict[str, Any], raw: Optional[dict[str, Any]] = None
+    ) -> "Viewport":
         data = copy.deepcopy(data)
+        raw = data if raw is None else copy.deepcopy(raw)
+        low = _require(data, "low", "Viewport")
+        high = _require(data, "high", "Viewport")
         return cls(
-            low=LatLng.from_api(_require(data, "low", "Viewport")),
-            high=LatLng.from_api(_require(data, "high", "Viewport")),
-            raw=data,
+            low=LatLng.from_api(low, _raw_subtree(raw, "low", low)),
+            high=LatLng.from_api(high, _raw_subtree(raw, "high", high)),
+            raw=raw,
         )
 
 
@@ -475,8 +565,11 @@ class PostalAddress:
         _reject_bare_string("PostalAddress", "recipients", self.recipients)
 
     @classmethod
-    def from_api(cls, data: dict[str, Any]) -> "PostalAddress":
+    def from_api(
+        cls, data: dict[str, Any], raw: Optional[dict[str, Any]] = None
+    ) -> "PostalAddress":
         data = copy.deepcopy(data)
+        raw = data if raw is None else copy.deepcopy(raw)
         return cls(
             region_code=data.get("regionCode"),
             language_code=data.get("languageCode"),
@@ -491,7 +584,7 @@ class PostalAddress:
             recipients=_str_list(
                 data.get("recipients", []), "PostalAddress", "recipients"
             ),
-            raw=data,
+            raw=raw,
         )
 
 
@@ -513,8 +606,11 @@ class Review:
     raw: dict[str, Any] = field(default_factory=dict, repr=False, compare=False)
 
     @classmethod
-    def from_api(cls, data: dict[str, Any]) -> "Review":
+    def from_api(
+        cls, data: dict[str, Any], raw: Optional[dict[str, Any]] = None
+    ) -> "Review":
         data = copy.deepcopy(data)
+        raw = data if raw is None else copy.deepcopy(raw)
         text = data.get("text")
         original = data.get("originalText")
         rating = data.get("rating")
@@ -525,21 +621,33 @@ class Review:
             relative_publish_time_description=data.get(
                 "relativePublishTimeDescription", ""
             ),
-            text=LocalizedText.from_api(text) if text else None,
-            original_text=LocalizedText.from_api(original) if original else None,
+            text=LocalizedText.from_api(text, _raw_subtree(raw, "text", text))
+            if text
+            else None,
+            original_text=LocalizedText.from_api(
+                original, _raw_subtree(raw, "originalText", original)
+            )
+            if original
+            else None,
             rating=(
                 _as_float(rating, "Review", "rating")
                 if rating is not None
                 else None
             ),
             author_attribution=(
-                AuthorAttribution.from_api(attribution) if attribution else None
+                AuthorAttribution.from_api(
+                    attribution, _raw_subtree(raw, "authorAttribution", attribution)
+                )
+                if attribution
+                else None
             ),
             publish_time=data.get("publishTime"),
             flag_content_uri=data.get("flagContentUri"),
             google_maps_uri=data.get("googleMapsUri"),
-            visit_date=Date.from_api(visit) if visit else None,
-            raw=data,
+            visit_date=Date.from_api(visit, _raw_subtree(raw, "visitDate", visit))
+            if visit
+            else None,
+            raw=raw,
         )
 
 
@@ -554,8 +662,11 @@ class PaymentOptions:
     raw: dict[str, Any] = field(default_factory=dict, repr=False, compare=False)
 
     @classmethod
-    def from_api(cls, data: dict[str, Any]) -> "PaymentOptions":
+    def from_api(
+        cls, data: dict[str, Any], raw: Optional[dict[str, Any]] = None
+    ) -> "PaymentOptions":
         data = copy.deepcopy(data)
+        raw = data if raw is None else copy.deepcopy(raw)
         return cls(
             accepts_credit_cards=_optional_bool(
                 data.get("acceptsCreditCards"), "PaymentOptions", "acceptsCreditCards"
@@ -569,7 +680,7 @@ class PaymentOptions:
             accepts_nfc=_optional_bool(
                 data.get("acceptsNfc"), "PaymentOptions", "acceptsNfc"
             ),
-            raw=data,
+            raw=raw,
         )
 
 
@@ -587,8 +698,11 @@ class ParkingOptions:
     raw: dict[str, Any] = field(default_factory=dict, repr=False, compare=False)
 
     @classmethod
-    def from_api(cls, data: dict[str, Any]) -> "ParkingOptions":
+    def from_api(
+        cls, data: dict[str, Any], raw: Optional[dict[str, Any]] = None
+    ) -> "ParkingOptions":
         data = copy.deepcopy(data)
+        raw = data if raw is None else copy.deepcopy(raw)
         return cls(
             free_parking_lot=_optional_bool(
                 data.get("freeParkingLot"), "ParkingOptions", "freeParkingLot"
@@ -611,7 +725,7 @@ class ParkingOptions:
             paid_garage_parking=_optional_bool(
                 data.get("paidGarageParking"), "ParkingOptions", "paidGarageParking"
             ),
-            raw=data,
+            raw=raw,
         )
 
 
@@ -626,8 +740,11 @@ class AccessibilityOptions:
     raw: dict[str, Any] = field(default_factory=dict, repr=False, compare=False)
 
     @classmethod
-    def from_api(cls, data: dict[str, Any]) -> "AccessibilityOptions":
+    def from_api(
+        cls, data: dict[str, Any], raw: Optional[dict[str, Any]] = None
+    ) -> "AccessibilityOptions":
         data = copy.deepcopy(data)
+        raw = data if raw is None else copy.deepcopy(raw)
         return cls(
             wheelchair_accessible_parking=_optional_bool(
                 data.get("wheelchairAccessibleParking"),
@@ -649,7 +766,7 @@ class AccessibilityOptions:
                 "AccessibilityOptions",
                 "wheelchairAccessibleSeating",
             ),
-            raw=data,
+            raw=raw,
         )
 
 
@@ -665,9 +782,12 @@ class TimeZone:
     raw: dict[str, Any] = field(default_factory=dict, repr=False, compare=False)
 
     @classmethod
-    def from_api(cls, data: dict[str, Any]) -> "TimeZone":
+    def from_api(
+        cls, data: dict[str, Any], raw: Optional[dict[str, Any]] = None
+    ) -> "TimeZone":
         data = copy.deepcopy(data)
-        return cls(id=data.get("id", ""), raw=data)
+        raw = data if raw is None else copy.deepcopy(raw)
+        return cls(id=data.get("id", ""), raw=raw)
 
 
 @dataclass(frozen=True, slots=True)
@@ -682,12 +802,19 @@ class GenerativeSummary:
     raw: dict[str, Any] = field(default_factory=dict, repr=False, compare=False)
 
     @classmethod
-    def from_api(cls, data: dict[str, Any]) -> "GenerativeSummary":
+    def from_api(
+        cls, data: dict[str, Any], raw: Optional[dict[str, Any]] = None
+    ) -> "GenerativeSummary":
         data = copy.deepcopy(data)
+        raw = data if raw is None else copy.deepcopy(raw)
         overview = data.get("overview")
         return cls(
-            overview=LocalizedText.from_api(overview) if overview else None,
-            raw=data,
+            overview=LocalizedText.from_api(
+                overview, _raw_subtree(raw, "overview", overview)
+            )
+            if overview
+            else None,
+            raw=raw,
         )
 
 
@@ -703,10 +830,18 @@ class ReviewSummary:
     raw: dict[str, Any] = field(default_factory=dict, repr=False, compare=False)
 
     @classmethod
-    def from_api(cls, data: dict[str, Any]) -> "ReviewSummary":
+    def from_api(
+        cls, data: dict[str, Any], raw: Optional[dict[str, Any]] = None
+    ) -> "ReviewSummary":
         data = copy.deepcopy(data)
+        raw = data if raw is None else copy.deepcopy(raw)
         text = data.get("text")
-        return cls(text=LocalizedText.from_api(text) if text else None, raw=data)
+        return cls(
+            text=LocalizedText.from_api(text, _raw_subtree(raw, "text", text))
+            if text
+            else None,
+            raw=raw,
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -723,12 +858,15 @@ class ConsumerAlert:
     raw: dict[str, Any] = field(default_factory=dict, repr=False, compare=False)
 
     @classmethod
-    def from_api(cls, data: dict[str, Any]) -> "ConsumerAlert":
+    def from_api(
+        cls, data: dict[str, Any], raw: Optional[dict[str, Any]] = None
+    ) -> "ConsumerAlert":
         data = copy.deepcopy(data)
+        raw = data if raw is None else copy.deepcopy(raw)
         return cls(
             overview=data.get("overview", ""),
             language_code=data.get("languageCode"),
-            raw=data,
+            raw=raw,
         )
 
 
@@ -745,15 +883,18 @@ class GoogleMapsLinks:
     raw: dict[str, Any] = field(default_factory=dict, repr=False, compare=False)
 
     @classmethod
-    def from_api(cls, data: dict[str, Any]) -> "GoogleMapsLinks":
+    def from_api(
+        cls, data: dict[str, Any], raw: Optional[dict[str, Any]] = None
+    ) -> "GoogleMapsLinks":
         data = copy.deepcopy(data)
+        raw = data if raw is None else copy.deepcopy(raw)
         return cls(
             directions_uri=data.get("directionsUri"),
             place_uri=data.get("placeUri"),
             write_a_review_uri=data.get("writeAReviewUri"),
             reviews_uri=data.get("reviewsUri"),
             photos_uri=data.get("photosUri"),
-            raw=data,
+            raw=raw,
         )
 
 
@@ -772,13 +913,16 @@ class Money:
     raw: dict[str, Any] = field(default_factory=dict, repr=False, compare=False)
 
     @classmethod
-    def from_api(cls, data: dict[str, Any]) -> "Money":
+    def from_api(
+        cls, data: dict[str, Any], raw: Optional[dict[str, Any]] = None
+    ) -> "Money":
         data = copy.deepcopy(data)
+        raw = data if raw is None else copy.deepcopy(raw)
         return cls(
             currency_code=data.get("currencyCode", ""),
             units=_as_int(data.get("units", 0), "Money", "units"),
             nanos=_as_int(data.get("nanos", 0), "Money", "nanos"),
-            raw=data,
+            raw=raw,
         )
 
 
@@ -795,14 +939,21 @@ class PriceRange:
     raw: dict[str, Any] = field(default_factory=dict, repr=False, compare=False)
 
     @classmethod
-    def from_api(cls, data: dict[str, Any]) -> "PriceRange":
+    def from_api(
+        cls, data: dict[str, Any], raw: Optional[dict[str, Any]] = None
+    ) -> "PriceRange":
         data = copy.deepcopy(data)
+        raw = data if raw is None else copy.deepcopy(raw)
         start = data.get("startPrice")
         end = data.get("endPrice")
         return cls(
-            start_price=Money.from_api(start) if start else None,
-            end_price=Money.from_api(end) if end else None,
-            raw=data,
+            start_price=Money.from_api(start, _raw_subtree(raw, "startPrice", start))
+            if start
+            else None,
+            end_price=Money.from_api(end, _raw_subtree(raw, "endPrice", end))
+            if end
+            else None,
+            raw=raw,
         )
 
 
@@ -824,8 +975,11 @@ class ConnectorAggregation:
     raw: dict[str, Any] = field(default_factory=dict, repr=False, compare=False)
 
     @classmethod
-    def from_api(cls, data: dict[str, Any]) -> "ConnectorAggregation":
+    def from_api(
+        cls, data: dict[str, Any], raw: Optional[dict[str, Any]] = None
+    ) -> "ConnectorAggregation":
         data = copy.deepcopy(data)
+        raw = data if raw is None else copy.deepcopy(raw)
         rate = data.get("maxChargeRateKw")
         return cls(
             type=data.get("type", ""),
@@ -848,7 +1002,7 @@ class ConnectorAggregation:
                 "outOfServiceCount",
             ),
             availability_last_update_time=data.get("availabilityLastUpdateTime"),
-            raw=data,
+            raw=raw,
         )
 
 
@@ -870,17 +1024,22 @@ class EvChargeOptions:
         )
 
     @classmethod
-    def from_api(cls, data: dict[str, Any]) -> "EvChargeOptions":
+    def from_api(
+        cls, data: dict[str, Any], raw: Optional[dict[str, Any]] = None
+    ) -> "EvChargeOptions":
         data = copy.deepcopy(data)
+        raw = data if raw is None else copy.deepcopy(raw)
         return cls(
             connector_count=_optional_int(
                 data.get("connectorCount"), "EvChargeOptions", "connectorCount"
             ),
             connector_aggregation=[
-                ConnectorAggregation.from_api(a)
-                for a in data.get("connectorAggregation", [])
+                ConnectorAggregation.from_api(
+                    a, _raw_element(raw, "connectorAggregation", i, a)
+                )
+                for i, a in enumerate(data.get("connectorAggregation", []))
             ],
-            raw=data,
+            raw=raw,
         )
 
 
@@ -901,15 +1060,22 @@ class Landmark:
         _reject_bare_string("Landmark", "types", self.types)
 
     @classmethod
-    def from_api(cls, data: dict[str, Any]) -> "Landmark":
+    def from_api(
+        cls, data: dict[str, Any], raw: Optional[dict[str, Any]] = None
+    ) -> "Landmark":
         data = copy.deepcopy(data)
+        raw = data if raw is None else copy.deepcopy(raw)
         display = data.get("displayName")
         straight = data.get("straightLineDistanceMeters")
         travel = data.get("travelDistanceMeters")
         return cls(
             name=data.get("name", ""),
             place_id=data.get("placeId", ""),
-            display_name=LocalizedText.from_api(display) if display else None,
+            display_name=LocalizedText.from_api(
+                display, _raw_subtree(raw, "displayName", display)
+            )
+            if display
+            else None,
             types=_str_list(data.get("types", []), "Landmark", "types"),
             spatial_relationship=data.get("spatialRelationship"),
             straight_line_distance_meters=(
@@ -922,7 +1088,7 @@ class Landmark:
                 if travel is not None
                 else None
             ),
-            raw=data,
+            raw=raw,
         )
 
 
@@ -937,15 +1103,22 @@ class Area:
     raw: dict[str, Any] = field(default_factory=dict, repr=False, compare=False)
 
     @classmethod
-    def from_api(cls, data: dict[str, Any]) -> "Area":
+    def from_api(
+        cls, data: dict[str, Any], raw: Optional[dict[str, Any]] = None
+    ) -> "Area":
         data = copy.deepcopy(data)
+        raw = data if raw is None else copy.deepcopy(raw)
         display = data.get("displayName")
         return cls(
             name=data.get("name", ""),
             place_id=data.get("placeId", ""),
-            display_name=LocalizedText.from_api(display) if display else None,
+            display_name=LocalizedText.from_api(
+                display, _raw_subtree(raw, "displayName", display)
+            )
+            if display
+            else None,
             containment=data.get("containment"),
-            raw=data,
+            raw=raw,
         )
 
 
@@ -962,15 +1135,23 @@ class AddressDescriptor:
         _reject_bare_string("AddressDescriptor", "areas", self.areas)
 
     @classmethod
-    def from_api(cls, data: dict[str, Any]) -> "AddressDescriptor":
+    def from_api(
+        cls, data: dict[str, Any], raw: Optional[dict[str, Any]] = None
+    ) -> "AddressDescriptor":
         data = copy.deepcopy(data)
+        raw = data if raw is None else copy.deepcopy(raw)
         return cls(
             landmarks=[
-                Landmark.from_api(landmark)
-                for landmark in data.get("landmarks", [])
+                Landmark.from_api(
+                    landmark, _raw_element(raw, "landmarks", i, landmark)
+                )
+                for i, landmark in enumerate(data.get("landmarks", []))
             ],
-            areas=[Area.from_api(area) for area in data.get("areas", [])],
-            raw=data,
+            areas=[
+                Area.from_api(area, _raw_element(raw, "areas", i, area))
+                for i, area in enumerate(data.get("areas", []))
+            ],
+            raw=raw,
         )
 
 
@@ -1095,8 +1276,11 @@ class Place:
         return self.opening_hours
 
     @classmethod
-    def from_api(cls, data: dict[str, Any]) -> "Place":
+    def from_api(
+        cls, data: dict[str, Any], raw: Optional[dict[str, Any]] = None
+    ) -> "Place":
         data = copy.deepcopy(data)
+        raw = data if raw is None else copy.deepcopy(raw)
         display = data.get("displayName")
         location = data.get("location")
         hours = data.get("regularOpeningHours")
@@ -1119,7 +1303,7 @@ class Place:
         price_range = data.get("priceRange")
         ev = data.get("evChargeOptions")
         descriptor = data.get("addressDescriptor")
-        place_id = data.get("id") or str(data.get("name", "")).removeprefix("places/")
+        place_id = data.get("id") or str(data.get("name") or "").removeprefix("places/")
         if not data:
             # An empty payload is a truncated or wrong response, not a
             # place; a payload that merely lacks an id (a field mask
@@ -1133,10 +1317,18 @@ class Place:
         return cls(
             id=place_id,
             name=data.get("name", ""),
-            display_name=LocalizedText.from_api(display) if display else None,
+            display_name=LocalizedText.from_api(
+                display, _raw_subtree(raw, "displayName", display)
+            )
+            if display
+            else None,
             formatted_address=data.get("formattedAddress"),
             short_formatted_address=data.get("shortFormattedAddress"),
-            location=LatLng.from_api(location) if location else None,
+            location=LatLng.from_api(
+                location, _raw_subtree(raw, "location", location)
+            )
+            if location
+            else None,
             types=_str_list(data.get("types", []), "Place", "types"),
             primary_type=data.get("primaryType"),
             rating=(
@@ -1153,38 +1345,87 @@ class Place:
             international_phone_number=data.get("internationalPhoneNumber"),
             website_uri=data.get("websiteUri"),
             google_maps_uri=data.get("googleMapsUri"),
-            opening_hours=OpeningHours.from_api(hours) if hours else None,
+            opening_hours=OpeningHours.from_api(
+                hours, _raw_subtree(raw, "regularOpeningHours", hours)
+            )
+            if hours
+            else None,
             current_opening_hours=(
-                OpeningHours.from_api(current_hours) if current_hours else None
+                OpeningHours.from_api(
+                    current_hours,
+                    _raw_subtree(raw, "currentOpeningHours", current_hours),
+                )
+                if current_hours
+                else None
             ),
             current_secondary_opening_hours=[
-                OpeningHours.from_api(h)
-                for h in data.get("currentSecondaryOpeningHours", [])
+                OpeningHours.from_api(
+                    h, _raw_element(raw, "currentSecondaryOpeningHours", i, h)
+                )
+                for i, h in enumerate(
+                    data.get("currentSecondaryOpeningHours", [])
+                )
             ],
             regular_secondary_opening_hours=[
-                OpeningHours.from_api(h)
-                for h in data.get("regularSecondaryOpeningHours", [])
+                OpeningHours.from_api(
+                    h, _raw_element(raw, "regularSecondaryOpeningHours", i, h)
+                )
+                for i, h in enumerate(
+                    data.get("regularSecondaryOpeningHours", [])
+                )
             ],
             address_components=[
-                AddressComponent.from_api(c)
-                for c in data.get("addressComponents", [])
+                AddressComponent.from_api(
+                    c, _raw_element(raw, "addressComponents", i, c)
+                )
+                for i, c in enumerate(data.get("addressComponents", []))
             ],
-            plus_code=PlusCode.from_api(plus_code) if plus_code else None,
-            viewport=Viewport.from_api(viewport) if viewport else None,
-            postal_address=PostalAddress.from_api(postal) if postal else None,
+            plus_code=PlusCode.from_api(
+                plus_code, _raw_subtree(raw, "plusCode", plus_code)
+            )
+            if plus_code
+            else None,
+            viewport=Viewport.from_api(
+                viewport, _raw_subtree(raw, "viewport", viewport)
+            )
+            if viewport
+            else None,
+            postal_address=PostalAddress.from_api(
+                postal, _raw_subtree(raw, "postalAddress", postal)
+            )
+            if postal
+            else None,
             adr_format_address=data.get("adrFormatAddress"),
             primary_type_display_name=(
-                LocalizedText.from_api(type_display) if type_display else None
+                LocalizedText.from_api(
+                    type_display,
+                    _raw_subtree(raw, "primaryTypeDisplayName", type_display),
+                )
+                if type_display
+                else None
             ),
             google_maps_type_label=(
-                LocalizedText.from_api(type_label) if type_label else None
+                LocalizedText.from_api(
+                    type_label,
+                    _raw_subtree(raw, "googleMapsTypeLabel", type_label),
+                )
+                if type_label
+                else None
             ),
             editorial_summary=(
-                LocalizedText.from_api(summary) if summary else None
+                LocalizedText.from_api(
+                    summary, _raw_subtree(raw, "editorialSummary", summary)
+                )
+                if summary
+                else None
             ),
             icon_mask_base_uri=data.get("iconMaskBaseUri"),
             icon_background_color=data.get("iconBackgroundColor"),
-            opening_date=Date.from_api(opening) if opening else None,
+            opening_date=Date.from_api(
+                opening, _raw_subtree(raw, "openingDate", opening)
+            )
+            if opening
+            else None,
             utc_offset_minutes=_optional_int(
                 data.get("utcOffsetMinutes"), "Place", "utcOffsetMinutes"
             ),
@@ -1195,9 +1436,18 @@ class Place:
             ),
             moved_place=data.get("movedPlace"),
             moved_place_id=data.get("movedPlaceId"),
-            photos=[Photo.from_api(p) for p in data.get("photos", [])],
-            attributions=[Attribution.from_api(a) for a in data.get("attributions", [])],
-            reviews=[Review.from_api(r) for r in data.get("reviews", [])],
+            photos=[
+                Photo.from_api(p, _raw_element(raw, "photos", i, p))
+                for i, p in enumerate(data.get("photos", []))
+            ],
+            attributions=[
+                Attribution.from_api(a, _raw_element(raw, "attributions", i, a))
+                for i, a in enumerate(data.get("attributions", []))
+            ],
+            reviews=[
+                Review.from_api(r, _raw_element(raw, "reviews", i, r))
+                for i, r in enumerate(data.get("reviews", []))
+            ],
             takeout=_optional_bool(data.get("takeout"), "Place", "takeout"),
             delivery=_optional_bool(data.get("delivery"), "Place", "delivery"),
             dine_in=_optional_bool(data.get("dineIn"), "Place", "dineIn"),
@@ -1260,33 +1510,79 @@ class Place:
                 data.get("goodForWatchingSports"), "Place", "goodForWatchingSports"
             ),
             payment_options=(
-                PaymentOptions.from_api(payment) if payment else None
+                PaymentOptions.from_api(
+                    payment, _raw_subtree(raw, "paymentOptions", payment)
+                )
+                if payment
+                else None
             ),
             parking_options=(
-                ParkingOptions.from_api(parking) if parking else None
+                ParkingOptions.from_api(
+                    parking, _raw_subtree(raw, "parkingOptions", parking)
+                )
+                if parking
+                else None
             ),
             accessibility_options=(
-                AccessibilityOptions.from_api(accessibility)
+                AccessibilityOptions.from_api(
+                    accessibility,
+                    _raw_subtree(raw, "accessibilityOptions", accessibility),
+                )
                 if accessibility
                 else None
             ),
-            time_zone=TimeZone.from_api(time_zone) if time_zone else None,
+            time_zone=TimeZone.from_api(
+                time_zone, _raw_subtree(raw, "timeZone", time_zone)
+            )
+            if time_zone
+            else None,
             generative_summary=(
-                GenerativeSummary.from_api(generative) if generative else None
+                GenerativeSummary.from_api(
+                    generative,
+                    _raw_subtree(raw, "generativeSummary", generative),
+                )
+                if generative
+                else None
             ),
             review_summary=(
-                ReviewSummary.from_api(review_summary) if review_summary else None
+                ReviewSummary.from_api(
+                    review_summary,
+                    _raw_subtree(raw, "reviewSummary", review_summary),
+                )
+                if review_summary
+                else None
             ),
-            consumer_alert=ConsumerAlert.from_api(alert) if alert else None,
+            consumer_alert=ConsumerAlert.from_api(
+                alert, _raw_subtree(raw, "consumerAlert", alert)
+            )
+            if alert
+            else None,
             google_maps_links=(
-                GoogleMapsLinks.from_api(links) if links else None
+                GoogleMapsLinks.from_api(
+                    links, _raw_subtree(raw, "googleMapsLinks", links)
+                )
+                if links
+                else None
             ),
-            price_range=PriceRange.from_api(price_range) if price_range else None,
-            ev_charge_options=EvChargeOptions.from_api(ev) if ev else None,
+            price_range=PriceRange.from_api(
+                price_range, _raw_subtree(raw, "priceRange", price_range)
+            )
+            if price_range
+            else None,
+            ev_charge_options=EvChargeOptions.from_api(
+                ev, _raw_subtree(raw, "evChargeOptions", ev)
+            )
+            if ev
+            else None,
             address_descriptor=(
-                AddressDescriptor.from_api(descriptor) if descriptor else None
+                AddressDescriptor.from_api(
+                    descriptor,
+                    _raw_subtree(raw, "addressDescriptor", descriptor),
+                )
+                if descriptor
+                else None
             ),
-            raw=data,
+            raw=raw,
         )
 
 
@@ -1303,14 +1599,17 @@ class Leg:
     raw: dict[str, Any] = field(default_factory=dict, repr=False, compare=False)
 
     @classmethod
-    def from_api(cls, data: dict[str, Any]) -> "Leg":
+    def from_api(
+        cls, data: dict[str, Any], raw: Optional[dict[str, Any]] = None
+    ) -> "Leg":
         data = copy.deepcopy(data)
+        raw = data if raw is None else copy.deepcopy(raw)
         return cls(
             duration=data.get("duration", ""),
             distance_meters=_optional_int(
                 data.get("distanceMeters"), "Leg", "distanceMeters"
             ),
-            raw=data,
+            raw=raw,
         )
 
 
@@ -1326,12 +1625,18 @@ class RoutingSummary:
         _reject_bare_string("RoutingSummary", "legs", self.legs)
 
     @classmethod
-    def from_api(cls, data: dict[str, Any]) -> "RoutingSummary":
+    def from_api(
+        cls, data: dict[str, Any], raw: Optional[dict[str, Any]] = None
+    ) -> "RoutingSummary":
         data = copy.deepcopy(data)
+        raw = data if raw is None else copy.deepcopy(raw)
         return cls(
-            legs=[Leg.from_api(leg) for leg in data.get("legs", [])],
+            legs=[
+                Leg.from_api(leg, _raw_element(raw, "legs", i, leg))
+                for i, leg in enumerate(data.get("legs", []))
+            ],
             directions_uri=data.get("directionsUri"),
-            raw=data,
+            raw=raw,
         )
 
 
@@ -1358,17 +1663,25 @@ class TextSearchResult:
         )
 
     @classmethod
-    def from_api(cls, data: dict[str, Any]) -> "TextSearchResult":
+    def from_api(
+        cls, data: dict[str, Any], raw: Optional[dict[str, Any]] = None
+    ) -> "TextSearchResult":
         data = copy.deepcopy(data)
+        raw = data if raw is None else copy.deepcopy(raw)
         return cls(
-            places=[Place.from_api(p) for p in data.get("places", [])],
+            places=[
+                Place.from_api(p, _raw_element(raw, "places", i, p))
+                for i, p in enumerate(data.get("places", []))
+            ],
             next_page_token=data.get("nextPageToken"),
             search_uri=data.get("searchUri"),
             routing_summaries=[
-                RoutingSummary.from_api(s)
-                for s in data.get("routingSummaries", [])
+                RoutingSummary.from_api(
+                    s, _raw_element(raw, "routingSummaries", i, s)
+                )
+                for i, s in enumerate(data.get("routingSummaries", []))
             ],
-            raw=data,
+            raw=raw,
         )
 
 
@@ -1395,15 +1708,23 @@ class NearbySearchResult:
         )
 
     @classmethod
-    def from_api(cls, data: dict[str, Any]) -> "NearbySearchResult":
+    def from_api(
+        cls, data: dict[str, Any], raw: Optional[dict[str, Any]] = None
+    ) -> "NearbySearchResult":
         data = copy.deepcopy(data)
+        raw = data if raw is None else copy.deepcopy(raw)
         return cls(
-            places=[Place.from_api(p) for p in data.get("places", [])],
-            routing_summaries=[
-                RoutingSummary.from_api(s)
-                for s in data.get("routingSummaries", [])
+            places=[
+                Place.from_api(p, _raw_element(raw, "places", i, p))
+                for i, p in enumerate(data.get("places", []))
             ],
-            raw=data,
+            routing_summaries=[
+                RoutingSummary.from_api(
+                    s, _raw_element(raw, "routingSummaries", i, s)
+                )
+                for i, s in enumerate(data.get("routingSummaries", []))
+            ],
+            raw=raw,
         )
 
 
@@ -1416,12 +1737,15 @@ class StringMatch:
     raw: dict[str, Any] = field(default_factory=dict, repr=False, compare=False)
 
     @classmethod
-    def from_api(cls, data: dict[str, Any]) -> "StringMatch":
+    def from_api(
+        cls, data: dict[str, Any], raw: Optional[dict[str, Any]] = None
+    ) -> "StringMatch":
         data = copy.deepcopy(data)
+        raw = data if raw is None else copy.deepcopy(raw)
         return cls(
             start_offset=_optional_int(data.get("startOffset"), "StringMatch", "startOffset"),
             end_offset=_optional_int(data.get("endOffset"), "StringMatch", "endOffset"),
-            raw=data,
+            raw=raw,
         )
 
 
@@ -1437,12 +1761,18 @@ class FormattedText:
         _reject_bare_string("FormattedText", "matches", self.matches)
 
     @classmethod
-    def from_api(cls, data: dict[str, Any]) -> "FormattedText":
+    def from_api(
+        cls, data: dict[str, Any], raw: Optional[dict[str, Any]] = None
+    ) -> "FormattedText":
         data = copy.deepcopy(data)
+        raw = data if raw is None else copy.deepcopy(raw)
         return cls(
             text=data.get("text", ""),
-            matches=[StringMatch.from_api(m) for m in data.get("matches", [])],
-            raw=data,
+            matches=[
+                StringMatch.from_api(m, _raw_element(raw, "matches", i, m))
+                for i, m in enumerate(data.get("matches", []))
+            ],
+            raw=raw,
         )
 
 
@@ -1465,23 +1795,38 @@ class PlacePrediction:
         _reject_bare_string("PlacePrediction", "types", self.types)
 
     @classmethod
-    def from_api(cls, data: dict[str, Any]) -> "PlacePrediction":
+    def from_api(
+        cls, data: dict[str, Any], raw: Optional[dict[str, Any]] = None
+    ) -> "PlacePrediction":
         data = copy.deepcopy(data)
+        raw = data if raw is None else copy.deepcopy(raw)
         text = data.get("text")
         structured = data.get("structuredFormat") or {}
+        raw_structured = _raw_subtree(raw, "structuredFormat", structured)
         main = structured.get("mainText")
         secondary = structured.get("secondaryText")
         return cls(
             place_id=data.get("placeId", ""),
             place=data.get("place", ""),
-            text=FormattedText.from_api(text) if text else None,
-            main_text=FormattedText.from_api(main) if main else None,
-            secondary_text=FormattedText.from_api(secondary) if secondary else None,
+            text=FormattedText.from_api(text, _raw_subtree(raw, "text", text))
+            if text
+            else None,
+            main_text=FormattedText.from_api(
+                main, _raw_subtree(raw_structured, "mainText", main)
+            )
+            if main
+            else None,
+            secondary_text=FormattedText.from_api(
+                secondary,
+                _raw_subtree(raw_structured, "secondaryText", secondary),
+            )
+            if secondary
+            else None,
             types=_str_list(data.get("types", []), "PlacePrediction", "types"),
             distance_meters=_optional_int(
                 data.get("distanceMeters"), "PlacePrediction", "distanceMeters"
             ),
-            raw=data,
+            raw=raw,
         )
 
 
@@ -1496,17 +1841,32 @@ class QueryPrediction:
     raw: dict[str, Any] = field(default_factory=dict, repr=False, compare=False)
 
     @classmethod
-    def from_api(cls, data: dict[str, Any]) -> "QueryPrediction":
+    def from_api(
+        cls, data: dict[str, Any], raw: Optional[dict[str, Any]] = None
+    ) -> "QueryPrediction":
         data = copy.deepcopy(data)
+        raw = data if raw is None else copy.deepcopy(raw)
         text = data.get("text")
         structured = data.get("structuredFormat") or {}
+        raw_structured = _raw_subtree(raw, "structuredFormat", structured)
         main = structured.get("mainText")
         secondary = structured.get("secondaryText")
         return cls(
-            text=FormattedText.from_api(text) if text else None,
-            main_text=FormattedText.from_api(main) if main else None,
-            secondary_text=FormattedText.from_api(secondary) if secondary else None,
-            raw=data,
+            text=FormattedText.from_api(text, _raw_subtree(raw, "text", text))
+            if text
+            else None,
+            main_text=FormattedText.from_api(
+                main, _raw_subtree(raw_structured, "mainText", main)
+            )
+            if main
+            else None,
+            secondary_text=FormattedText.from_api(
+                secondary,
+                _raw_subtree(raw_structured, "secondaryText", secondary),
+            )
+            if secondary
+            else None,
+            raw=raw,
         )
 
 
@@ -1524,14 +1884,25 @@ class Suggestion:
     raw: dict[str, Any] = field(default_factory=dict, repr=False, compare=False)
 
     @classmethod
-    def from_api(cls, data: dict[str, Any]) -> "Suggestion":
+    def from_api(
+        cls, data: dict[str, Any], raw: Optional[dict[str, Any]] = None
+    ) -> "Suggestion":
         data = copy.deepcopy(data)
+        raw = data if raw is None else copy.deepcopy(raw)
         prediction = data.get("placePrediction")
         query = data.get("queryPrediction")
         return cls(
-            place_prediction=PlacePrediction.from_api(prediction) if prediction else None,
-            query_prediction=QueryPrediction.from_api(query) if query else None,
-            raw=data,
+            place_prediction=PlacePrediction.from_api(
+                prediction, _raw_subtree(raw, "placePrediction", prediction)
+            )
+            if prediction
+            else None,
+            query_prediction=QueryPrediction.from_api(
+                query, _raw_subtree(raw, "queryPrediction", query)
+            )
+            if query
+            else None,
+            raw=raw,
         )
 
 
@@ -1556,11 +1927,17 @@ class AutocompleteResult:
         return [s.query_prediction for s in self.suggestions if s.query_prediction]
 
     @classmethod
-    def from_api(cls, data: dict[str, Any]) -> "AutocompleteResult":
+    def from_api(
+        cls, data: dict[str, Any], raw: Optional[dict[str, Any]] = None
+    ) -> "AutocompleteResult":
         data = copy.deepcopy(data)
+        raw = data if raw is None else copy.deepcopy(raw)
         return cls(
-            suggestions=[Suggestion.from_api(s) for s in data.get("suggestions", [])],
-            raw=data,
+            suggestions=[
+                Suggestion.from_api(s, _raw_element(raw, "suggestions", i, s))
+                for i, s in enumerate(data.get("suggestions", []))
+            ],
+            raw=raw,
         )
 
 
@@ -1600,10 +1977,13 @@ class PhotoUriResult:
     raw: dict[str, Any] = field(default_factory=dict, repr=False, compare=False)
 
     @classmethod
-    def from_api(cls, data: dict[str, Any]) -> "PhotoUriResult":
+    def from_api(
+        cls, data: dict[str, Any], raw: Optional[dict[str, Any]] = None
+    ) -> "PhotoUriResult":
         data = copy.deepcopy(data)
+        raw = data if raw is None else copy.deepcopy(raw)
         return cls(
             photo_uri=data.get("photoUri", ""),
             name=data.get("name", ""),
-            raw=data,
+            raw=raw,
         )
