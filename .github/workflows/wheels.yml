@@ -268,8 +268,10 @@ jobs:
         run: python -c "import placekit; client = placekit.Client('test-key'); print(placekit.__version__)"
       - name: Run the offline test suite
         if: ${{ matrix.suite }}
+        # Pinned to the exact pytest version the dev environment
+        # carries, so this leg never fetches a floating test tool.
         run: |
-          pip install pytest
+          pip install "pytest==9.2.0"
           python -m pytest tests -q
 
   publish:
