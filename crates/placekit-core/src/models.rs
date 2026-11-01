@@ -25,7 +25,7 @@
 //! beside the typed value, and the Python layer builds `raw` from the
 //! body itself, so raw claims exactly what the server said and
 //! nothing it did not. The two views can therefore disagree on a
-//! partial object, deliberately. Raw is the wire record; the typed
+//! partial object, deliberately. Raw is the wire record. The typed
 //! value is the lenient reading of it.
 
 use serde::{Deserialize, Serialize};
@@ -450,7 +450,7 @@ impl<'de> serde::Deserialize<'de> for WireString {
 }
 
 /// Skip guard for a [`WireString`] field. Only an absent field is
-/// omitted from the reserialized dict; an explicit null stays as
+/// omitted from the reserialized dict. An explicit null stays as
 /// null and an empty string stays as an empty string.
 fn wire_string_absent(value: &WireString) -> bool {
     value.0.is_none()
@@ -667,7 +667,7 @@ where
 }
 
 /// Skip guard for a [`WireList`] field. Only an absent field is
-/// omitted from the reserialized dict; an explicit null stays as
+/// omitted from the reserialized dict. An explicit null stays as
 /// null and an empty list stays as an empty list.
 fn wire_list_absent<T>(value: &WireList<T>) -> bool {
     value.0.is_none()

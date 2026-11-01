@@ -3293,7 +3293,7 @@ def test_string_match_explicit_zero_start_offset_survives():
 
 
 # ---------------------------------------------------------------------------
-# Round 16 (T2): raw fidelity through the core
+# Round 16 (T2), raw fidelity through the core
 # ---------------------------------------------------------------------------
 #
 # Raw through the client is now the response body itself, parsed once
@@ -3301,10 +3301,12 @@ def test_string_match_explicit_zero_start_offset_survives():
 # The fidelity pins below each failed on the head before this round,
 # through a drop or through a kill, for the reason their text states.
 # Three pins are controls by design and passed before the round as
-# they pass after it, and they are exempt from the fail first rule by
-# name: test_photo_uri_raw_equals_the_served_body,
-# test_photo_uri_unmodelled_null_key_stays_in_raw and the core guard
-# pin in the Rust suite that keeps request bodies byte identical.
+# they pass after it, and they are exempt from the fail first rule
+# by name. The exempt pins are
+# test_photo_uri_raw_equals_the_served_body and
+# test_photo_uri_unmodelled_null_key_stays_in_raw below, and the
+# core guard pin in the Rust suite that keeps request bodies byte
+# identical.
 
 
 def _serve_details(raw_response, mutate):
@@ -3339,7 +3341,7 @@ def test_empty_object_lists_keep_their_keys_in_raw(client, raw_response):
 def test_empty_weekday_descriptions_keep_their_key_in_child_raw(
     client, raw_response
 ):
-    # The nested case: the raw threading must reach child models, not
+    # The nested case. The raw threading must reach child models, not
     # only the top level object.
     def mutate(data):
         data["regularOpeningHours"]["weekdayDescriptions"] = []
@@ -3374,7 +3376,7 @@ def test_empty_types_list_in_prediction_raw(client, raw_response):
 def test_class2_null_short_text_reads_none_and_stays_in_raw(
     client, raw_response
 ):
-    # Class 2: a null in a plain string position killed the whole
+    # Class 2. A null in a plain string position killed the whole
     # response at the core. The Python layer tolerates the class and
     # stores None, and raw keeps the key with the null.
     def mutate(data):
@@ -3412,7 +3414,7 @@ def test_class2_null_place_id_on_a_prediction(client, raw_response):
 
 
 def test_class4_null_element_inside_types_on_details(client, raw_response):
-    # Class 4: a null element inside a modelled string list killed
+    # Class 4. A null element inside a modelled string list killed
     # the whole response at the core. The element now lands as None
     # at its wire index, with no dropping or reordering.
     def mutate(data):
@@ -3449,7 +3451,7 @@ def test_class4_null_element_inside_prediction_types(client, raw_response):
 def test_photo_uri_raw_equals_the_served_body(client, raw_response):
     # Control pin, exempt from the fail first rule by name (see the
     # section header). The two key body already round tripped before
-    # this round; the pin now guards the verbatim body path itself.
+    # this round. The pin now guards the verbatim body path itself.
     body = {
         "name": "places/ChIJrTLr-GyuEmsRBfy61i59si0/photos/ATJ83zh8vExample",
         "photoUri": "http://127.0.0.1/photo-image",
@@ -3515,7 +3517,7 @@ def test_empty_display_name_text_keeps_its_key_in_child_raw(
 ):
     # An explicitly empty string on a plain string field used to drop
     # from raw under the is_empty_string guard. Only raw membership
-    # moves; the attribute read the empty string all along.
+    # moves. The attribute read the empty string all along.
     def mutate(data):
         data["displayName"]["text"] = ""
 
@@ -3594,7 +3596,7 @@ def test_partial_location_raw_carries_no_fabricated_longitude(
 # null and the documented Python contract decides it, the contract
 # test_explicit_null_in_a_list_field_is_a_decode_error pins at the
 # model layer. The whole response is still lost, exactly as before
-# this round; what moves is the origin of the error, and each pin
+# this round. What moves is the origin of the error, and each pin
 # asserts the stable origin marker of its position family plus the
 # HTTP status the core threaded across, so each pin fails on the
 # head before this round, where the core raised with serde wording.
@@ -3642,7 +3644,7 @@ def test_branch_a_null_latitude_raises_the_python_decoder_error(
 def test_branch_a_null_object_list_raises_the_conversion_wrapper_error(
     client, raw_response
 ):
-    # Object list positions name no model and no key today; their
+    # Object list positions name no model and no key today. Their
     # origin marker is the generic conversion wrapper form.
     _serve_details(raw_response, lambda data: data.update(photos=None))
     with pytest.raises(DecodeError) as excinfo:

@@ -369,12 +369,12 @@ fn photo_to_py(
                 .unbind()
                 .into_any();
             // The typed dict crosses as the attribute source, like on
-            // the JSON endpoints: PhotoMediaJson flattens what the
+            // the JSON endpoints. PhotoMediaJson flattens what the
             // core does not type into its extra map, so the dict
             // carries the whole JSON form in typed shape. The body
             // text the core held beside the decode crosses with it as
             // the raw source. The core returns the body on this form
-            // by construction; an absent body is a conversion failure
+            // by construction. An absent body is a conversion failure
             // of this layer, never an empty raw.
             let json = serde_json::to_value(&media).map_err(|e| photo_conversion_err(py, e))?;
             let typed = value_to_py(py, &json).map_err(|e| photo_conversion_err(py, e))?;

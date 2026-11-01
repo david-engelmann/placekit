@@ -585,8 +585,8 @@ impl Client {
     /// view from the wire payload itself instead of from a
     /// reserialization of the typed value (Round 16), and the status
     /// rides along so a Python side conversion failure can carry it.
-    /// Every failure keeps both facts it knows: the HTTP status and,
-    /// for body read failures, the read error itself; neither is
+    /// Every failure keeps both facts it knows, the HTTP status and,
+    /// for body read failures, the read error itself. Neither is
     /// silently dropped.
     async fn send_with_status<T: DeserializeOwned>(
         &self,
@@ -892,7 +892,7 @@ fn validate_lat_lng(point: &LatLng, label: &str) -> Result<(), Error> {
     // A coordinate the wire carried as an explicit null reads as
     // the typed default internally (Round 16), but on a request it
     // is still the non-finite shape this validation exists to
-    // reject: it would serialize back out as JSON null.
+    // reject, since it would serialize back out as JSON null.
     let latitude = point.latitude.value();
     if point.latitude.is_null() || !latitude.is_finite() || !(-90.0..=90.0).contains(&latitude) {
         return Err(Error::config(format!(
