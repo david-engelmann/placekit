@@ -17,16 +17,16 @@
 //! opposite: they are validated in the core before anything is sent.
 //!
 //! One consequence of the leniency posture is worth stating plainly.
-//! The `raw` view the Python layer exposes is the decoded model
-//! reserialized, not the literal response body, so for a partial
-//! nested object (a location carrying only a latitude, a viewport
-//! carrying only one corner) a field the server omitted appears in
-//! `raw` carrying its default value, indistinguishable from a value
-//! the server actually sent. Presence is not tracked on those types,
-//! and recording it would change their typed shape, so the
-//! overstatement is documented rather than repaired. Typed values and
-//! `raw` always agree with each other, but on partial objects `raw`
-//! can claim more than the server said.
+//! Typed values default what the server omitted (a location carrying
+//! only a latitude reads a longitude of 0.0), and the typed dict these
+//! models reserialize into for the Python layer carries that default,
+//! exactly as it always has. The `raw` view is a different
+//! construction since Round 16. The core returns the response body
+//! beside the typed value, and the Python layer builds `raw` from the
+//! body itself, so raw claims exactly what the server said and
+//! nothing it did not. The two views can therefore disagree on a
+//! partial object, deliberately. Raw is the wire record; the typed
+//! value is the lenient reading of it.
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
@@ -39,9 +39,9 @@ use serde_json::{Map, Value};
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct LatLng {
     #[serde(default)]
-    pub latitude: f64,
+    pub latitude: WireFloat,
     #[serde(default)]
-    pub longitude: f64,
+    pub longitude: WireFloat,
     /// Unknown fields inside a decoded coordinate object, preserved like
     /// on the other response types.
     #[serde(flatten)]
@@ -52,8 +52,8 @@ impl LatLng {
     /// A coordinate with no extra fields, as request code constructs it.
     pub fn new(latitude: f64, longitude: f64) -> Self {
         Self {
-            latitude,
-            longitude,
+            latitude: latitude.into(),
+            longitude: longitude.into(),
             extra: Map::new(),
         }
     }
@@ -63,8 +63,8 @@ impl LatLng {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LocalizedText {
-    #[serde(default, skip_serializing_if = "is_empty_string")]
-    pub text: String,
+    #[serde(default, skip_serializing_if = "wire_string_absent")]
+    pub text: WireString,
     #[serde(default, skip_serializing_if = "none_or_empty_string")]
     pub language_code: Option<String>,
     #[serde(flatten)]
@@ -95,8 +95,8 @@ where
     }
     let center = CompleteCenter::deserialize(deserializer)?;
     Ok(LatLng {
-        latitude: center.latitude,
-        longitude: center.longitude,
+        latitude: center.latitude.into(),
+        longitude: center.longitude.into(),
         extra: center.extra,
     })
 }
@@ -334,16 +334,343 @@ pub struct AutocompleteRequest {
 // Responses
 // ---------------------------------------------------------------------------
 
-// Reserialization guards for the response models below: a field the wire
-// did not carry must stay absent when the value is reserialized for the
-// Python layer, instead of appearing with a null, empty or zero value
-// (red team finding N1). Python `raw` mirrors the reserialized value, so
-// without these guards raw overstates which fields the API returned.
-// (serde calls the string guard with `&String` by contract, hence the
-// allow for the clippy pointer argument lint.)
-#[allow(clippy::ptr_arg)]
-fn is_empty_string(value: &String) -> bool {
-    value.is_empty()
+// Presence tracking for response positions (Round 16). The Python
+// layer decodes its attributes from the typed dict these models
+// reserialize into, and at some positions absence, an explicit null
+// and a sent value are three different readings there. A plain
+// String, Vec or f64 collapses those states, so the positions the
+// Python contract treats differently carry one of these wrappers
+// instead. Each wrapper keeps the wire state beside the typed value.
+// Internal reads see the absence shape (an empty string, an empty
+// list, a defaulted coordinate), while the reserialized dict keeps
+// the state apart, omitting an absent field, emitting a null field
+// as null and emitting a sent value as itself. The deserializers
+// run only when the wire carried the key (a missing key falls back
+// to the field default, the absent state), so a visit to the none
+// arm always means an explicit null was sent. Request types never
+// use these wrappers, so request bodies on the wire are untouched
+// by them. Before this round the reserialization also fed Python
+// raw, and a family of skip guards kept absent fields absent from
+// it (red team finding N1). Raw is built from the response body
+// itself now, so the guards that remain serve the typed dict alone.
+
+/// A response string field with its wire presence state. The outer
+/// option is the carried state (absent or carried) and the inner
+/// option is the null state (null or a sent string).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct WireString(Option<Option<String>>);
+
+impl WireString {
+    /// The string the wire sent, or the empty default internal
+    /// reads already use for an absent or null field.
+    pub fn as_str(&self) -> &str {
+        match &self.0 {
+            Some(Some(value)) => value,
+            _ => "",
+        }
+    }
+
+    /// True when the field reads as the empty default internally,
+    /// which covers absence, an explicit null and an empty string.
+    pub fn is_empty(&self) -> bool {
+        self.as_str().is_empty()
+    }
+}
+
+impl PartialEq<&str> for WireString {
+    fn eq(&self, other: &&str) -> bool {
+        self.as_str() == *other
+    }
+}
+
+impl serde::Serialize for WireString {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        match &self.0 {
+            Some(Some(value)) => serializer.serialize_str(value),
+            _ => serializer.serialize_none(),
+        }
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for WireString {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        struct WireStringVisitor;
+
+        impl<'de> serde::de::Visitor<'de> for WireStringVisitor {
+            type Value = WireString;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+                formatter.write_str("a string or null")
+            }
+
+            fn visit_none<E>(self) -> Result<WireString, E>
+            where
+                E: serde::de::Error,
+            {
+                Ok(WireString(Some(None)))
+            }
+
+            fn visit_unit<E>(self) -> Result<WireString, E>
+            where
+                E: serde::de::Error,
+            {
+                Ok(WireString(Some(None)))
+            }
+
+            fn visit_some<D>(self, deserializer: D) -> Result<WireString, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                Ok(WireString(Some(Some(String::deserialize(deserializer)?))))
+            }
+
+            fn visit_str<E>(self, value: &str) -> Result<WireString, E>
+            where
+                E: serde::de::Error,
+            {
+                Ok(WireString(Some(Some(value.to_owned()))))
+            }
+
+            fn visit_string<E>(self, value: String) -> Result<WireString, E>
+            where
+                E: serde::de::Error,
+            {
+                Ok(WireString(Some(Some(value))))
+            }
+        }
+
+        deserializer.deserialize_option(WireStringVisitor)
+    }
+}
+
+/// Skip guard for a [`WireString`] field. Only an absent field is
+/// omitted from the reserialized dict; an explicit null stays as
+/// null and an empty string stays as an empty string.
+fn wire_string_absent(value: &WireString) -> bool {
+    value.0.is_none()
+}
+
+/// A response coordinate with its wire presence state. Absence
+/// decodes to the typed default the leniency posture promises, so
+/// the wrapper only needs to carry one extra state of its own, the
+/// explicit null, which the reserialized dict must emit as null
+/// while every internal read keeps the default.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct WireFloat(Option<f64>);
+
+impl WireFloat {
+    /// The typed coordinate. An explicit null reads as the absence
+    /// default, exactly as a missing coordinate does.
+    pub fn value(&self) -> f64 {
+        self.0.unwrap_or(0.0)
+    }
+
+    /// True when the wire carried an explicit null.
+    pub fn is_null(&self) -> bool {
+        self.0.is_none()
+    }
+}
+
+impl Default for WireFloat {
+    fn default() -> Self {
+        WireFloat(Some(0.0))
+    }
+}
+
+impl From<f64> for WireFloat {
+    fn from(value: f64) -> Self {
+        WireFloat(Some(value))
+    }
+}
+
+impl PartialEq<f64> for WireFloat {
+    fn eq(&self, other: &f64) -> bool {
+        self.value() == *other
+    }
+}
+
+impl serde::Serialize for WireFloat {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        match self.0 {
+            Some(value) => serializer.serialize_f64(value),
+            None => serializer.serialize_none(),
+        }
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for WireFloat {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        struct WireFloatVisitor;
+
+        impl<'de> serde::de::Visitor<'de> for WireFloatVisitor {
+            type Value = WireFloat;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+                formatter.write_str("a number or null")
+            }
+
+            fn visit_none<E>(self) -> Result<WireFloat, E>
+            where
+                E: serde::de::Error,
+            {
+                Ok(WireFloat(None))
+            }
+
+            fn visit_unit<E>(self) -> Result<WireFloat, E>
+            where
+                E: serde::de::Error,
+            {
+                Ok(WireFloat(None))
+            }
+
+            fn visit_some<D>(self, deserializer: D) -> Result<WireFloat, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                Ok(WireFloat(Some(f64::deserialize(deserializer)?)))
+            }
+
+            fn visit_f64<E>(self, value: f64) -> Result<WireFloat, E>
+            where
+                E: serde::de::Error,
+            {
+                Ok(WireFloat(Some(value)))
+            }
+
+            fn visit_i64<E>(self, value: i64) -> Result<WireFloat, E>
+            where
+                E: serde::de::Error,
+            {
+                Ok(WireFloat(Some(value as f64)))
+            }
+
+            fn visit_u64<E>(self, value: u64) -> Result<WireFloat, E>
+            where
+                E: serde::de::Error,
+            {
+                Ok(WireFloat(Some(value as f64)))
+            }
+        }
+
+        deserializer.deserialize_option(WireFloatVisitor)
+    }
+}
+
+/// A response list field with its wire presence state, on the same
+/// two option shape as [`WireString`].
+#[derive(Debug, Clone, PartialEq)]
+pub struct WireList<T>(Option<Option<Vec<T>>>);
+
+impl<T> WireList<T> {
+    /// The elements the wire sent, or an empty slice for an absent
+    /// or null field, which is the absence shape internal reads
+    /// already use for both.
+    pub fn as_slice(&self) -> &[T] {
+        match &self.0 {
+            Some(Some(items)) => items,
+            _ => &[],
+        }
+    }
+}
+
+impl<T> Default for WireList<T> {
+    fn default() -> Self {
+        WireList(None)
+    }
+}
+
+impl<T> From<Vec<T>> for WireList<T> {
+    fn from(items: Vec<T>) -> Self {
+        WireList(Some(Some(items)))
+    }
+}
+
+impl<T> std::ops::Deref for WireList<T> {
+    type Target = [T];
+
+    fn deref(&self) -> &[T] {
+        self.as_slice()
+    }
+}
+
+impl<T> serde::Serialize for WireList<T>
+where
+    T: serde::Serialize,
+{
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        match &self.0 {
+            Some(Some(items)) => items.serialize(serializer),
+            _ => serializer.serialize_none(),
+        }
+    }
+}
+
+impl<'de, T> serde::Deserialize<'de> for WireList<T>
+where
+    T: serde::Deserialize<'de>,
+{
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        struct WireListVisitor<T>(std::marker::PhantomData<T>);
+
+        impl<'de, T> serde::de::Visitor<'de> for WireListVisitor<T>
+        where
+            T: serde::Deserialize<'de>,
+        {
+            type Value = WireList<T>;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+                formatter.write_str("a list or null")
+            }
+
+            fn visit_none<E>(self) -> Result<WireList<T>, E>
+            where
+                E: serde::de::Error,
+            {
+                Ok(WireList(Some(None)))
+            }
+
+            fn visit_unit<E>(self) -> Result<WireList<T>, E>
+            where
+                E: serde::de::Error,
+            {
+                Ok(WireList(Some(None)))
+            }
+
+            fn visit_some<D>(self, deserializer: D) -> Result<WireList<T>, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                Ok(WireList(Some(Some(Vec::<T>::deserialize(deserializer)?))))
+            }
+        }
+
+        deserializer.deserialize_option(WireListVisitor(std::marker::PhantomData))
+    }
+}
+
+/// Skip guard for a [`WireList`] field. Only an absent field is
+/// omitted from the reserialized dict; an explicit null stays as
+/// null and an empty list stays as an empty list.
+fn wire_list_absent<T>(value: &WireList<T>) -> bool {
+    value.0.is_none()
 }
 
 fn is_zero_u32(value: &u32) -> bool {
@@ -437,8 +764,8 @@ fn none_or_empty_vec(value: &Option<Vec<String>>) -> bool {
 pub struct Photo {
     /// Resource name, for example `places/{id}/photos/{ref}`. Pass this to
     /// the photo media endpoint.
-    #[serde(default, skip_serializing_if = "is_empty_string")]
-    pub name: String,
+    #[serde(default, skip_serializing_if = "wire_string_absent")]
+    pub name: WireString,
     #[serde(
         default,
         deserialize_with = "de_lenient_u32",
@@ -451,8 +778,8 @@ pub struct Photo {
         skip_serializing_if = "is_zero_u32"
     )]
     pub height_px: u32,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub author_attributions: Vec<AuthorAttribution>,
+    #[serde(default, skip_serializing_if = "wire_list_absent")]
+    pub author_attributions: WireList<AuthorAttribution>,
     /// Link where users can flag a problem with this photo.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub flag_content_uri: Option<String>,
@@ -467,12 +794,12 @@ pub struct Photo {
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AuthorAttribution {
-    #[serde(default, skip_serializing_if = "is_empty_string")]
-    pub display_name: String,
-    #[serde(default, skip_serializing_if = "is_empty_string")]
-    pub uri: String,
-    #[serde(default, skip_serializing_if = "is_empty_string")]
-    pub photo_uri: String,
+    #[serde(default, skip_serializing_if = "wire_string_absent")]
+    pub display_name: WireString,
+    #[serde(default, skip_serializing_if = "wire_string_absent")]
+    pub uri: WireString,
+    #[serde(default, skip_serializing_if = "wire_string_absent")]
+    pub photo_uri: WireString,
     #[serde(flatten)]
     pub extra: Map<String, Value>,
 }
@@ -481,10 +808,10 @@ pub struct AuthorAttribution {
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Attribution {
-    #[serde(default, skip_serializing_if = "is_empty_string")]
-    pub provider: String,
-    #[serde(default, skip_serializing_if = "is_empty_string")]
-    pub provider_uri: String,
+    #[serde(default, skip_serializing_if = "wire_string_absent")]
+    pub provider: WireString,
+    #[serde(default, skip_serializing_if = "wire_string_absent")]
+    pub provider_uri: WireString,
     #[serde(flatten)]
     pub extra: Map<String, Value>,
 }
@@ -541,10 +868,10 @@ pub struct Period {
 pub struct OpeningHours {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub open_now: Option<bool>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub periods: Vec<Period>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub weekday_descriptions: Vec<String>,
+    #[serde(default, skip_serializing_if = "wire_list_absent")]
+    pub periods: WireList<Period>,
+    #[serde(default, skip_serializing_if = "wire_list_absent")]
+    pub weekday_descriptions: WireList<Option<String>>,
     #[serde(flatten)]
     pub extra: Map<String, Value>,
 }
@@ -553,12 +880,12 @@ pub struct OpeningHours {
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AddressComponent {
-    #[serde(default, skip_serializing_if = "is_empty_string")]
-    pub long_text: String,
-    #[serde(default, skip_serializing_if = "is_empty_string")]
-    pub short_text: String,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub types: Vec<String>,
+    #[serde(default, skip_serializing_if = "wire_string_absent")]
+    pub long_text: WireString,
+    #[serde(default, skip_serializing_if = "wire_string_absent")]
+    pub short_text: WireString,
+    #[serde(default, skip_serializing_if = "wire_list_absent")]
+    pub types: WireList<Option<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub language_code: Option<String>,
     #[serde(flatten)]
@@ -569,8 +896,8 @@ pub struct AddressComponent {
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PlusCode {
-    #[serde(default, skip_serializing_if = "is_empty_string")]
-    pub global_code: String,
+    #[serde(default, skip_serializing_if = "wire_string_absent")]
+    pub global_code: WireString,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub compound_code: Option<String>,
     #[serde(flatten)]
@@ -591,8 +918,8 @@ pub struct PostalAddress {
     pub administrative_area: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub locality: Option<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub address_lines: Vec<String>,
+    #[serde(default, skip_serializing_if = "wire_list_absent")]
+    pub address_lines: WireList<Option<String>>,
     #[serde(flatten)]
     pub extra: Map<String, Value>,
 }
@@ -602,10 +929,10 @@ pub struct PostalAddress {
 #[serde(rename_all = "camelCase")]
 pub struct Place {
     /// Resource name, `places/{id}`.
-    #[serde(default, skip_serializing_if = "is_empty_string")]
-    pub name: String,
-    #[serde(default, skip_serializing_if = "is_empty_string")]
-    pub id: String,
+    #[serde(default, skip_serializing_if = "wire_string_absent")]
+    pub name: WireString,
+    #[serde(default, skip_serializing_if = "wire_string_absent")]
+    pub id: WireString,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub display_name: Option<LocalizedText>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -614,8 +941,8 @@ pub struct Place {
     pub short_formatted_address: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub location: Option<LatLng>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub types: Vec<String>,
+    #[serde(default, skip_serializing_if = "wire_list_absent")]
+    pub types: WireList<Option<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub primary_type: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -645,8 +972,8 @@ pub struct Place {
     pub regular_opening_hours: Option<OpeningHours>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub current_opening_hours: Option<OpeningHours>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub address_components: Vec<AddressComponent>,
+    #[serde(default, skip_serializing_if = "wire_list_absent")]
+    pub address_components: WireList<AddressComponent>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub plus_code: Option<PlusCode>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -657,10 +984,10 @@ pub struct Place {
     pub adr_format_address: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub primary_type_display_name: Option<LocalizedText>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub photos: Vec<Photo>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub attributions: Vec<Attribution>,
+    #[serde(default, skip_serializing_if = "wire_list_absent")]
+    pub photos: WireList<Photo>,
+    #[serde(default, skip_serializing_if = "wire_list_absent")]
+    pub attributions: WireList<Attribution>,
     /// Any fields this version of the client does not model yet, preserved
     /// verbatim so nothing the API returns is lost.
     #[serde(flatten)]
@@ -671,8 +998,8 @@ pub struct Place {
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SearchResponse {
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub places: Vec<Place>,
+    #[serde(default, skip_serializing_if = "wire_list_absent")]
+    pub places: WireList<Place>,
     /// Present only when more Text Search pages exist.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub next_page_token: Option<String>,
@@ -703,10 +1030,10 @@ pub struct StringMatch {
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FormattedText {
-    #[serde(default, skip_serializing_if = "is_empty_string")]
-    pub text: String,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub matches: Vec<StringMatch>,
+    #[serde(default, skip_serializing_if = "wire_string_absent")]
+    pub text: WireString,
+    #[serde(default, skip_serializing_if = "wire_list_absent")]
+    pub matches: WireList<StringMatch>,
     #[serde(flatten)]
     pub extra: Map<String, Value>,
 }
@@ -729,16 +1056,16 @@ pub struct StructuredFormat {
 pub struct PlacePrediction {
     /// Resource name of the suggested place, for example
     /// `places/ChIJrTLr-GyuEmsRBfy61i59si0`.
-    #[serde(default, skip_serializing_if = "is_empty_string")]
-    pub place: String,
-    #[serde(default, skip_serializing_if = "is_empty_string")]
-    pub place_id: String,
+    #[serde(default, skip_serializing_if = "wire_string_absent")]
+    pub place: WireString,
+    #[serde(default, skip_serializing_if = "wire_string_absent")]
+    pub place_id: WireString,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub text: Option<FormattedText>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub structured_format: Option<StructuredFormat>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub types: Vec<String>,
+    #[serde(default, skip_serializing_if = "wire_list_absent")]
+    pub types: WireList<Option<String>>,
     #[serde(
         default,
         deserialize_with = "de_lenient_opt_u32",
@@ -765,8 +1092,8 @@ pub struct Suggestion {
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AutocompleteResponse {
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub suggestions: Vec<Suggestion>,
+    #[serde(default, skip_serializing_if = "wire_list_absent")]
+    pub suggestions: WireList<Suggestion>,
     /// Any other top level fields the API returned, preserved verbatim
     /// like on [`SearchResponse`] so nothing is dropped when this
     /// response is reserialized for the Python layer.
@@ -786,10 +1113,10 @@ pub struct PhotoResponse {
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PhotoMediaJson {
-    #[serde(default, skip_serializing_if = "is_empty_string")]
-    pub name: String,
-    #[serde(default, skip_serializing_if = "is_empty_string")]
-    pub photo_uri: String,
+    #[serde(default, skip_serializing_if = "wire_string_absent")]
+    pub name: WireString,
+    #[serde(default, skip_serializing_if = "wire_string_absent")]
+    pub photo_uri: WireString,
     #[serde(flatten)]
     pub extra: Map<String, Value>,
 }
@@ -836,7 +1163,7 @@ mod tests {
         assert_eq!(first.rating, Some(4.6));
         assert_eq!(first.user_rating_count, Some(1284));
         let loc = first.location.as_ref().unwrap();
-        assert!((loc.latitude - (-33.866_784)).abs() < 1e-9);
+        assert!((loc.latitude.value() - (-33.866_784)).abs() < 1e-9);
         assert_eq!(first.photos.len(), 1);
         assert_eq!(
             first.photos[0].name,
@@ -892,13 +1219,16 @@ mod tests {
             Some("New South Wales")
         );
         assert_eq!(postal.locality.as_deref(), Some("Sydney"));
-        assert_eq!(postal.address_lines, vec!["Shop 1/123 George St"]);
+        assert_eq!(
+            postal.address_lines.as_slice(),
+            [Some("Shop 1/123 George St".to_owned())]
+        );
         assert_eq!(
             place.adr_format_address.as_deref(),
             Some("<span class=\"street-address\">Shop 1/123 George St</span>, <span class=\"locality\">Sydney</span> <span class=\"region\">NSW</span> <span class=\"postal-code\">2000</span>, <span class=\"country-name\">Australia</span>")
         );
         let viewport = place.viewport.unwrap();
-        assert!((viewport.low.latitude - (-33.868)).abs() < 1e-9);
+        assert!((viewport.low.latitude.value() - (-33.868)).abs() < 1e-9);
         assert_eq!(
             place.primary_type_display_name.as_ref().unwrap().text,
             "Cafe"
@@ -1305,5 +1635,158 @@ mod tests {
         assert_eq!(value["rankPreference"], "DISTANCE");
         assert_eq!(value["excludedPrimaryTypes"], serde_json::json!(["bar"]));
         assert!(value.get("excludedTypes").is_none());
+    }
+
+    #[test]
+    fn presence_aware_string_round_trips_its_three_states() {
+        // Round 16, class 2. A plain string position on a response
+        // type keeps missing, explicit null and sent value apart in
+        // the reserialized typed dict, while internal reads see the
+        // empty default for the first two.
+        let component: AddressComponent =
+            serde_json::from_str(r#"{"longText":"123 George Street"}"#).unwrap();
+        assert_eq!(component.short_text.as_str(), "");
+        let value = serde_json::to_value(&component).unwrap();
+        assert!(value.get("shortText").is_none());
+
+        let component: AddressComponent =
+            serde_json::from_str(r#"{"longText":"123 George Street","shortText":null}"#).unwrap();
+        assert_eq!(component.short_text.as_str(), "");
+        let value = serde_json::to_value(&component).unwrap();
+        assert!(value["shortText"].is_null());
+
+        let component: AddressComponent =
+            serde_json::from_str(r#"{"longText":"123 George Street","shortText":""}"#).unwrap();
+        assert_eq!(component.short_text.as_str(), "");
+        let value = serde_json::to_value(&component).unwrap();
+        assert_eq!(value["shortText"], "");
+
+        let component: AddressComponent =
+            serde_json::from_str(r#"{"longText":"123 George Street","shortText":"123"}"#).unwrap();
+        assert_eq!(component.short_text, "123");
+        let value = serde_json::to_value(&component).unwrap();
+        assert_eq!(value["shortText"], "123");
+    }
+
+    #[test]
+    fn presence_aware_list_forwards_a_null_field_and_keeps_null_elements() {
+        // Round 16, classes 1 and 4. A null list field decodes to
+        // the empty absence shape internally and reserializes as the
+        // explicit null the Python layer must meet, and a null
+        // element inside a modelled string list survives in place.
+        let place: Place = serde_json::from_str(r#"{"id":"ChIJx","types":null}"#).unwrap();
+        assert!(place.types.is_empty());
+        let value = serde_json::to_value(&place).unwrap();
+        assert!(value["types"].is_null());
+
+        let place: Place = serde_json::from_str(r#"{"id":"ChIJx","types":["cafe",null]}"#).unwrap();
+        assert_eq!(place.types.as_slice(), [Some("cafe".to_owned()), None]);
+        let value = serde_json::to_value(&place).unwrap();
+        assert_eq!(value["types"], serde_json::json!(["cafe", null]));
+
+        let resp: SearchResponse = serde_json::from_str(r#"{"places":null}"#).unwrap();
+        assert!(resp.places.is_empty());
+        let value = serde_json::to_value(&resp).unwrap();
+        assert!(value["places"].is_null());
+    }
+
+    #[test]
+    fn presence_aware_coordinate_forwards_an_explicit_null() {
+        // Round 16, class 3. A null coordinate decodes with the
+        // typed default internally and reserializes as the explicit
+        // null, while a missing coordinate keeps reserializing as
+        // the default, which is the leniency the typed layer owes.
+        let place: Place = serde_json::from_str(
+            r#"{"id":"ChIJx","location":{"latitude":null,"longitude":151.2}}"#,
+        )
+        .unwrap();
+        let location = place.location.as_ref().unwrap();
+        assert_eq!(location.latitude.value(), 0.0);
+        assert_eq!(location.longitude.value(), 151.2);
+        let value = serde_json::to_value(&place).unwrap();
+        assert_eq!(
+            value["location"],
+            serde_json::json!({"latitude": null, "longitude": 151.2})
+        );
+
+        let place: Place =
+            serde_json::from_str(r#"{"id":"ChIJx","location":{"latitude":-33.86}}"#).unwrap();
+        let value = serde_json::to_value(&place).unwrap();
+        assert_eq!(
+            value["location"],
+            serde_json::json!({"latitude": -33.86, "longitude": 0.0})
+        );
+    }
+
+    #[test]
+    fn photo_media_json_decodes_a_null_field_under_the_class_2_form() {
+        // Round 16, class 2 on the photo URI form. A null field
+        // decodes, reads as the empty default for the identity
+        // guard, and reserializes as the explicit null.
+        let media: PhotoMediaJson =
+            serde_json::from_str(r#"{"name":null,"photoUri":"https://example.test/img"}"#).unwrap();
+        assert!(media.name.is_empty());
+        assert_eq!(media.photo_uri, "https://example.test/img");
+        let value = serde_json::to_value(&media).unwrap();
+        assert!(value["name"].is_null());
+        assert_eq!(value["photoUri"], "https://example.test/img");
+    }
+
+    #[test]
+    fn request_bodies_stay_byte_identical_with_empty_and_unset_values() {
+        // Round 16 guard pin. The presence wrappers live on response
+        // types only, so a request body carrying empty and unset
+        // values serializes byte identical to the body the head
+        // before this round produced. The expected strings are that
+        // output, recorded literally.
+        let req = TextSearchRequest {
+            text_query: "pizza".to_owned(),
+            page_token: Some(String::new()),
+            language_code: Some(String::new()),
+            region_code: Some(String::new()),
+            price_levels: Some(Vec::new()),
+            ..Default::default()
+        };
+        assert_eq!(
+            serde_json::to_string(&req).unwrap(),
+            r#"{"textQuery":"pizza"}"#
+        );
+
+        let req = NearbySearchRequest {
+            location_restriction: LocationRestriction {
+                circle: Circle {
+                    center: LatLng::new(-33.86, 151.20),
+                    radius: 800.0,
+                },
+            },
+            included_types: Some(Vec::new()),
+            excluded_types: Some(Vec::new()),
+            included_primary_types: Some(Vec::new()),
+            excluded_primary_types: Some(Vec::new()),
+            max_result_count: None,
+            language_code: Some(String::new()),
+            region_code: Some(String::new()),
+            rank_preference: None,
+            routing_parameters: None,
+            include_future_opening_businesses: None,
+        };
+        assert_eq!(
+            serde_json::to_string(&req).unwrap(),
+            r#"{"locationRestriction":{"circle":{"center":{"latitude":-33.86,"longitude":151.2},"radius":800.0}}}"#
+        );
+
+        let req = AutocompleteRequest {
+            input: "Bianco".to_owned(),
+            language_code: Some(String::new()),
+            session_token: Some(String::new()),
+            included_region_codes: Some(Vec::new()),
+            included_primary_types: Some(Vec::new()),
+            origin: Some(LatLng::new(-33.86, 151.20)),
+            ..Default::default()
+        };
+        assert_eq!(
+            serde_json::to_string(&req).unwrap(),
+            r#"{"input":"Bianco","origin":{"latitude":-33.86,"longitude":151.2}}"#
+        );
     }
 }

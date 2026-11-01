@@ -141,7 +141,7 @@ impl Client {
         &self,
         request: &TextSearchRequest,
         fields: Option<&FieldMask>,
-    ) -> Result<SearchResponse, Error> {
+    ) -> Result<(SearchResponse, String), Error> {
         if request.text_query.trim().is_empty() {
             return Err(Error::config("text_query must not be empty"));
         }
@@ -176,7 +176,7 @@ impl Client {
         &self,
         request: &NearbySearchRequest,
         fields: Option<&FieldMask>,
-    ) -> Result<SearchResponse, Error> {
+    ) -> Result<(SearchResponse, String), Error> {
         validate_circle(
             &request.location_restriction.circle,
             "location_restriction circle",
@@ -210,7 +210,7 @@ impl Client {
         language_code: Option<&str>,
         region_code: Option<&str>,
         session_token: Option<&str>,
-    ) -> Result<Place, Error> {
+    ) -> Result<(Place, String), Error> {
         validate_place_id(place_id)?;
         if let Some(token) = session_token {
             validate_session_token(token)?;
@@ -243,7 +243,7 @@ impl Client {
         if !query.is_empty() {
             builder = builder.query(&query);
         }
-        let (place, status): (Place, u16) = self.send_with_status(builder).await?;
+        let (place, body, status): (Place, String, u16) = self.send_with_status(builder).await?;
         // Place Details with any sane field mask always returns an
         // identity. A success body carrying neither an id nor a
         // resource name is the wrong shape entirely, not a real place;
@@ -256,7 +256,7 @@ impl Client {
                 source: None,
             });
         }
-        Ok(place)
+        Ok((place, body))
     }
 
     /// Autocomplete: place and query predictions for partial input.
@@ -266,7 +266,7 @@ impl Client {
         &self,
         request: &AutocompleteRequest,
         fields: Option<&FieldMask>,
-    ) -> Result<AutocompleteResponse, Error> {
+    ) -> Result<(AutocompleteResponse, String), Error> {
         if request.input.trim().is_empty() {
             return Err(Error::config("autocomplete input must not be empty"));
         }
@@ -317,13 +317,17 @@ impl Client {
     /// downloaded bytes. With `skip_http_redirect`, the endpoint answers
     /// with a JSON object instead, and this returns the photo name and its
     /// short lived URI.
+    ///
+    /// The result rides in a tuple with the JSON body text of the URI
+    /// form (absent for the bytes form) and the HTTP status, on the
+    /// same Round 16 passthrough the JSON endpoints use.
     pub async fn place_photo(
         &self,
         photo_name: &str,
         max_width_px: Option<u32>,
         max_height_px: Option<u32>,
         skip_http_redirect: bool,
-    ) -> Result<PhotoMedia, Error> {
+    ) -> Result<(PhotoMedia, Option<String>, u16), Error> {
         validate_photo_params(photo_name, max_width_px, max_height_px)?;
         // The photo name is structural (places/{id}/photos/{ref}). Its
         // segments are validated strictly, and each segment is percent
@@ -395,7 +399,7 @@ impl Client {
                     source: None,
                 });
             }
-            return Ok(PhotoMedia::Uri(media));
+            return Ok((PhotoMedia::Uri(media), Some(body), status.as_u16()));
         }
         // The body is read and checked for an error envelope before
         // any content type reasoning. Real error responses carry
@@ -435,10 +439,14 @@ impl Client {
             }
         }
         validate_photo_magic(&bytes, content_type.as_deref(), status.as_u16())?;
-        Ok(PhotoMedia::Bytes(PhotoResponse {
-            bytes,
-            content_type,
-        }))
+        Ok((
+            PhotoMedia::Bytes(PhotoResponse {
+                bytes,
+                content_type,
+            }),
+            None,
+            status.as_u16(),
+        ))
     }
 
     /// Fetch the photo resource, following redirects manually. The
@@ -574,19 +582,24 @@ impl Client {
     async fn send<T: DeserializeOwned>(
         &self,
         builder: reqwest::RequestBuilder,
-    ) -> Result<T, Error> {
-        Ok(self.send_with_status(builder).await?.0)
+    ) -> Result<(T, String), Error> {
+        let (value, body, _) = self.send_with_status(builder).await?;
+        Ok((value, body))
     }
 
     /// Send a JSON request and decode the success body, keeping the
-    /// HTTP status alongside the value for callers that validate the
-    /// decoded shape themselves. Every failure keeps both facts it
-    /// knows: the HTTP status and, for body read failures, the read
-    /// error itself; neither is silently dropped.
+    /// response body text and the HTTP status alongside the value.
+    /// The body rides along so the Python layer can build its raw
+    /// view from the wire payload itself instead of from a
+    /// reserialization of the typed value (Round 16), and the status
+    /// rides along so a Python side conversion failure can carry it.
+    /// Every failure keeps both facts it knows: the HTTP status and,
+    /// for body read failures, the read error itself; neither is
+    /// silently dropped.
     async fn send_with_status<T: DeserializeOwned>(
         &self,
         builder: reqwest::RequestBuilder,
-    ) -> Result<(T, u16), Error> {
+    ) -> Result<(T, String, u16), Error> {
         let response = builder.send().await.map_err(Error::network)?;
         let status = response.status();
         let retry_after = retry_after_of(&response);
@@ -619,7 +632,7 @@ impl Client {
             return Err(err);
         }
         serde_json::from_str::<T>(&body)
-            .map(|value| (value, status.as_u16()))
+            .map(|value| (value, body, status.as_u16()))
             .map_err(|e| Error::Decode {
                 detail: e.to_string(),
                 status: Some(status.as_u16()),
@@ -884,16 +897,31 @@ fn validate_text_search_locations(request: &TextSearchRequest) -> Result<(), Err
 /// must be finite and within -90 to 90, longitude finite and within
 /// -180 to 180, exactly the ranges the API documents.
 fn validate_lat_lng(point: &LatLng, label: &str) -> Result<(), Error> {
-    if !point.latitude.is_finite() || !(-90.0..=90.0).contains(&point.latitude) {
+    // A coordinate the wire carried as an explicit null reads as
+    // the typed default internally (Round 16), but on a request it
+    // is still the non-finite shape this validation exists to
+    // reject: it would serialize back out as JSON null.
+    let latitude = point.latitude.value();
+    if point.latitude.is_null() || !latitude.is_finite() || !(-90.0..=90.0).contains(&latitude) {
         return Err(Error::config(format!(
             "{label} latitude must be finite and within -90 to 90, got {}",
-            point.latitude
+            if point.latitude.is_null() {
+                "null".to_owned()
+            } else {
+                latitude.to_string()
+            }
         )));
     }
-    if !point.longitude.is_finite() || !(-180.0..=180.0).contains(&point.longitude) {
+    let longitude = point.longitude.value();
+    if point.longitude.is_null() || !longitude.is_finite() || !(-180.0..=180.0).contains(&longitude)
+    {
         return Err(Error::config(format!(
             "{label} longitude must be finite and within -180 to 180, got {}",
-            point.longitude
+            if point.longitude.is_null() {
+                "null".to_owned()
+            } else {
+                longitude.to_string()
+            }
         )));
     }
     Ok(())
@@ -1300,7 +1328,7 @@ mod tests {
         // proving the valid shape passes validation end to end.
         let stub = Stub::start(|_| stub_json(200, r#"{"suggestions":[]}"#));
         let stub_client = stub.client("k");
-        let result = block_on(stub_client.autocomplete(&req, None)).unwrap();
+        let result = block_on(stub_client.autocomplete(&req, None)).unwrap().0;
         assert!(result.suggestions.is_empty());
     }
 
@@ -1426,7 +1454,7 @@ mod tests {
             text_query: "pizza in Sydney".to_owned(),
             ..Default::default()
         };
-        let result = block_on(client.text_search(&req, None)).unwrap();
+        let result = block_on(client.text_search(&req, None)).unwrap().0;
         assert!(result.places.is_empty());
         let requests = stub.requests();
         assert_eq!(requests.len(), 1);
@@ -1939,7 +1967,7 @@ mod tests {
         let client = media.client("k");
         let result =
             block_on(client.place_photo("places/ChIJ/photos/ref", Some(100), None, false)).unwrap();
-        match result {
+        match result.0 {
             PhotoMedia::Bytes(photo) => {
                 assert_eq!(photo.bytes, PNG_BYTES);
                 assert_eq!(photo.content_type.as_deref(), Some("image/png"));
@@ -1995,7 +2023,7 @@ mod tests {
         let client = media.client("k");
         let result =
             block_on(client.place_photo("places/ChIJ/photos/ref", Some(100), None, false)).unwrap();
-        match result {
+        match result.0 {
             PhotoMedia::Bytes(photo) => assert_eq!(photo.bytes, PNG_BYTES),
             PhotoMedia::Uri(_) => panic!("expected downloaded bytes"),
         }
@@ -2054,7 +2082,7 @@ mod tests {
         let client = stub.client("k");
         let result =
             block_on(client.place_photo("places/ChIJ/photos/ref", Some(100), None, true)).unwrap();
-        match result {
+        match result.0 {
             PhotoMedia::Uri(media) => {
                 assert_eq!(media.photo_uri, "https://example.test/img");
             }
