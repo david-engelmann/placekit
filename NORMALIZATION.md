@@ -127,10 +127,10 @@ this guide teaches the behaviour rather than restating the surface.
 
 [Cannot promise] The surface is deliberately narrower than the address
 problem. placekit.address ships no formatter and no display composer and
-no envelope renderer. It ships no postal code assembly from prefix and
-suffix pieces and no sorting code reader and no formatted text parser,
-and the recipes point at caller code or at libaddressinput metadata
-wherever a reader would otherwise hunt for those behaviours.
+no envelope renderer. The rest of the held surface inventory is stated
+in full with the decision rules in section 6, and the recipes point at
+caller code or at libaddressinput metadata wherever a reader would
+otherwise hunt for those behaviours.
 
 
 ## 4. The oddities catalogue
@@ -222,14 +222,21 @@ name on one Dubai place.
 pinned reason as well. The mall store place in
 recorded_P15_richest_mall_store.json, one item with
 recorded_P12_contained_place.json, carries a neighborhood reading Central
-San Jose beside a locality reading Santa Clara.
+San Jose beside a locality reading Santa Clara. The United States reading
+rests on 3 details places across 2 states with 3 different geometries and
+no American search set with components exists and every American claim in
+the guide must carry this thin warning in the same paragraph.
 
 [Recorded] Component language tags range wider than the request languages
 and are not reliable script labels. The Everest component in
 recorded_P1_no_address_natural_feature.json reads Monte Everest in its
-Spanish short text while its language code reads en, and the corpus also
-holds transliteration tags inside mismatched requests and an undetermined
-tag on English text. No helper filters or groups by language tag.
+Spanish short text while its language code reads en. No helper filters
+or groups by language tag.
+
+[Cassette reported] The cassette sets hold more of the same
+unreliability with no isolating fixture excerpt. Transliteration tags
+appear inside mismatched requests, and an undetermined tag sits on
+English text.
 
 [Recorded] One place can carry two components of the winning type, and
 two components on one place can hold the same text. Twelve of the 40
@@ -238,9 +245,10 @@ place in recorded_A13_premise_and_subpremise.json holds one digit string
 as both its premise text and its sublocality level 4 text, on distinct
 components. Text equality is not identity.
 
-[Cassette reported] The same string can also occupy several roles at
-once. On one Bourton place it reads as street number and route and
-sublocality level 1 in overlapping roles. In the Dubai set the
+[Cassette reported] The same string can also occupy more than one role
+at once. On one Bourton place the string Lansdowne reads as route and as
+sublocality level 1 in overlapping roles, while the street number on
+that place reads 3. In the Dubai set the
 neighborhood sits ahead of the sublocality on most places and behind the
 locality on two places that lead with a typeless component, and one place
 drops neighborhood entirely. Neither shape is isolated in an excerpt.
@@ -444,7 +452,16 @@ Santa Clara from locality at heuristic grade while the neighborhood reads
 Central San Jose. On the bridge place in recorded_A1_no_street_number
 .json the city reads New York at heuristic grade with postal status
 absent, and its route with no street number leaves the no street level
-flag false even though the street number flag is also false.
+flag false even though the street number flag is also false. The United
+States reading rests on 3 details places across 2 states with 3 different
+geometries and no American search set with components exists and every
+American claim in the guide must carry this thin warning in the same
+paragraph.
+
+[Heuristic] The United States reading rests on 3 details places across 2
+states with 3 different geometries and no American search set with
+components exists and every American claim in the guide must carry this
+thin warning in the same paragraph.
 
 ### Vietnam
 
@@ -470,6 +487,13 @@ from the component locality and never equals Tan Son Hoa, while the
 postal locality returns Tan Son Hoa as a cross reading value. The German
 reading in recorded_H11_description_order_vs_period_anchor.json is a
 genuine second reading, cited as one where the spelling point matters.
+The Vietnam reading rests on 1 distinct place seen twice in two details
+calls under English and German requests and it must be presented as
+single place status wherever it appears.
+
+[Heuristic] The Vietnam reading rests on 1 distinct place seen twice in
+two details calls under English and German requests and it must be
+presented as single place status wherever it appears.
 
 ### Israel
 
@@ -525,9 +549,7 @@ contested condition holds on a British place it replaces the grade that
 table would otherwise assign to the headline.
 
 [Cannot promise] A result from this module is a reading of one response
-and its confidence grade is part of that reading. That sentence is homed
-in this group, beside the first teaching of the grades, and the
-boundaries section points back here rather than replacing it.
+and its confidence grade is part of that reading.
 
 ### Carriers and routing
 
@@ -745,9 +767,7 @@ no recorded city none
 ```
 
 [Cannot promise] No resolved city in this guide is a fact of the same
-kind as a place ID. That sentence is homed in this recipe, beside the
-first worked city reading in the guide, and the boundaries section points
-back here.
+kind as a place ID.
 
 ### Recipe 2. Handle the British two values
 
@@ -791,17 +811,20 @@ formatting is a pointer at libaddressinput metadata rather than a
 reimplementation here.
 
 ```python
-from placekit import address, types
+from placekit import address
 
-# Caller owned guidance, not library behaviour.
+# Caller owned guidance, not library behaviour. The join reads every
+# component in list order, so it keeps the untyped texts that a type
+# keyed read walks past, and the lost list names those texts.
 components = place.address_components
-untyped = address.untyped_components(components)
-lost = [component.long_text for component in untyped if component.long_text]
-premise_texts = address.component_long_texts(components, types.TYPE_PREMISE)
-route = address.find_components(components, types.TYPE_ROUTE)
 line = ", ".join(
     component.long_text for component in components if component.long_text
 )
+lost = [
+    component.long_text
+    for component in address.untyped_components(components)
+    if component.long_text
+]
 ```
 
 [Recipe] On the second Dubai place in recorded_A7_rtl_script_address
