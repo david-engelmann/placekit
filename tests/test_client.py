@@ -3592,6 +3592,70 @@ def test_partial_location_raw_carries_no_fabricated_longitude(
     assert place.raw["location"] == {"latitude": -33.866784}
 
 
+def test_empty_viewport_raw_fabricates_no_corners(client, raw_response):
+    # The viewport case of the same fabrication family one level
+    # down. The core viewport type holds both corners as non
+    # optional defaulted values, so the typed tree always carries
+    # both, and an empty viewport object on the wire used to hand
+    # each corner a raw holding the zero pair the wire never sent.
+    # The typed attributes keep the core leniency defaults. Only
+    # the corner raws stop inventing the pair.
+    _serve_details(raw_response, lambda data: data.update(viewport={}))
+    place = client.place_details("ChIJrTLr-GyuEmsRBfy61i59si0")
+    assert place.viewport is not None
+    assert place.raw["viewport"] == {}
+    assert place.viewport.low.latitude == 0.0
+    assert place.viewport.low.longitude == 0.0
+    assert place.viewport.high.latitude == 0.0
+    assert place.viewport.high.longitude == 0.0
+    assert place.viewport.low.raw == {}
+    assert place.viewport.high.raw == {}
+
+
+def test_viewport_with_only_a_low_corner_fabricates_no_high_corner(
+    client, raw_response
+):
+    # A field mask can name one corner alone, so a partial
+    # viewport is a reachable wire shape, not a synthetic one.
+    def mutate(data):
+        data["viewport"] = {"low": {"latitude": -33.868}}
+
+    _serve_details(raw_response, mutate)
+    place = client.place_details("ChIJrTLr-GyuEmsRBfy61i59si0")
+    assert place.viewport is not None
+    assert place.viewport.low.raw == {"latitude": -33.868}
+    assert place.viewport.low.longitude == 0.0
+    assert place.viewport.high.raw == {}
+    assert place.viewport.high.latitude == 0.0
+    assert place.viewport.high.longitude == 0.0
+
+
+def test_viewport_with_only_a_high_corner_fabricates_no_low_corner(
+    client, raw_response
+):
+    def mutate(data):
+        data["viewport"] = {"high": {"longitude": 151.2084}}
+
+    _serve_details(raw_response, mutate)
+    place = client.place_details("ChIJrTLr-GyuEmsRBfy61i59si0")
+    assert place.viewport is not None
+    assert place.viewport.high.raw == {"longitude": 151.2084}
+    assert place.viewport.high.latitude == 0.0
+    assert place.viewport.low.raw == {}
+    assert place.viewport.low.latitude == 0.0
+    assert place.viewport.low.longitude == 0.0
+
+
+def test_model_layer_non_string_name_never_becomes_an_id():
+    # The id fallback derives an id from the resource name, and a
+    # name that is not a string carries no id to derive. A numeric
+    # name used to pass through a string coercion and hand back
+    # its decimal form as the id, a value the wire never sent. A
+    # string name still derives its id exactly as before.
+    assert Place.from_api({"name": "places/ChIJx"}).id == "ChIJx"
+    assert Place.from_api({"name": 123}).id == ""
+
+
 # Branch A pins for classes 1 and 3. The core forwards the explicit
 # null and the documented Python contract decides it, the contract
 # test_explicit_null_in_a_list_field_is_a_decode_error pins at the
