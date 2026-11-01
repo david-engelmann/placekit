@@ -181,6 +181,20 @@ except RateLimitError as exc:
     print("quota", exc.status_code, exc.google_status)
 ```
 
+## Concurrency and lifecycle
+
+One `Client` may be shared across threads, and one `AsyncClient` may be shared across tasks and used from more than one event loop. Calls on a shared client run concurrently, and each call returns its own result.
+
+`close()` gates later calls with `ConfigError`. It neither cancels nor waits for calls already in flight, and those calls finish with their own results. Closing is idempotent, and the context managers close on exit.
+
+Cancelling a task that is awaiting an `AsyncClient` call drops the wire request, and the same client stays fully usable for the next call.
+
+Each client instance holds its own connection pool, so a program holding a `Client` and an `AsyncClient` for the same work holds two pools. Pool sizes and the idle expiry are the inherited reqwest defaults, with no configuration surface in placekit. The idle expiry is ninety seconds under the reqwest version the current release locks, and that figure is an inherited default rather than a placekit promise, so a future reqwest update can move it. Under parallel async load the upstream pool can also open a connection that ends up carrying no request. Every client in one process shares a single Tokio runtime that is built on first use and lives for the life of the process, holding its worker threads until the process exits. Connection counts observed against a local stub also carry a transport limit, because the stub speaks HTTP 1.1 with keep alive while the real API can multiplex over HTTP 2.
+
+A result is the holder's to mutate in place, within the shallow freeze the models document. Mutating a result while other threads read it is not safe. A reader can meet a typed view and a raw view that no longer agree, and a reader iterating a list or a raw dict while it changes can fail with a `RuntimeError`. Share a result between threads only when nobody mutates it, or hand each thread its own result.
+
+A process may fork after using placekit. The bindings detect the new process on the next call and rebuild their runtime and client state for the child, so calls in the child work on fresh and inherited clients alike. The native module does not load under subinterpreters, so a host that runs application code inside subinterpreters cannot use this library. Work through the Python `Client` and `AsyncClient` classes. The native module behind them is private, and direct use of it is unsupported.
+
 ## Pointing the client somewhere else
 
 `Client` and `AsyncClient` accept `base_url` and `timeout` keyword arguments. The base URL override is how the test suite runs fully offline against a local stub server, and it works just as well for proxies you control and regional endpoints.
