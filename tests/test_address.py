@@ -546,6 +546,17 @@ def test_bare_string_components_raise_config_error():
         address.untyped_components("route")
 
 
+def test_none_components_raise_config_error():
+    with pytest.raises(ConfigError):
+        address.find_components(None, "route")
+    with pytest.raises(ConfigError):
+        address.untyped_components(None)
+    with pytest.raises(ConfigError):
+        address.has_no_street_level(None)
+    with pytest.raises(ConfigError):
+        address.postal_code_from_components(None)
+
+
 def test_bad_type_name_raises_config_error():
     with pytest.raises(ConfigError):
         address.find_components([], 3)

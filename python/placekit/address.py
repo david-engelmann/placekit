@@ -182,10 +182,10 @@ class AddressFlags:
 def _checked_components(
     components: Sequence[AddressComponent],
 ) -> Sequence[AddressComponent]:
-    if isinstance(components, (str, bytes)):
+    if components is None or isinstance(components, (str, bytes)):
         raise ConfigError(
             "components must be a sequence of AddressComponent values "
-            "and not a bare string or bytes"
+            "and not None or a bare string or bytes"
         )
     return components
 
