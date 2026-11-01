@@ -2467,6 +2467,24 @@ def test_photo_uri_result_from_api_preserves_unmodelled_fields():
     assert result.raw["photoUri"] == result.photo_uri
 
 
+def test_photo_uri_result_repr_hides_the_signed_uri():
+    # R18-A7: the signed URI is a bearer capability that fetches the
+    # photo without the API key until it expires, so it stays out of
+    # the repr, the same care the bytes model takes with its
+    # content. The attribute itself is unaffected.
+    from placekit.models import PhotoUriResult
+
+    uri = "https://lh3.googleusercontent.com/grass-cs/AABkmLexSCJl?sig=SECRET"
+    result = PhotoUriResult.from_api(
+        {"name": "places/ChIJ/photos/AV-0GLfkSvEkSqs", "photoUri": uri}
+    )
+    shown = repr(result)
+    assert uri not in shown
+    assert "AABkmLexSCJl" not in shown
+    assert "SECRET" not in shown
+    assert result.photo_uri == uri
+
+
 def test_place_photo_skip_redirect_result_carries_raw(client):
     # Client level companion to the model test above: the raw on the
     # returned object equals the JSON form the stub served, which is

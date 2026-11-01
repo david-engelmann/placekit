@@ -1987,7 +1987,10 @@ class PhotoUriResult:
     including any fields this client version does not model yet.
     """
 
-    photo_uri: str
+    #: The signed photo URI; excluded from repr so printing a result
+    #: does not write the short lived bearer capability into a log
+    #: (R18-A7). The bytes model takes the same care with its content.
+    photo_uri: str = field(repr=False)
     name: str = ""
     raw: dict[str, Any] = field(default_factory=dict, repr=False, compare=False)
 
