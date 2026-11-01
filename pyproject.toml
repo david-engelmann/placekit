@@ -11,7 +11,7 @@ license = "MIT"
 license-files = ["LICENSE"]
 requires-python = ">=3.10"
 authors = [{ name = "David Engelmann" }]
-keywords = ["google-places", "places", "geocoding", "pyo3", "maps"]
+keywords = ["google-places", "places", "pyo3", "maps"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
@@ -24,6 +24,9 @@ classifiers = [
     "Programming Language :: Rust",
     "Topic :: Scientific/Engineering :: GIS",
     "Typing :: Typed",
+    "Operating System :: MacOS",
+    "Operating System :: Microsoft :: Windows",
+    "Operating System :: POSIX :: Linux",
 ]
 
 [project.urls]
@@ -31,6 +34,7 @@ Homepage = "https://github.com/david-engelmann/placekit"
 Repository = "https://github.com/david-engelmann/placekit"
 Issues = "https://github.com/david-engelmann/placekit/issues"
 Changelog = "https://github.com/david-engelmann/placekit/blob/main/CHANGELOG.md"
+Documentation = "https://github.com/david-engelmann/placekit"
 
 [project.optional-dependencies]
 dev = ["pytest>=8", "mypy>=1.11", "maturin>=1.7,<2.0"]
