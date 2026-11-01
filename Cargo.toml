@@ -23,6 +23,7 @@ placekit-core = { path = "crates/placekit-core" }
 serde = "1"
 pyo3 = { version = "0.23", features = ["abi3-py310", "extension-module"] }
 pyo3-async-runtimes = { version = "0.23", features = ["tokio-runtime"] }
+tokio = { version = "1", features = ["rt-multi-thread", "net", "time"] }
 pythonize = "0.23"
 serde_json = "1"
 

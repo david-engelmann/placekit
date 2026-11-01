@@ -4,12 +4,25 @@
 //! `placekit-core` crate; this layer only converts arguments (request bodies
 //! arrive as dicts and are deserialized into the core's typed request
 //! structs, so validation stays in Rust), runs the core's async futures on a
-//! shared Tokio runtime for both the sync and async Python APIs, and
-//! translates core errors into the `PlacesError` exception defined here.
-//! The Python package re-exports a friendlier exception hierarchy built on
-//! top of the `kind` attribute this layer sets.
+//! Tokio runtime owned by this layer for both the sync and async Python
+//! APIs, and translates core errors into the `PlacesError` exception defined
+//! here. The Python package re-exports a friendlier exception hierarchy
+//! built on top of the `kind` attribute this layer sets.
+//!
+//! The runtime is process wide but fork aware. `pyo3-async-runtimes`
+//! keeps its own runtime in a process global that is built once and
+//! can never be replaced, and a runtime built before a fork is dead
+//! in the child because its worker threads do not survive the fork.
+//! These bindings therefore keep their own runtime, keyed by the
+//! process id it was built under, and spawn through the generic
+//! `pyo3-async-runtimes` bridge onto that runtime. The first call a
+//! forked child makes builds a fresh runtime for its own process id,
+//! and the dead parent runtime is leaked rather than dropped, so no
+//! shutdown machinery ever runs against threads that no longer exist.
 
-use std::sync::Arc;
+use std::future::Future;
+use std::pin::Pin;
+use std::sync::{Arc, Mutex};
 
 use placekit_core::models::{AutocompleteRequest, NearbySearchRequest, TextSearchRequest};
 use placekit_core::{Client as CoreClient, Error as CoreError, FieldMask};
@@ -25,6 +38,86 @@ create_exception!(
     pyo3::exceptions::PyException,
     "Base exception raised by the Rust core. Carries `kind`, `status_code` and `google_status` attributes."
 );
+
+/// The process wide Tokio runtime, paired with the process id it was
+/// built under. One runtime serves every client in a process for the
+/// life of that process. A forked child inherits the slot but not the
+/// worker threads, so the first access under a new process id builds
+/// a replacement and leaks the dead runtime instead of dropping it.
+static PROCESS_RUNTIME: Mutex<Option<(u32, Arc<tokio::runtime::Runtime>)>> = Mutex::new(None);
+
+fn shared_runtime() -> Arc<tokio::runtime::Runtime> {
+    let pid = std::process::id();
+    let mut slot = PROCESS_RUNTIME
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if let Some((built_pid, runtime)) = slot.as_ref() {
+        if *built_pid == pid {
+            return Arc::clone(runtime);
+        }
+    }
+    let runtime = Arc::new(
+        tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .expect("unable to build the Tokio runtime"),
+    );
+    if let Some((_, dead)) = slot.replace((pid, Arc::clone(&runtime))) {
+        // The replaced runtime belongs to the parent process of a
+        // fork. Its threads do not exist in this process, so it is
+        // leaked on purpose. Dropping it would run shutdown against
+        // that dead state for no benefit.
+        std::mem::forget(dead);
+    }
+    runtime
+}
+
+/// The runtime the generic `pyo3-async-runtimes` bridge spawns onto.
+/// Spawning resolves the fork aware runtime above at spawn time, so
+/// an async call made in a forked child runs on the child's runtime
+/// rather than on the dead pre-fork one.
+struct ForkAwareRuntime;
+
+impl pyo3_async_runtimes::generic::Runtime for ForkAwareRuntime {
+    type JoinError = tokio::task::JoinError;
+    type JoinHandle = tokio::task::JoinHandle<()>;
+
+    fn spawn<F>(fut: F) -> Self::JoinHandle
+    where
+        F: Future<Output = ()> + Send + 'static,
+    {
+        shared_runtime().spawn(async move {
+            fut.await;
+        })
+    }
+}
+
+impl pyo3_async_runtimes::generic::ContextExt for ForkAwareRuntime {
+    fn scope<F, R>(
+        _locals: pyo3_async_runtimes::TaskLocals,
+        fut: F,
+    ) -> Pin<Box<dyn Future<Output = R> + Send>>
+    where
+        F: Future<Output = R> + Send + 'static,
+    {
+        // The futures crossed here call no Python awaitables and read
+        // no task locals. The bridge only needs the running loop,
+        // which it captures itself when the awaitable is created.
+        Box::pin(fut)
+    }
+
+    fn get_task_locals() -> Option<pyo3_async_runtimes::TaskLocals> {
+        None
+    }
+}
+
+fn future_into_py_fork_aware<'py, F, T>(py: Python<'py>, fut: F) -> PyResult<Bound<'py, PyAny>>
+where
+    F: Future<Output = PyResult<T>> + Send + 'static,
+    T: for<'p> IntoPyObject<'p>,
+{
+    pyo3_async_runtimes::generic::future_into_py::<ForkAwareRuntime, F, T>(py, fut)
+}
 
 /// Translate a core error into a `PlacesError` with structured attributes
 /// the Python layer uses to pick a concrete exception subclass. API errors
@@ -417,10 +510,57 @@ fn photo_to_py(
     }
 }
 
+fn build_core_client(
+    api_key: &str,
+    base_url: Option<&str>,
+    timeout: Option<f64>,
+) -> Result<CoreClient, CoreError> {
+    let mut builder = CoreClient::builder(api_key);
+    if let Some(base_url) = base_url {
+        builder = builder.base_url(base_url);
+    }
+    if let Some(timeout) = timeout {
+        builder = builder.timeout(std::time::Duration::from_secs_f64(timeout));
+    }
+    builder.build()
+}
+
 /// The Rust client handle wrapped for Python.
+///
+/// The handle keeps its construction inputs beside the built client
+/// so a forked child can rebuild the client for its own process. A
+/// client built before a fork carries a connection pool whose state
+/// belongs to the parent process and its dead runtime generation.
+/// Reusing it in the child stalls against that state. The first call
+/// under a new process id therefore builds a fresh client from the
+/// retained inputs, and the inherited client is leaked rather than
+/// dropped, like the runtime it belonged with.
 #[pyclass(name = "Client")]
 struct PyClient {
-    inner: Arc<CoreClient>,
+    api_key: String,
+    base_url: Option<String>,
+    timeout: Option<f64>,
+    current: Mutex<(u32, Arc<CoreClient>)>,
+}
+
+impl PyClient {
+    /// The core client for this process, rebuilt after a fork.
+    fn handle(&self, py: Python<'_>) -> PyResult<Arc<CoreClient>> {
+        let pid = std::process::id();
+        let mut current = self
+            .current
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if current.0 == pid {
+            return Ok(Arc::clone(&current.1));
+        }
+        let client = build_core_client(&self.api_key, self.base_url.as_deref(), self.timeout)
+            .map_err(|e| to_pyerr(py, e))?;
+        let rebuilt = Arc::new(client);
+        let (_, inherited) = std::mem::replace(&mut *current, (pid, Arc::clone(&rebuilt)));
+        std::mem::forget(inherited);
+        Ok(rebuilt)
+    }
 }
 
 #[pymethods]
@@ -433,10 +573,6 @@ impl PyClient {
         base_url: Option<String>,
         timeout: Option<f64>,
     ) -> PyResult<Self> {
-        let mut builder = CoreClient::builder(api_key);
-        if let Some(base_url) = base_url {
-            builder = builder.base_url(base_url);
-        }
         if let Some(timeout) = timeout {
             // One rule everywhere (R4-04): the same 3600 second cap
             // the Python wrapper documents, applied here so direct
@@ -449,14 +585,19 @@ impl PyClient {
                     "timeout must be a positive, finite number of seconds, at most 3600",
                 ));
             }
-            builder = builder.timeout(std::time::Duration::from_secs_f64(timeout));
         }
-        let client = builder.build().map_err(|e| match e.kind() {
-            "config" => PyValueError::new_err(e.to_string()),
-            _ => to_pyerr(py, e),
-        })?;
+        let client =
+            build_core_client(&api_key, base_url.as_deref(), timeout).map_err(|e| {
+                match e.kind() {
+                    "config" => PyValueError::new_err(e.to_string()),
+                    _ => to_pyerr(py, e),
+                }
+            })?;
         Ok(Self {
-            inner: Arc::new(client),
+            api_key,
+            base_url,
+            timeout,
+            current: Mutex::new((std::process::id(), Arc::new(client))),
         })
     }
 
@@ -471,9 +612,9 @@ impl PyClient {
     ) -> PyResult<PyObject> {
         let request: TextSearchRequest = body_to_request(&body)?;
         let mask = mask_from(py, fields)?;
-        let inner = self.inner.clone();
+        let inner = self.handle(py)?;
         let result = py.allow_threads(|| {
-            pyo3_async_runtimes::tokio::get_runtime()
+            shared_runtime()
                 .block_on(async move { inner.text_search(&request, mask.as_ref()).await })
         });
         result_to_py(py, result)
@@ -488,8 +629,8 @@ impl PyClient {
     ) -> PyResult<Bound<'py, PyAny>> {
         let request: TextSearchRequest = body_to_request(&body)?;
         let mask = mask_from(py, fields)?;
-        let inner = self.inner.clone();
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+        let inner = self.handle(py)?;
+        future_into_py_fork_aware(py, async move {
             let result = inner.text_search(&request, mask.as_ref()).await;
             Python::with_gil(|py| result_to_py(py, result))
         })
@@ -506,9 +647,9 @@ impl PyClient {
     ) -> PyResult<PyObject> {
         let request: NearbySearchRequest = body_to_request(&body)?;
         let mask = mask_from(py, fields)?;
-        let inner = self.inner.clone();
+        let inner = self.handle(py)?;
         let result = py.allow_threads(|| {
-            pyo3_async_runtimes::tokio::get_runtime()
+            shared_runtime()
                 .block_on(async move { inner.nearby_search(&request, mask.as_ref()).await })
         });
         result_to_py(py, result)
@@ -523,8 +664,8 @@ impl PyClient {
     ) -> PyResult<Bound<'py, PyAny>> {
         let request: NearbySearchRequest = body_to_request(&body)?;
         let mask = mask_from(py, fields)?;
-        let inner = self.inner.clone();
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+        let inner = self.handle(py)?;
+        future_into_py_fork_aware(py, async move {
             let result = inner.nearby_search(&request, mask.as_ref()).await;
             Python::with_gil(|py| result_to_py(py, result))
         })
@@ -543,9 +684,9 @@ impl PyClient {
         session_token: Option<String>,
     ) -> PyResult<PyObject> {
         let mask = mask_from(py, fields)?;
-        let inner = self.inner.clone();
+        let inner = self.handle(py)?;
         let result = py.allow_threads(|| {
-            pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
+            shared_runtime().block_on(async move {
                 inner
                     .place_details(
                         &place_id,
@@ -571,8 +712,8 @@ impl PyClient {
         session_token: Option<String>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let mask = mask_from(py, fields)?;
-        let inner = self.inner.clone();
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+        let inner = self.handle(py)?;
+        future_into_py_fork_aware(py, async move {
             let result = inner
                 .place_details(
                     &place_id,
@@ -597,9 +738,9 @@ impl PyClient {
     ) -> PyResult<PyObject> {
         let request: AutocompleteRequest = body_to_request(&body)?;
         let mask = mask_from(py, fields)?;
-        let inner = self.inner.clone();
+        let inner = self.handle(py)?;
         let result = py.allow_threads(|| {
-            pyo3_async_runtimes::tokio::get_runtime()
+            shared_runtime()
                 .block_on(async move { inner.autocomplete(&request, mask.as_ref()).await })
         });
         result_to_py(py, result)
@@ -614,8 +755,8 @@ impl PyClient {
     ) -> PyResult<Bound<'py, PyAny>> {
         let request: AutocompleteRequest = body_to_request(&body)?;
         let mask = mask_from(py, fields)?;
-        let inner = self.inner.clone();
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+        let inner = self.handle(py)?;
+        future_into_py_fork_aware(py, async move {
             let result = inner.autocomplete(&request, mask.as_ref()).await;
             Python::with_gil(|py| result_to_py(py, result))
         })
@@ -632,9 +773,9 @@ impl PyClient {
         max_height_px: Option<u32>,
         skip_http_redirect: bool,
     ) -> PyResult<PyObject> {
-        let inner = self.inner.clone();
+        let inner = self.handle(py)?;
         let result = py.allow_threads(|| {
-            pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
+            shared_runtime().block_on(async move {
                 inner
                     .place_photo(&photo_name, max_width_px, max_height_px, skip_http_redirect)
                     .await
@@ -652,8 +793,8 @@ impl PyClient {
         max_height_px: Option<u32>,
         skip_http_redirect: bool,
     ) -> PyResult<Bound<'py, PyAny>> {
-        let inner = self.inner.clone();
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+        let inner = self.handle(py)?;
+        future_into_py_fork_aware(py, async move {
             let result = inner
                 .place_photo(&photo_name, max_width_px, max_height_px, skip_http_redirect)
                 .await;
