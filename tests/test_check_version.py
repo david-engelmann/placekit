@@ -168,6 +168,65 @@ def test_guard_ignores_a_release_heading_inside_a_fenced_block(
 
 
 @pytest.mark.parametrize(
+    "spelling",
+    [
+        "### [Unreleased]",
+        "##  [Unreleased]",
+        "## [unreleased]",
+        "## [Unreleased] <!-- release notes -->",
+    ],
+)
+def test_guard_refuses_a_tag_over_a_restyled_unreleased_heading(
+    tmp_path: Path, spelling: str
+) -> None:
+    tree = make_copy(tmp_path)
+    changelog = tree / "CHANGELOG.md"
+    # The copied changelog holds entries under its Unreleased heading,
+    # so only the respelled heading can let the publish guard past
+    # them. Recognition is tolerant, so each spelling still refuses.
+    changelog.write_text(
+        changelog.read_text().replace("## [Unreleased]", spelling, 1)
+    )
+    result = run_guard(tree, "v0.1.0")
+    assert result.returncode == 1
+    assert "still holds entries under Unreleased" in result.stdout
+
+
+def test_guard_fails_on_a_duplicate_release_heading_at_level_three(
+    tmp_path: Path,
+) -> None:
+    tree = make_release_ready(make_copy(tmp_path))
+    changelog = tree / "CHANGELOG.md"
+    changelog.write_text(
+        changelog.read_text()
+        + "\n### [0.1.0] - 2026-11-02\n\n### Added\n\n- A second entry section.\n"
+    )
+    for args in (("v0.1.0",), ()):
+        result = run_guard(tree, *args)
+        assert result.returncode == 1
+        assert "more than one release heading" in result.stdout
+
+
+def test_guard_ignores_a_release_heading_inside_a_longer_fence(
+    tmp_path: Path,
+) -> None:
+    tree = make_release_ready(make_copy(tmp_path))
+    changelog = tree / "CHANGELOG.md"
+    # A three backtick line inside a four backtick fence is content,
+    # not a closing marker, so the sample heading stays inside the
+    # fence and is ignored.
+    text = changelog.read_text()
+    text = text.replace(
+        "## [Unreleased]\n",
+        "## [Unreleased]\n\n````markdown\n```\n## [0.1.0]\n````\n",
+        1,
+    )
+    changelog.write_text(text)
+    result = run_guard(tree, "v0.1.0")
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+@pytest.mark.parametrize(
     "argument,expected_code",
     [
         ("0.1.0", 0),

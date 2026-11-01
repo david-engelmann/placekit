@@ -21,7 +21,9 @@ a changelog with no release heading at all, because a tag pushed over
 unpromoted work would ship a changelog that mislabels the release.
 In both modes a changelog holding two release headings for the same
 version fails, and headings inside fenced code blocks are examples
-rather than entries and are ignored.
+rather than entries and are ignored. Heading recognition is tolerant
+of level, spacing, case, and trailing matter, so a restyled heading
+cannot slip past the guard unread.
 """
 
 from __future__ import annotations
@@ -94,19 +96,51 @@ def cargo_lock_version() -> str:
 
 
 def _outside_fences(text: str) -> list[str]:
-    """Return the lines of a markdown file outside its fenced code blocks."""
+    """Return the lines of a markdown file outside its fenced code blocks.
+
+    A fence closes only on a marker of the same character at least as
+    long as the marker that opened it, matching how markdown renders,
+    so a shorter marker inside a longer fence stays content.
+    """
     lines = []
-    fence = None
+    fence_char = None
+    fence_len = 0
     for line in text.splitlines():
         stripped = line.strip()
-        if fence is None:
-            if stripped.startswith("```") or stripped.startswith("~~~"):
-                fence = stripped[:3]
+        if fence_char is None:
+            match = re.match(r"(`{3,}|~{3,})", stripped)
+            if match:
+                fence_char = match.group(1)[0]
+                fence_len = len(match.group(1))
             else:
                 lines.append(line)
-        elif stripped.startswith(fence):
-            fence = None
+        else:
+            match = re.fullmatch(r"(`+|~+)", stripped)
+            if (
+                match
+                and match.group(1)[0] == fence_char
+                and len(match.group(1)) >= fence_len
+            ):
+                fence_char = None
     return lines
+
+
+_HEADING = re.compile(r"(#{1,6})\s+(.*)")
+_RELEASE_HEADING = re.compile(r"\[(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)\]")
+
+
+def _heading(line: str) -> tuple[int, str] | None:
+    """Return the level and text of an ATX heading line, or None.
+
+    Recognition is tolerant for the guard's purposes. Any heading
+    level counts, the spacing after the hash marks is flexible, and
+    the text keeps any trailing matter for the caller to allow for,
+    so a heading restyled in any of those ways is still read.
+    """
+    match = _HEADING.match(line.strip())
+    if not match:
+        return None
+    return len(match.group(1)), match.group(2).strip()
 
 
 def changelog_state() -> tuple[list[str], bool]:
@@ -116,20 +150,31 @@ def changelog_state() -> tuple[list[str], bool]:
     The second is True when the Unreleased section still holds entries,
     meaning a line that is neither blank nor a heading. Both readings
     ignore fenced code blocks, so an example heading inside a fence is
-    never taken for a release entry.
+    never taken for a release entry, and both read headings tolerantly
+    (see _heading), so a restyled heading is still a heading here.
     """
     text = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
     headings = []
     unreleased_nonempty = False
     in_unreleased = False
     for line in _outside_fences(text):
-        if line.startswith("## "):
-            in_unreleased = line.strip() == "## [Unreleased]"
-            match = re.match(r"## \[(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)\]", line)
-            if match:
-                headings.append(match.group(1))
+        heading = _heading(line)
+        if heading is not None:
+            level, heading_text = heading
+            is_unreleased = heading_text.lower().startswith("[unreleased]")
+            release = _RELEASE_HEADING.match(heading_text)
+            if release:
+                headings.append(release.group(1))
+            # A deeper subheading never ends the Unreleased section,
+            # so the entries under an Added or Fixed subheading still
+            # count. A release heading at any level does, and so does
+            # any other heading at level two or above.
+            if is_unreleased:
+                in_unreleased = True
+            elif release or level <= 2:
+                in_unreleased = False
             continue
-        if in_unreleased and line.strip() and not line.startswith("#"):
+        if in_unreleased and line.strip() and not line.strip().startswith("#"):
             unreleased_nonempty = True
     return headings, unreleased_nonempty
 
