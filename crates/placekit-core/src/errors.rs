@@ -334,8 +334,11 @@ impl Error {
         Self::from_response_detailed(status, body, None)
     }
 
-    /// [`Error::from_response`] with the response content type, used to
-    /// describe non-envelope bodies in the error message.
+    /// [`Error::from_response`] with the response content type, which
+    /// the callers read off the response on every error path. The
+    /// value no longer shapes the message built from a non-envelope
+    /// body (R18-A6); it stays on the signature so the construction
+    /// paths keep one shape.
     pub(crate) fn from_response_detailed(
         status: u16,
         body: &str,
@@ -553,22 +556,24 @@ fn transport_class(err: &reqwest::Error) -> &'static str {
     }
 }
 /// Message for an error response whose body is not a Google envelope.
-/// The body text is the only diagnostic a proxy or load balancer
-/// failure leaves, so it is echoed up to a cap; truncation is marked
-/// with the total size and content type instead of being invisible.
-fn non_envelope_message(status: u16, body: &str, content_type: Option<&str>) -> String {
+/// The body is not quoted (R18-A6). Error text is the surface callers
+/// log most, and an unparsed body is wholly server chosen, so quoting
+/// it would let a hostile or compromised endpoint place arbitrary
+/// text into caller logs and echo request data back through the same
+/// channel. The status and the body size are the facts the message
+/// carries. A parsed envelope is a different case and keeps its own
+/// message and attributes: those are the API's structured diagnostic,
+/// not raw body text. The content type is accepted so every error
+/// construction path takes the same inputs; it no longer shapes the
+/// message.
+fn non_envelope_message(status: u16, body: &str, _content_type: Option<&str>) -> String {
     if body.trim().is_empty() {
         return format!("HTTP {status}");
     }
-    let mut message: String = body.chars().take(500).collect();
-    if body.chars().count() > 500 {
-        message.push_str(&format!(
-            "... [truncated, {} bytes, {}]",
-            body.len(),
-            content_type.unwrap_or("unknown content type")
-        ));
-    }
-    message
+    format!(
+        "HTTP {status} (error body of {} bytes, not a Places error envelope)",
+        body.len()
+    )
 }
 
 /// One usable field set read from a Google error envelope. The parse
@@ -778,11 +783,21 @@ mod tests {
     }
 
     #[test]
-    fn non_envelope_truncation_is_marked() {
+    fn non_envelope_body_is_not_quoted() {
+        // R18-A6: an unparsed body reaches the message at no length;
+        // the status and the body size are what it carries.
         let body = "y".repeat(600);
         let err = Error::from_response_detailed(503, &body, Some("text/html"));
         let text = err.to_string();
-        assert!(text.contains("[truncated, 600 bytes, text/html]"), "{text}");
+        assert!(text.contains("HTTP 503"), "{text}");
+        assert!(text.contains("600 bytes"), "{text}");
+        assert!(!text.contains("yyyy"), "{text}");
+        // A short body is not quoted either; quoting was never a
+        // property of length.
+        let err = Error::from_response_detailed(500, "upstream exploded", Some("text/plain"));
+        let text = err.to_string();
+        assert!(!text.contains("upstream exploded"), "{text}");
+        assert!(text.contains("HTTP 500"), "{text}");
     }
 
     #[test]

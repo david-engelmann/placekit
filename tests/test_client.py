@@ -1178,19 +1178,26 @@ def test_server_side_status_on_client_http_code_is_api_error(client, raw_respons
 
 def test_non_json_error_body_has_no_google_status(client, raw_response):
     # Repro case 6, fixed: google_status is None, not an empty string.
-    raw_response(500, "Internal Server Error: upstream exploded", "text/plain")
+    body = "Internal Server Error: upstream exploded"
+    raw_response(500, body, "text/plain")
     with pytest.raises(ApiError) as excinfo:
         client.text_search("cafes")
     assert excinfo.value.status_code == 500
     assert excinfo.value.google_status is None
-    assert "upstream exploded" in excinfo.value.message
+    # R18-A6: the unparsed body is not quoted in the message; the
+    # status and the body size are what it carries.
+    assert "upstream exploded" not in excinfo.value.message
+    assert f"{len(body)} bytes" in excinfo.value.message
 
 
-def test_long_non_envelope_body_truncation_is_marked(client, raw_response):
+def test_long_non_envelope_body_is_not_quoted(client, raw_response):
+    # R18-A6: however long an unparsed body runs, none of it reaches
+    # the message; the size does.
     raw_response(503, "y" * 600, "text/html")
     with pytest.raises(ApiError) as excinfo:
         client.text_search("cafes")
-    assert "[truncated, 600 bytes, text/html]" in excinfo.value.message
+    assert "600 bytes" in excinfo.value.message
+    assert "yyyy" not in excinfo.value.message
 
 
 def test_envelope_message_is_capped(client, raw_response):
