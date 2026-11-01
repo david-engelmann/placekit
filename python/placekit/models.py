@@ -119,14 +119,24 @@ def _raw_subtree(raw: Any, key: str, fallback: Any) -> Any:
     """The raw source for a child model under one wire key.
 
     When the raw source carries the key, its subtree is the child's
-    raw source, an explicit null included. When it does not, the
-    attribute source subtree stands in, which is the behaviour
-    direct model layer callers have always seen. Each decoder names
-    the wire key it reads, which is the same key the raw source is
-    read under, so the two trees stay aligned by construction.
+    raw source, an explicit null included. When a raw source is
+    supplied and it does not carry the key, the child raw is empty.
+    The attribute source subtree is never substituted on a supplied
+    raw source, because the typed tree carries defaulted children
+    the wire never sent (the viewport corners above all), and the
+    substitution would fabricate a raw for a child the body never
+    mentioned. Each decoder names the wire key it reads, which is
+    the same key the raw source is read under, so the two trees
+    stay aligned by construction. With no raw source supplied the
+    decoder default makes the raw source the attribute source
+    itself, so any key a child is decoded from is present by
+    construction and the direct model layer behaviour is unchanged.
+    A raw source that is not an object at all keeps the attribute
+    source, which is the explicit null and malformed subtree case
+    the decoders have always read that way.
     """
-    if isinstance(raw, dict) and key in raw:
-        return raw[key]
+    if isinstance(raw, dict):
+        return raw.get(key, {})
     return fallback
 
 
@@ -1303,7 +1313,12 @@ class Place:
         price_range = data.get("priceRange")
         ev = data.get("evChargeOptions")
         descriptor = data.get("addressDescriptor")
-        place_id = data.get("id") or str(data.get("name") or "").removeprefix("places/")
+        name_value = data.get("name")
+        place_id = data.get("id") or (
+            name_value.removeprefix("places/")
+            if isinstance(name_value, str)
+            else ""
+        )
         if not data:
             # An empty payload is a truncated or wrong response, not a
             # place; a payload that merely lacks an id (a field mask
