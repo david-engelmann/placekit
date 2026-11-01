@@ -1359,6 +1359,79 @@ def test_header_unfriendly_api_key_is_config_error(base_url):
         Client("bad\nkey", base_url=base_url)
 
 
+def test_http_base_url_requires_a_loopback_host(api_key):
+    # R18-A5: plain http sends the key in clear text, so a network
+    # host must be reached over https. Construction alone must
+    # refuse these; no request is ever made.
+    for bad in (
+        "http://example.com/v1",
+        "http://192.0.2.10/v1",
+        "http://evillocalhost.com/v1",
+    ):
+        with pytest.raises(ConfigError):
+            Client(api_key, base_url=bad)
+    # The loopback shapes stay available, including a hex IPv4
+    # spelling the URL parser canonicalises to the loopback it
+    # names, because classification reads the parsed host (red
+    # team R3). The whole suite runs on the 127.0.0.1 form.
+    Client(api_key, base_url="http://localhost:9/v1")
+    Client(api_key, base_url="http://0x7f.1:9/v1")
+    Client(api_key, base_url="https://example.com/v1")
+
+
+def test_photo_redirect_to_a_userinfo_target_is_refused(client, raw_response):
+    # Red team R2: userinfo in a redirect target becomes an
+    # Authorization Basic header on the followed request, so the
+    # hop is refused as a network error and the password the
+    # Location carried appears nowhere in it.
+    raw_response(
+        302,
+        b"",
+        "text/plain",
+        {"Location": "http://user:sekret@127.0.0.1:9/img"},
+    )
+    with pytest.raises(NetworkError) as excinfo:
+        client.place_photo(
+            "places/ChIJrTLr-GyuEmsRBfy61i59si0/photos/ATJ83zh8vExample",
+            max_width_px=400,
+        )
+    assert "redirect:" in str(excinfo.value)
+    assert "sekret" not in str(excinfo.value)
+
+
+def test_photo_redirect_to_a_private_address_is_refused(client, raw_response):
+    # R18-A3: a media response steering the client at a private
+    # network address is refused at the hop. Nothing listens at
+    # the target, so an unscreened follow would surface as a plain
+    # transport failure instead of a screening refusal.
+    raw_response(
+        302, b"", "text/plain", {"Location": "http://192.168.0.1/img"}
+    )
+    with pytest.raises(NetworkError) as excinfo:
+        client.place_photo(
+            "places/ChIJrTLr-GyuEmsRBfy61i59si0/photos/ATJ83zh8vExample",
+            max_width_px=400,
+        )
+    assert "refusing to follow" in str(excinfo.value)
+
+
+def test_photo_redirect_to_a_public_http_target_is_refused(
+    client, raw_response
+):
+    # R18-A3: from the loopback stub base, a hop out to a public
+    # host over plain http is a downgrade out of the local
+    # configuration and is refused, not followed.
+    raw_response(
+        302, b"", "text/plain", {"Location": "http://example.com/img"}
+    )
+    with pytest.raises(NetworkError) as excinfo:
+        client.place_photo(
+            "places/ChIJrTLr-GyuEmsRBfy61i59si0/photos/ATJ83zh8vExample",
+            max_width_px=400,
+        )
+    assert "refusing to follow" in str(excinfo.value)
+
+
 @pytest.mark.parametrize("bad", [-1, 0, 2**32, True])
 def test_max_results_range_validated(client, bad):
     # max_results is Nearby Search's spelling; its range guard stands.

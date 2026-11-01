@@ -83,7 +83,8 @@ impl ClientBuilder {
     /// Build the client. Fails on an empty API key, a key that cannot be
     /// sent as an HTTP header value, a timeout of zero, a response cap
     /// of zero, or a base URL that does not parse, is not http or https,
-    /// or carries credentials, a query string or a fragment.
+    /// carries credentials, a query string or a fragment, or uses plain
+    /// http for a non-loopback host.
     pub fn build(self) -> Result<Client, Error> {
         if self.api_key.trim().is_empty() {
             return Err(Error::config("API key must not be empty"));
@@ -480,7 +481,8 @@ impl Client {
     /// shared reqwest client never follows redirects on its own
     /// (R4-05), so this loop is the one place they are followed: at
     /// most ten hops, each `Location` resolved against the current
-    /// URL. The query string (which carries the API key) is attached
+    /// URL and screened before it is followed (R18-A3). The query
+    /// string (which carries the API key) is attached
     /// to the first request only; a redirect target receives whatever
     /// its own URL says, never the key (the R4-05 test's wire evidence
     /// showed reqwest did not forward it either, and here that is by
@@ -501,6 +503,10 @@ impl Client {
                 pairs.append_pair(name, value);
             }
         }
+        // The first request URL carries the configured base's scheme
+        // and host; each hop is screened against that trust, so the
+        // origin stays beside the loop.
+        let origin = current.clone();
         let mut hops = 0;
         loop {
             let response = self
@@ -533,6 +539,7 @@ impl Client {
                     "redirect: the photo endpoint sent an invalid redirect location: {e}"
                 ))
             })?;
+            screen_redirect_target(&origin, &current)?;
         }
     }
 
@@ -769,6 +776,111 @@ fn content_type_of(response: &reqwest::Response) -> Option<String> {
         .map(str::to_owned)
 }
 
+/// Whether the parsed host of a URL is loopback: the name
+/// `localhost` or a name under it, in any case and with an optional
+/// trailing dot, or an IP literal in a loopback range. The check
+/// reads the parsed host only, because the URL parser canonicalises
+/// spellings such as a hex or decimal IPv4 address to the dotted
+/// form before this runs (red team R3), so a check on the raw
+/// string would misread exactly the spellings worth catching.
+fn host_is_loopback(url: &reqwest::Url) -> bool {
+    match url.host() {
+        Some(url::Host::Domain(name)) => {
+            let name = name.trim_end_matches('.').to_ascii_lowercase();
+            name == "localhost" || name.ends_with(".localhost")
+        }
+        Some(url::Host::Ipv4(ip)) => ip.is_loopback(),
+        Some(url::Host::Ipv6(ip)) => ip.is_loopback(),
+        None => false,
+    }
+}
+
+/// The host of a URL as an IP address, when the host is an IP
+/// literal rather than a name.
+fn host_ip(url: &reqwest::Url) -> Option<std::net::IpAddr> {
+    match url.host() {
+        Some(url::Host::Ipv4(ip)) => Some(std::net::IpAddr::V4(ip)),
+        Some(url::Host::Ipv6(ip)) => Some(std::net::IpAddr::V6(ip)),
+        _ => None,
+    }
+}
+
+/// Whether an IP literal names a non-public address: a private
+/// range, a link local range, or the unspecified address. Loopback
+/// is judged separately by [`host_is_loopback`], because its
+/// treatment depends on the configured base.
+fn ip_is_non_public(ip: std::net::IpAddr) -> bool {
+    match ip {
+        std::net::IpAddr::V4(v4) => v4.is_private() || v4.is_link_local() || v4.is_unspecified(),
+        std::net::IpAddr::V6(v6) => {
+            v6.is_unique_local() || v6.is_unicast_link_local() || v6.is_unspecified()
+        }
+    }
+}
+
+/// Screen one photo redirect hop before it is followed (R18-A3).
+/// Whoever answers the media request chooses the `Location`, so an
+/// unscreened follower is a GET client against whatever that answer
+/// names, including internal network addresses, with an https to
+/// http downgrade available on the hop. A hop is followed only when
+/// it stays inside the trust the configured base already carries:
+///
+/// - A target carrying userinfo is refused outright. The HTTP
+///   layer promotes userinfo into an Authorization Basic header on
+///   the followed request (red team R2), so such a hop would
+///   present credentials its author chose to the named host.
+/// - An https target is followed unless it names a loopback host
+///   the base does not share, or a non-public IP literal.
+/// - A plain http target is followed only inside the local
+///   configuration, a loopback base steering to a loopback target,
+///   which is the posture the base URL itself is held to (R18-A5)
+///   and the shape the test stub serves photos in.
+/// - Hostnames other than the loopback names are followed as
+///   before. Screening a name would mean resolving it here, and
+///   the answer could still change before the connection; that
+///   residual is recorded in the Round 18 build report rather than
+///   engineered around.
+///
+/// The refusal names the reason class only, never the target, so
+/// nothing the redirect author chose (a password above all) can
+/// ride into the caller's error text.
+fn screen_redirect_target(base: &reqwest::Url, target: &reqwest::Url) -> Result<(), Error> {
+    let refuse = |reason: &str| {
+        Error::network_detail(format!(
+            "redirect: refusing to follow the photo redirect: {reason}"
+        ))
+    };
+    if !target.username().is_empty() || target.password().is_some() {
+        return Err(refuse("the target carries credentials (userinfo)"));
+    }
+    if target.host_str().is_none() {
+        return Err(refuse("the target names no host"));
+    }
+    let base_loopback = host_is_loopback(base);
+    let target_loopback = host_is_loopback(target);
+    match target.scheme() {
+        "https" => {
+            if target_loopback && !base_loopback {
+                return Err(refuse("the target is a loopback address"));
+            }
+            if let Some(ip) = host_ip(target) {
+                if ip_is_non_public(ip) {
+                    return Err(refuse("the target is a non-public IP address"));
+                }
+            }
+            Ok(())
+        }
+        "http" => {
+            if base_loopback && target_loopback {
+                Ok(())
+            } else {
+                Err(refuse("the target uses plain http"))
+            }
+        }
+        _ => Err(refuse("the target scheme is not http or https")),
+    }
+}
+
 /// Parse and normalize a configured base URL (R4-02). The value used
 /// to be interpolated unchecked, so a base carrying a query string or
 /// a fragment silently rerouted every request (the endpoint path
@@ -779,6 +891,10 @@ fn content_type_of(response: &reqwest::Response) -> Option<String> {
 /// a configured prefix cannot be escaped by the appended endpoint
 /// path. A trailing slash is trimmed as before, and path prefixes
 /// (the documented stub form `http://host:port/v1`) keep working.
+/// Plain http is accepted for loopback hosts only (R18-A5): it sends
+/// both key forms, the header and the photo key query, over a
+/// connection anyone on the path can read and modify, so a network
+/// host must be reached over https.
 fn parse_base_url(raw: &str) -> Result<String, Error> {
     let url = url::Url::parse(raw.trim())
         .map_err(|e| Error::config(format!("base_url is not a valid URL: {e}")))?;
@@ -803,6 +919,15 @@ fn parse_base_url(raw: &str) -> Result<String, Error> {
         // the caller. Credentials do not belong in a base URL.
         return Err(Error::config(
             "base_url must not carry credentials (userinfo)",
+        ));
+    }
+    if url.scheme() == "http" && !host_is_loopback(&url) {
+        // Classification reads the parsed host, never the raw
+        // string, because the parser canonicalises spellings such
+        // as a hex IPv4 address to the dotted form before this
+        // runs (red team R3).
+        return Err(Error::config(
+            "base_url scheme http is only allowed for a loopback host; use https",
         ));
     }
     Ok(url.to_string().trim_end_matches('/').to_owned())
@@ -1232,6 +1357,49 @@ mod tests {
                     .kind(),
                 "config",
                 "{bad}"
+            );
+        }
+    }
+
+    #[test]
+    fn base_url_http_requires_a_loopback_host() {
+        // R18-A5: plain http sends the API key header and the photo
+        // key query in clear text, so it is refused for network
+        // hosts and kept for the loopback shapes the local stub
+        // configuration uses.
+        for bad in [
+            "http://example.com/v1",
+            "http://192.0.2.10/v1",
+            "http://[2001:db8::1]/v1",
+            // A name that merely contains the loopback name is a
+            // network host, not a loopback one.
+            "http://evillocalhost.com/v1",
+            "http://localhost.example.com/v1",
+        ] {
+            assert_eq!(
+                Client::builder("k")
+                    .base_url(bad)
+                    .build()
+                    .unwrap_err()
+                    .kind(),
+                "config",
+                "{bad}"
+            );
+        }
+        for good in [
+            "http://127.0.0.1:9/v1",
+            "http://localhost:8080/v1",
+            "http://[::1]:8080/v1",
+            // The parser canonicalises a hex IPv4 spelling to the
+            // dotted loopback form, and classification reads the
+            // parsed host, so this builds as the loopback it names
+            // (red team R3).
+            "http://0x7f.1:9/v1",
+            "https://example.com/v1",
+        ] {
+            assert!(
+                Client::builder("k").base_url(good).build().is_ok(),
+                "{good}"
             );
         }
     }
@@ -2104,6 +2272,102 @@ mod tests {
         assert_eq!(err.kind(), "network");
         assert!(err.to_string().contains("too many redirects"), "{err}");
         assert_eq!(media.requests().len(), 11);
+    }
+
+    #[test]
+    fn redirect_targets_are_screened_against_the_base() {
+        // R18-A3: the screening decision table, exercised directly
+        // so the https cases need no TLS stub. Each assertion names
+        // a hop the unscreened follower used to make.
+        let api = reqwest::Url::parse("https://places.googleapis.com/v1").unwrap();
+        let stub = reqwest::Url::parse("http://127.0.0.1:8080/v1").unwrap();
+        let at = |base: &reqwest::Url, target: &str| {
+            screen_redirect_target(base, &reqwest::Url::parse(target).unwrap())
+        };
+        // The production shape: an https media host is followed.
+        assert!(at(&api, "https://lh3.googleusercontent.com/img").is_ok());
+        // A downgrade to plain http is refused on any host.
+        assert!(at(&api, "http://lh3.googleusercontent.com/img").is_err());
+        // Loopback targets are refused from a network base, by
+        // literal and by name, over https as much as over http.
+        assert!(at(&api, "https://127.0.0.1/img").is_err());
+        assert!(at(&api, "https://localhost/img").is_err());
+        assert!(at(&api, "http://127.0.0.1/img").is_err());
+        // Non-public IP literals are refused over https too.
+        assert!(at(&api, "https://192.168.1.10/img").is_err());
+        assert!(at(&api, "https://169.254.1.1/img").is_err());
+        assert!(at(&api, "https://[fd00::1]/img").is_err());
+        assert!(at(&api, "https://[::]/img").is_err());
+        // Userinfo is refused outright (red team R2).
+        assert!(at(&api, "https://user:pass@lh3.googleusercontent.com/img").is_err());
+        // Other schemes are refused rather than attempted.
+        assert!(at(&api, "ftp://example.com/img").is_err());
+        // The local stub configuration: a loopback base may steer
+        // to loopback targets, over http as the stub serves them.
+        assert!(at(&stub, "http://127.0.0.1:9999/img").is_ok());
+        assert!(at(&stub, "http://localhost:9999/img").is_ok());
+        // A loopback base gains no reach into the local network and
+        // no plaintext reach out of it.
+        assert!(at(&stub, "http://192.168.1.10/img").is_err());
+        assert!(at(&stub, "https://192.168.1.10/img").is_err());
+        assert!(at(&stub, "http://example.com/img").is_err());
+    }
+
+    #[test]
+    fn photo_redirect_to_a_userinfo_target_is_refused() {
+        // Red team R2: the HTTP layer promotes userinfo in a
+        // redirect target into an Authorization Basic header on the
+        // followed request. The hop is refused before any request
+        // reaches the target, and the password the Location carried
+        // appears nowhere in the error.
+        let target = Stub::start(|_| StubResponse {
+            status: 200,
+            content_type: Some("image/png".to_owned()),
+            headers: Vec::new(),
+            body: PNG_BYTES.to_vec(),
+            raw: None,
+        });
+        let location = format!(
+            "http://user:sekret@{}/img",
+            target.base_url.trim_start_matches("http://")
+        );
+        let media = Stub::start(move |_| {
+            let mut response = stub_json(302, "");
+            response
+                .headers
+                .push(("location".to_owned(), location.clone()));
+            response
+        });
+        let client = media.client("k");
+        let err = block_on(client.place_photo("places/ChIJ/photos/ref", Some(100), None, false))
+            .unwrap_err();
+        assert_eq!(err.kind(), "network");
+        assert!(err.to_string().contains("redirect:"), "{err}");
+        assert!(!err.to_string().contains("sekret"), "{err}");
+        assert!(target.requests().is_empty());
+    }
+
+    #[test]
+    fn photo_redirect_to_a_private_address_is_refused() {
+        // R18-A3: a media response steering the client at a private
+        // network address is refused at the hop. Nothing listens at
+        // the target, so an unscreened follow would surface as a
+        // transport failure instead of a screening refusal, and the
+        // media stub would still see only its one request either
+        // way; the refusal wording is what discriminates.
+        let media = Stub::start(|_| {
+            let mut response = stub_json(302, "");
+            response
+                .headers
+                .push(("location".to_owned(), "http://192.168.0.1/img".to_owned()));
+            response
+        });
+        let client = media.client("k");
+        let err = block_on(client.place_photo("places/ChIJ/photos/ref", Some(100), None, false))
+            .unwrap_err();
+        assert_eq!(err.kind(), "network");
+        assert!(err.to_string().contains("refusing to follow"), "{err}");
+        assert_eq!(media.requests().len(), 1);
     }
 
     #[test]
