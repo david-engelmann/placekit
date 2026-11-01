@@ -30,7 +30,8 @@ No helper parses formatted text and no helper composes a display
 address or renders an envelope. No helper assembles a postal
 code from prefix and suffix pieces and no helper reads a sorting
 code, because the recorded corpus holds no instance of either
-form. Formatting and envelope rendering belong to the guide,
+form. Formatting and envelope rendering belong to the
+normalization guide at NORMALIZATION.md in the repository root,
 which points at libaddressinput metadata instead.
 
 A result from this module is a reading of one response and its

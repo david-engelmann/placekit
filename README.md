@@ -130,6 +130,10 @@ city.value, city.carrier, city.confidence
 
 Stated answers ship for Japan and the United Arab Emirates and the United Kingdom, each built from recorded places inside one sampled locality, and every other country follows a generic fallback chain capped at the heuristic grade. The module never parses formatted text and never composes a display address, and a resolved city is a reading of one response rather than a fact of the same kind as a place ID.
 
+The normalization guide teaches the address handling the recorded corpus and this module embody, with an oddities catalogue of the shapes the corpus actually returned, per country readings that state how far each one reaches, worked recipes that run against the recorded fixtures, and a list of the things no helper here can promise.
+
+[Normalizing addresses with placekit](NORMALIZATION.md)
+
 ## Errors
 
 Every failure raises a subclass of `PlacesError`, carrying `status_code` and `google_status` when the error came from the API.
