@@ -71,7 +71,7 @@ from .models import (
     TimeZone,
     Viewport,
 )
-from . import lang, ranking, types
+from . import address, lang, ranking, types
 
 try:
     from importlib.metadata import PackageNotFoundError, version as _metadata_version
@@ -137,6 +137,7 @@ __all__ = [
     "TextSearchResult",
     "TimeZone",
     "Viewport",
+    "address",
     "lang",
     "ranking",
     "types",

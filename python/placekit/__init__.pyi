@@ -57,7 +57,7 @@ from .models import (
     TimeZone,
     Viewport,
 )
-from . import lang, ranking, types
+from . import address, lang, ranking, types
 
 __version__: str
 
@@ -118,6 +118,7 @@ __all__ = [
     "TextSearchResult",
     "TimeZone",
     "Viewport",
+    "address",
     "lang",
     "ranking",
     "types",
