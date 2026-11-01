@@ -1158,9 +1158,15 @@ fn encode_photo_name(photo_name: &str) -> String {
 }
 
 /// Check a downloaded photo body against the format its content type
-/// claims, for the formats with a fixed signature. A body shorter
-/// than the signature or not matching it is a decode failure, not an
-/// image; unlisted image types pass unchecked.
+/// claims. The check is fail closed (R18-A4): only the formats with
+/// a fixed signature this client verifies (JPEG, PNG, GIF, WebP) may
+/// pass, and every other claimed type is refused, image/svg+xml
+/// explicitly included, because an unchecked claim lets a redirect
+/// target hand the caller an active document, an SVG carrying
+/// script, as a photo. The permissive posture this replaces was the
+/// described Round 2 design; the script bearing SVG probe in Round
+/// 18 is the evidence that reopened it. A body shorter than the
+/// signature or not matching it is a decode failure, not an image.
 fn validate_photo_magic(
     bytes: &[u8],
     content_type: Option<&str>,
@@ -1180,7 +1186,22 @@ fn validate_photo_magic(
         Some("image/webp") => {
             bytes.len() >= 12 && &bytes[..4] == b"RIFF" && &bytes[8..12] == b"WEBP"
         }
-        _ => return Ok(()),
+        Some(other) => {
+            return Err(Error::Decode {
+                detail: format!(
+                    "photo endpoint returned an image type this client cannot verify: {other}"
+                ),
+                status: Some(status),
+                source: None,
+            });
+        }
+        None => {
+            return Err(Error::Decode {
+                detail: "photo endpoint returned no content type; refusing to treat the body as an image".to_owned(),
+                status: Some(status),
+                source: None,
+            });
+        }
     };
     if matches_claim {
         Ok(())
@@ -1782,9 +1803,23 @@ mod tests {
         let jpeg = [0xFF, 0xD8, 0xFF, 0xE0, 9, 9];
         assert!(validate_photo_magic(&jpeg, Some("image/png"), 200).is_err());
         assert!(validate_photo_magic(&jpeg, Some("image/jpeg"), 200).is_ok());
-        // Unlisted types and missing types stay permissive.
-        assert!(validate_photo_magic(&[1, 2, 3], Some("image/avif"), 200).is_ok());
-        assert!(validate_photo_magic(&[1, 2, 3], None, 200).is_ok());
+        // GIF and WebP bodies pass under their own claims.
+        let gif = b"GIF89a....".to_vec();
+        assert!(validate_photo_magic(&gif, Some("image/gif"), 200).is_ok());
+        let webp = b"RIFF\x04\x00\x00\x00WEBP".to_vec();
+        assert!(validate_photo_magic(&webp, Some("image/webp"), 200).is_ok());
+        // Fail closed (R18-A4): every other claim is refused,
+        // including a script bearing SVG, an honest but unverifiable
+        // AVIF, and a missing type.
+        let svg = b"<svg xmlns=\"http://www.w3.org/2000/svg\"><script>alert(1)</script></svg>";
+        assert_eq!(
+            validate_photo_magic(svg, Some("image/svg+xml"), 200)
+                .unwrap_err()
+                .kind(),
+            "decode"
+        );
+        assert!(validate_photo_magic(&[1, 2, 3], Some("image/avif"), 200).is_err());
+        assert!(validate_photo_magic(&[1, 2, 3], None, 200).is_err());
     }
 
     /// Poll a future once with a no-op waker. Validation failures

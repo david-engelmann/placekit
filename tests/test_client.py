@@ -1097,6 +1097,38 @@ def test_photo_body_must_match_declared_image_type(client, raw_response):
         assert "content type" in excinfo.value.message
 
 
+def test_photo_svg_is_refused_fail_closed(client, raw_response):
+    # R18-A4: an SVG is an XML document that can carry script, and
+    # the magic check cannot verify it, so the claim is refused
+    # outright instead of passing unchecked as it did before.
+    svg = (
+        b'<svg xmlns="http://www.w3.org/2000/svg">'
+        b"<script>alert(1)</script></svg>"
+    )
+    raw_response(200, svg, "image/svg+xml")
+    with pytest.raises(DecodeError) as excinfo:
+        client.place_photo(
+            "places/ChIJrTLr-GyuEmsRBfy61i59si0/photos/ATJ83zh8vExample",
+            max_width_px=400,
+        )
+    assert "image/svg+xml" in excinfo.value.message
+
+
+def test_photo_unlisted_image_type_is_refused_fail_closed(
+    client, raw_response
+):
+    # R18-A4: a type the client has no signature for is refused
+    # even when the bytes are an honest image in that format; only
+    # JPEG, PNG, GIF and WebP claims can pass.
+    raw_response(200, b"\x00\x00\x00\x0cftypavif", "image/avif")
+    with pytest.raises(DecodeError) as excinfo:
+        client.place_photo(
+            "places/ChIJrTLr-GyuEmsRBfy61i59si0/photos/ATJ83zh8vExample",
+            max_width_px=400,
+        )
+    assert "image/avif" in excinfo.value.message
+
+
 def test_photo_redirect_loop_is_network_error_with_cause(client):
     with pytest.raises(NetworkError) as excinfo:
         client.place_photo("places/ChIJ/photos/loop-photo", max_width_px=100)
