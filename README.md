@@ -117,6 +117,19 @@ result = client.nearby_search(
 
 The modules are snapshots of the official tables and a convenience only. The client accepts any string in these slots, including values this version has never heard of, so a type or language the API adds tomorrow works without waiting for a placekit release.
 
+## Addresses
+
+`placekit.address` reads the structured address a place already carries and answers the questions its two carrier sets raise. It looks components up by type, extracts the country and the postal code, resolves the district, and splits compound plus codes. City resolution is the careful part, because which carrier holds the city changes by country and the carriers sometimes disagree on the same place, so `resolve_city` returns the value with the carrier it came from and a confidence grade in the open.
+
+```python
+from placekit import address
+
+city = address.resolve_city(place)
+city.value, city.carrier, city.confidence
+```
+
+Stated answers ship for Japan and the United Arab Emirates and the United Kingdom, each built from recorded places inside one sampled locality, and every other country follows a generic fallback chain capped at the heuristic grade. The module never parses formatted text and never composes a display address, and a resolved city is a reading of one response rather than a fact of the same kind as a place ID.
+
 ## Errors
 
 Every failure raises a subclass of `PlacesError`, carrying `status_code` and `google_status` when the error came from the API.
