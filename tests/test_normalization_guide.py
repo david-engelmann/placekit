@@ -744,6 +744,12 @@ def _recipe(subsections: dict[str, str], number: int) -> str:
     raise AssertionError(f"recipe {number} not found")
 
 
+def _subsection(subsections: dict[str, str], name: str) -> str:
+    if name in subsections:
+        return subsections[name]
+    raise AssertionError(f"guide subsection {name} not found")
+
+
 def _claim_units(text: str):
     """Yield the claim bearing units of one guide section.
 
@@ -835,6 +841,60 @@ def test_guide_structure_keeps_scope_with_its_claims():
     assert _normalised(PIN_10) in recipe_4
     assert _normalised(PIN_19) in section_6
     assert _normalised(PIN_20) in recipe_1
+
+    # Every boundary pin also sits inside its designed home
+    # section, so a sentence drifted into the boundary index as
+    # its only home fails here even though the flat presence pin
+    # still finds its words somewhere in the file.
+    home_sections = (
+        (PIN_1, 1),
+        (PIN_2, 1),
+        (PIN_3, 1),
+        (PIN_4, 2),
+        (PIN_5, 5),
+        (PIN_6, 5),
+        (PIN_7, 5),
+        (PIN_8, 5),
+        (PIN_9, 5),
+        (PIN_10, 5),
+        (PIN_11, 6),
+        (PIN_12, 6),
+        (PIN_13, 7),
+        (PIN_14, 3),
+        (PIN_15, 6),
+        (PIN_16, 6),
+        (PIN_17, 4),
+        (PIN_18, 1),
+        (PIN_19, 6),
+        (PIN_20, 7),
+    )
+    for pin, number in home_sections:
+        assert _normalised(pin) in _normalised(
+            _section(sections, number)
+        ), f"a boundary pin sits outside its home section {number}"
+
+    # The country scope pins travel inside their own country
+    # subsection, not merely inside the country section, so a
+    # scope sentence parked under a neighbouring country leaves
+    # its own claims unbounded and fails here.
+    country_subsections = (
+        (PIN_5, "Japan"),
+        (PIN_6, "United Arab Emirates"),
+        (PIN_7, "United Kingdom"),
+        (PIN_8, "United States"),
+        (PIN_9, "Vietnam"),
+        (PIN_10, "Israel"),
+    )
+    for pin, name in country_subsections:
+        assert _normalised(pin) in _normalised(
+            _subsection(subsections, name)
+        ), f"a scope pin sits outside its {name} subsection"
+
+    recipe_2 = _normalised(_recipe(subsections, 2))
+    recipe_6 = _normalised(_recipe(subsections, 6))
+    assert _normalised(PIN_13) in recipe_2
+    assert _normalised(PIN_15) in recipe_6
+    assert _normalised(PIN_16) in recipe_8
 
     # Every claim bearing paragraph, table row, and list item in
     # the claim bearing sections opens with exactly one tag. The
