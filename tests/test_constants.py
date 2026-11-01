@@ -14,7 +14,7 @@ import json
 import pytest
 
 import placekit
-from placekit import Client, lang, ranking, types
+from placekit import Client, address, lang, ranking, types
 
 
 @pytest.fixture()
@@ -120,3 +120,83 @@ def test_ranking_values_match_the_core_vocabulary(client, stub_server):
         assert body["rankPreference"] == value
     assert ranking.TEXT_SEARCH_VALUES == {"RELEVANCE", "DISTANCE"}
     assert ranking.NEARBY_SEARCH_VALUES == {"DISTANCE", "POPULARITY"}
+
+
+def test_address_constants_counts():
+    carrier_names = [n for n in address.__all__ if n.startswith("CARRIER_")]
+    assert len(carrier_names) == 18
+    confidence_names = [
+        n
+        for n in address.__all__
+        if n.startswith("CONFIDENCE_") and n != "CONFIDENCE_GRADES"
+    ]
+    assert len(confidence_names) == 5
+    assert address.CONFIDENCE_GRADES == {
+        getattr(address, n) for n in confidence_names
+    }
+    assert len(address.PRECEDENCE_COUNTRIES) == 2
+    assert len(address.CONTESTED_COUNTRIES) == 1
+
+
+def test_address_constants_wire_values_character_for_character():
+    # Component carriers carry the types module wire values.
+    assert address.CARRIER_LOCALITY == "locality"
+    assert address.CARRIER_POSTAL_TOWN == "postal_town"
+    assert address.CARRIER_SUBLOCALITY_LEVEL_1 == "sublocality_level_1"
+    assert address.CARRIER_SUBLOCALITY_LEVEL_2 == "sublocality_level_2"
+    assert address.CARRIER_SUBLOCALITY_LEVEL_3 == "sublocality_level_3"
+    assert address.CARRIER_SUBLOCALITY_LEVEL_4 == "sublocality_level_4"
+    assert address.CARRIER_SUBLOCALITY_LEVEL_5 == "sublocality_level_5"
+    assert address.CARRIER_NEIGHBORHOOD == "neighborhood"
+    assert address.CARRIER_ADMINISTRATIVE_AREA_LEVEL_1 == (
+        "administrative_area_level_1"
+    )
+    assert address.CARRIER_ADMINISTRATIVE_AREA_LEVEL_2 == (
+        "administrative_area_level_2"
+    )
+    assert address.CARRIER_POSTAL_CODE_COMPONENT == "postal_code"
+    assert address.CARRIER_COUNTRY_COMPONENT == "country"
+    # The component carriers are the types constants themselves in
+    # value, so the two modules cannot drift apart on a wire string.
+    assert address.CARRIER_LOCALITY == types.TYPE_LOCALITY
+    assert address.CARRIER_POSTAL_TOWN == types.TYPE_POSTAL_TOWN
+    assert address.CARRIER_POSTAL_CODE_COMPONENT == types.TYPE_POSTAL_CODE
+    assert address.CARRIER_COUNTRY_COMPONENT == types.TYPE_COUNTRY
+    # The bare sublocality carrier has no constant, because no rule
+    # produces it and a bare match would read block fragments as
+    # cities.
+    assert not hasattr(address, "CARRIER_SUBLOCALITY")
+    # Postal set carriers and the both carriers marker are new values.
+    assert address.CARRIER_POSTAL_ADDRESS_LOCALITY == "postal_address_locality"
+    assert address.CARRIER_POSTAL_ADDRESS_SUBLOCALITY == (
+        "postal_address_sublocality"
+    )
+    assert address.CARRIER_POSTAL_ADDRESS_ADMINISTRATIVE_AREA == (
+        "postal_address_administrative_area"
+    )
+    assert address.CARRIER_POSTAL_ADDRESS_POSTAL_CODE == (
+        "postal_address_postal_code"
+    )
+    assert address.CARRIER_POSTAL_ADDRESS_REGION_CODE == (
+        "postal_address_region_code"
+    )
+    assert address.CARRIER_BOTH_POSTAL == "both_postal_carriers"
+    # Confidence grades and postal status values.
+    assert address.CONFIDENCE_PRIMARY == "primary"
+    assert address.CONFIDENCE_FALLBACK == "fallback"
+    assert address.CONFIDENCE_CONTESTED == "contested"
+    assert address.CONFIDENCE_HEURISTIC == "heuristic"
+    assert address.CONFIDENCE_NONE == "none"
+    assert address.POSTAL_PRESENT == "present"
+    assert address.POSTAL_ABSENT == "absent"
+    # The country sets name exactly the stated answers.
+    assert address.PRECEDENCE_COUNTRIES == {"JP", "AE"}
+    assert address.CONTESTED_COUNTRIES == {"GB"}
+
+
+def test_address_package_attribute_access():
+    assert placekit.address.CARRIER_POSTAL_TOWN == "postal_town"
+    assert placekit.address.CONFIDENCE_HEURISTIC == "heuristic"
+    assert placekit.address.POSTAL_ABSENT == "absent"
+    assert placekit.address.PRECEDENCE_COUNTRIES == {"JP", "AE"}
+    assert "address" in placekit.__all__
