@@ -264,9 +264,27 @@ fn number_to_py(py: Python<'_>, n: &serde_json::Number) -> PyResult<PyObject> {
     let text = n.to_string();
     if !text.contains(['.', 'e', 'E']) {
         // An integer beyond u64: Python's int parses the exact
-        // decimal text, so no digit is lost on the way across.
+        // decimal text, so no digit is lost on the way across. Past
+        // the interpreter's string conversion limit (4300 digits by
+        // default) that parse refuses with a ValueError, and the
+        // refusal must not escape as a bare builtin outside the
+        // exception hierarchy (red team R1): it is a decode failure
+        // of this layer, like every other conversion failure here.
         let builtins = pyo3::types::PyModule::import(py, "builtins")?;
-        return Ok(builtins.getattr("int")?.call1((text,))?.unbind());
+        return match builtins.getattr("int")?.call1((text.clone(),)) {
+            Ok(value) => Ok(value.unbind()),
+            Err(_) => Err(to_pyerr(
+                py,
+                CoreError::Decode {
+                    detail: format!(
+                        "an integer in the response carries {} digits, beyond the interpreter limit for exact conversion",
+                        text.trim_start_matches('-').len()
+                    ),
+                    status: None,
+                    source: None,
+                },
+            )),
+        };
     }
     Ok(n.as_f64()
         .unwrap_or(f64::NAN)

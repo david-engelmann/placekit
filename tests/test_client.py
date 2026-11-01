@@ -1558,6 +1558,41 @@ def test_unknown_field_big_integer_survives_exactly(client, raw_response):
     assert isinstance(result.raw["futureCounter"], int)
 
 
+def test_unknown_field_giant_integer_is_a_decode_error(client, raw_response):
+    # Red team R1: an integer past the interpreter conversion limit
+    # (4300 digits by default) in an unknown field used to escape
+    # the native number conversion as a bare builtin ValueError,
+    # outside the typed hierarchy callers are promised. It now
+    # surfaces as a DecodeError.
+    digits = "9" * 5000
+    raw_response(
+        200, ('{"places": [], "futureCounter": ' + digits + "}").encode()
+    )
+    with pytest.raises(DecodeError) as excinfo:
+        client.text_search("cafes")
+    assert not isinstance(excinfo.value, ValueError)
+    assert "5000 digits" in excinfo.value.message
+
+
+def test_unknown_field_giant_integer_is_a_decode_error_async(
+    api_key, base_url, raw_response
+):
+    # Async mirror: both clients cross the same native conversion,
+    # so the same body must fail the same typed way.
+    digits = "9" * 5000
+    raw_response(
+        200, ('{"places": [], "futureCounter": ' + digits + "}").encode()
+    )
+
+    async def run():
+        client = AsyncClient(api_key, base_url=base_url)
+        with pytest.raises(DecodeError) as excinfo:
+            await client.text_search("cafes")
+        assert not isinstance(excinfo.value, ValueError)
+
+    asyncio.run(run())
+
+
 def test_async_error_attributes_match_sync(api_key, base_url):
     async def run():
         client = AsyncClient(api_key, base_url=base_url)
