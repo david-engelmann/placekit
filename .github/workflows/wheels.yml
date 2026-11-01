@@ -261,6 +261,11 @@ jobs:
       - name: Install the wheel hermetically
         if: ${{ !matrix.sdist }}
         run: pip install --no-index --find-links dist placekit
+      - name: Assert the wheel carries its embedded SBOM
+        if: ${{ !matrix.sdist }}
+        # The README promises an SBOM inside every wheel (R18-A8);
+        # this fails the leg if a toolchain change ever drops it.
+        run: python scripts/check_wheel_sbom.py dist
       - name: Install the sdist hermetically
         if: ${{ matrix.sdist }}
         run: pip install --no-index --no-build-isolation --find-links dist placekit

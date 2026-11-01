@@ -1,0 +1,54 @@
+# Vulnerability scanning for the locked Rust tree (R18-A2). The
+# tree is the whole runtime surface of the shipped wheel, and it
+# had no advisory monitoring at all. This workflow runs cargo
+# audit through the RustSec action on a weekly schedule, so a
+# newly published advisory against an unchanged lockfile still
+# surfaces, and on any push or pull request that touches the
+# lockfile. On a schedule the action opens an issue for each new
+# advisory; on a push or pull request it reports through a status
+# check instead.
+#
+# All third party actions are pinned to commit SHAs, with the
+# version each SHA resolves recorded in a trailing comment.
+# Dependabot (.github/dependabot.yml) proposes updates to the
+# pins weekly.
+
+name: Audit
+
+on:
+  schedule:
+    - cron: "37 5 * * 1"
+  push:
+    branches:
+      - main
+    paths:
+      - "Cargo.lock"
+      - ".github/workflows/audit.yml"
+  pull_request:
+    paths:
+      - "Cargo.lock"
+      - ".github/workflows/audit.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  cargo-audit:
+    name: cargo audit
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      # The action reports a push or pull request audit as a status
+      # check and a scheduled audit as issues for new advisories.
+      checks: write
+      issues: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Audit the locked Rust tree
+        uses: rustsec/audit-check@69366f33c96575abad1ee0dba8212993eecbe998 # v2.0.0
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
