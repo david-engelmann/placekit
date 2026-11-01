@@ -143,6 +143,30 @@ def test_accounting_synthesized_fixtures_are_enveloped_and_tested():
             assert entry["file"] in SYNTHESIZED_SOURCES[test_name]
 
 
+def test_accounting_fixture_folders_hold_exactly_the_claimed_files():
+    # Each folder on disk holds exactly the files the manifest claims
+    # across its cases, its observations, and its synthesized entries,
+    # no more and no fewer. A stripped synthesized payload planted
+    # under a recorded name is an unlisted resident and fails here,
+    # and so does any other file the manifest never claimed.
+    claimed_recorded = set()
+    for case in MANIFEST["cases"]:
+        if case["state"] in RECORDED_STATES:
+            claimed_recorded.update(entry["file"] for entry in case["fixtures"])
+    for obs in MANIFEST["observations"]:
+        if obs.get("fixture"):
+            claimed_recorded.add(obs["fixture"])
+        claimed_recorded.update(obs.get("host_fixtures", []))
+    claimed_synthesized = set()
+    for case in MANIFEST["cases"]:
+        if case["state"] == "synthesized candidate":
+            claimed_synthesized.update(entry["file"] for entry in case["fixtures"])
+    on_disk_recorded = {path.name for path in RECORDED.iterdir() if path.is_file()}
+    on_disk_synthesized = {path.name for path in SYNTHESIZED.iterdir() if path.is_file()}
+    assert on_disk_recorded == claimed_recorded
+    assert on_disk_synthesized == claimed_synthesized
+
+
 def test_accounting_hunted_and_open_cases_claim_no_fixtures():
     recorded_tokens = {path.name.split("_")[1] for path in RECORDED.glob("*.json")}
     for case in MANIFEST["cases"]:
@@ -173,15 +197,25 @@ def test_accounting_observation_fixtures_and_hosts_exist():
             assert digest == obs["fixture_sha256"]
 
 
-def test_accounting_coverage_table_states_match_the_manifest():
+def test_accounting_coverage_table_rows_match_the_manifest():
     rows = {}
     for line in TABLE.splitlines():
         match = re.match(r"\| ((?:P|H|V|A)\d+) \|", line)
         if match:
-            rows[match.group(1)] = line
+            rows[match.group(1)] = [cell.strip() for cell in line.split("|")]
     assert sorted(rows) == sorted(TAXONOMY)
     for case in MANIFEST["cases"]:
-        assert case["state"] in rows[case["id"]], case["id"]
+        cells = rows[case["id"]]
+        # The columns run case, label, state, fixtures, pinning tests,
+        # notes, inside the leading and trailing pipes.
+        assert cells[3] == case["state"], case["id"]
+        fixtures_cell = cells[4]
+        claimed_fixtures = [entry["file"] for entry in case["fixtures"]]
+        table_fixtures = [] if fixtures_cell == "none" else fixtures_cell.split(", ")
+        assert table_fixtures == claimed_fixtures, case["id"]
+        tests_cell = cells[5]
+        table_tests = [] if tests_cell == "none" else tests_cell.split(", ")
+        assert table_tests == case["tests"], case["id"]
 
 
 def test_accounting_size_limits_hold():
