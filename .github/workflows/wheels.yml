@@ -4,7 +4,7 @@
 #
 # Every wheel is built inside a manylinux container (Linux) or on a
 # native runner for its architecture. The aarch64 Linux and arm64 macOS
-# builds run on native arm runners (ubuntu-24.04-arm, macos-14), never
+# builds run on native arm runners (ubuntu-24.04-arm, macos-15), never
 # under QEMU emulation: an emulated Rust release compile is the slowest
 # possible way to make a wheel.
 #
@@ -119,7 +119,7 @@ jobs:
           - runner: macos-15-intel
             target: x86_64
             deployment_target: "10.12"
-          - runner: macos-14
+          - runner: macos-15
             target: aarch64
             deployment_target: "11.0"
     steps:
@@ -201,9 +201,27 @@ jobs:
             suite: false
             sdist: false
           - label: macos aarch64
-            runner: macos-14
+            runner: macos-15
             artifact: wheels-macos-aarch64
             python-version: "3.12"
+            suite: false
+            sdist: false
+          - label: linux x86_64, Python 3.11
+            runner: ubuntu-24.04
+            artifact: wheels-linux-x86_64
+            python-version: "3.11"
+            suite: false
+            sdist: false
+          - label: linux x86_64, Python 3.13
+            runner: ubuntu-24.04
+            artifact: wheels-linux-x86_64
+            python-version: "3.13"
+            suite: false
+            sdist: false
+          - label: linux x86_64, Python 3.14
+            runner: ubuntu-24.04
+            artifact: wheels-linux-x86_64
+            python-version: "3.14"
             suite: false
             sdist: false
           - label: windows x64
@@ -237,7 +255,9 @@ jobs:
           path: dist
       - name: Install the build backend for the sdist
         if: ${{ matrix.sdist }}
-        run: pip install "maturin>=1.7,<2.0"
+        # Pinned to the exact maturin version the dev environment
+        # carries, so this leg never fetches a floating build tool.
+        run: pip install "maturin==1.15.0"
       - name: Install the wheel hermetically
         if: ${{ !matrix.sdist }}
         run: pip install --no-index --find-links dist placekit
