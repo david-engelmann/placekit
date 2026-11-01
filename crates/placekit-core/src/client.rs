@@ -782,7 +782,10 @@ fn content_type_of(response: &reqwest::Response) -> Option<String> {
 /// reads the parsed host only, because the URL parser canonicalises
 /// spellings such as a hex or decimal IPv4 address to the dotted
 /// form before this runs (red team R3), so a check on the raw
-/// string would misread exactly the spellings worth catching.
+/// string would misread exactly the spellings worth catching. An
+/// IPv6 literal that embeds an IPv4 address is judged by the
+/// address it embeds, so the mapped and compatible spellings of a
+/// loopback address read as loopback here.
 fn host_is_loopback(url: &reqwest::Url) -> bool {
     match url.host() {
         Some(url::Host::Domain(name)) => {
@@ -790,7 +793,9 @@ fn host_is_loopback(url: &reqwest::Url) -> bool {
             name == "localhost" || name.ends_with(".localhost")
         }
         Some(url::Host::Ipv4(ip)) => ip.is_loopback(),
-        Some(url::Host::Ipv6(ip)) => ip.is_loopback(),
+        Some(url::Host::Ipv6(ip)) => {
+            ip.is_loopback() || ipv6_embedded_ipv4(ip).is_some_and(|v4| v4.is_loopback())
+        }
         None => false,
     }
 }
@@ -805,15 +810,53 @@ fn host_ip(url: &reqwest::Url) -> Option<std::net::IpAddr> {
     }
 }
 
+/// The IPv4 address an IPv6 literal embeds, when it carries one.
+/// The IPv4-mapped form and the older IPv4-compatible form both
+/// name an IPv4 address in their last 32 bits, and dual stack
+/// sockets deliver them to that address. The unspecified address
+/// and the IPv6 loopback address are not embeddings, they are
+/// addresses in their own right, so they return None here and keep
+/// their IPv6 reading.
+fn ipv6_embedded_ipv4(ip: std::net::Ipv6Addr) -> Option<std::net::Ipv4Addr> {
+    if ip.is_unspecified() || ip.is_loopback() {
+        return None;
+    }
+    ip.to_ipv4()
+}
+
+/// Whether an IPv4 address names a non-public address: a private
+/// range, a link local range, the unspecified address, the whole
+/// 0.0.0.0/8 this network range, whose single unspecified member
+/// is the only address in it the standard library names, and the
+/// 100.64.0.0/10 shared address space, which the standard library
+/// does not count as private. Both extra ranges are IANA special
+/// purpose space that can name the local host or internal
+/// infrastructure.
+fn ipv4_is_non_public(v4: std::net::Ipv4Addr) -> bool {
+    let octets = v4.octets();
+    v4.is_private()
+        || v4.is_link_local()
+        || v4.is_unspecified()
+        || octets[0] == 0
+        || (octets[0] == 100 && (octets[1] & 0b1100_0000) == 0b0100_0000)
+}
+
 /// Whether an IP literal names a non-public address: a private
 /// range, a link local range, or the unspecified address. Loopback
 /// is judged separately by [`host_is_loopback`], because its
-/// treatment depends on the configured base.
+/// treatment depends on the configured base. An IPv6 literal that
+/// embeds an IPv4 address is judged by the address it embeds, so
+/// the mapped and compatible spellings of a private address cannot
+/// walk past the screen their dotted spelling fails (Round 18
+/// landing red team).
 fn ip_is_non_public(ip: std::net::IpAddr) -> bool {
     match ip {
-        std::net::IpAddr::V4(v4) => v4.is_private() || v4.is_link_local() || v4.is_unspecified(),
+        std::net::IpAddr::V4(v4) => ipv4_is_non_public(v4),
         std::net::IpAddr::V6(v6) => {
-            v6.is_unique_local() || v6.is_unicast_link_local() || v6.is_unspecified()
+            v6.is_unique_local()
+                || v6.is_unicast_link_local()
+                || v6.is_unspecified()
+                || ipv6_embedded_ipv4(v6).is_some_and(ipv4_is_non_public)
         }
     }
 }
@@ -1411,6 +1454,10 @@ mod tests {
             "http://127.0.0.1:9/v1",
             "http://localhost:8080/v1",
             "http://[::1]:8080/v1",
+            // The mapped spelling of the loopback address is
+            // judged by the address it embeds, so it builds as the
+            // loopback it names (Round 18 landing red team).
+            "http://[::ffff:127.0.0.1]:8080/v1",
             // The parser canonicalises a hex IPv4 spelling to the
             // dotted loopback form, and classification reads the
             // parsed host, so this builds as the loopback it names
@@ -2333,6 +2380,28 @@ mod tests {
         assert!(at(&api, "https://169.254.1.1/img").is_err());
         assert!(at(&api, "https://[fd00::1]/img").is_err());
         assert!(at(&api, "https://[::]/img").is_err());
+        // IPv6 spellings that embed an IPv4 address are judged by
+        // the address they embed (Round 18 landing red team). The
+        // screen runs statelessly against the origin on every hop,
+        // so each entry here is also the judgement a second or
+        // later hop receives. The mapped and compatible spellings
+        // of loopback and of a private address are refused like
+        // their dotted spellings above.
+        assert!(at(&api, "https://[::ffff:127.0.0.1]/img").is_err());
+        assert!(at(&api, "https://[::ffff:10.0.0.1]/img").is_err());
+        assert!(at(&api, "https://[::127.0.0.1]/img").is_err());
+        assert!(at(&api, "https://[::10.0.0.1]/img").is_err());
+        // The whole 0.0.0.0/8 this network range is refused, not
+        // only the single unspecified address, and so is the
+        // 100.64.0.0/10 shared address space.
+        assert!(at(&api, "https://0.0.0.1/img").is_err());
+        assert!(at(&api, "https://100.64.0.1/img").is_err());
+        assert!(at(&api, "https://100.127.0.1/img").is_err());
+        // The unwrap and the range edges do not over-refuse. A
+        // mapped spelling of a public address is followed, and so
+        // is the first address past the shared range.
+        assert!(at(&api, "https://[::ffff:8.8.8.8]/img").is_ok());
+        assert!(at(&api, "https://100.128.0.1/img").is_ok());
         // Userinfo is refused outright (red team R2).
         assert!(at(&api, "https://user:pass@lh3.googleusercontent.com/img").is_err());
         // Other schemes are refused rather than attempted.
@@ -2346,6 +2415,10 @@ mod tests {
         assert!(at(&stub, "http://192.168.1.10/img").is_err());
         assert!(at(&stub, "https://192.168.1.10/img").is_err());
         assert!(at(&stub, "http://example.com/img").is_err());
+        // A later hop in a local chain gains no reach either. The
+        // mapped spelling of a private address is refused from the
+        // loopback base just as its dotted spelling is.
+        assert!(at(&stub, "https://[::ffff:192.168.1.10]/img").is_err());
     }
 
     #[test]
