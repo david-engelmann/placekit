@@ -14,6 +14,14 @@ Usage: check_version.py [EXPECTED]
 With EXPECTED (for example the version from a release tag, without the
 leading v) the manifest version must also equal it. The wheels workflow's
 publish job uses this as its release guard.
+
+When EXPECTED is given, which is the publish path, the guard also
+refuses a changelog whose Unreleased section still holds entries and
+a changelog with no release heading at all, because a tag pushed over
+unpromoted work would ship a changelog that mislabels the release.
+In both modes a changelog holding two release headings for the same
+version fails, and headings inside fenced code blocks are examples
+rather than entries and are ignored.
 """
 
 from __future__ import annotations
@@ -85,14 +93,45 @@ def cargo_lock_version() -> str:
     return ""
 
 
-def changelog_version() -> str:
+def _outside_fences(text: str) -> list[str]:
+    """Return the lines of a markdown file outside its fenced code blocks."""
+    lines = []
+    fence = None
+    for line in text.splitlines():
+        stripped = line.strip()
+        if fence is None:
+            if stripped.startswith("```") or stripped.startswith("~~~"):
+                fence = stripped[:3]
+            else:
+                lines.append(line)
+        elif stripped.startswith(fence):
+            fence = None
+    return lines
+
+
+def changelog_state() -> tuple[list[str], bool]:
+    """Return the changelog release headings and its Unreleased state.
+
+    The first value is every numeric release heading in file order.
+    The second is True when the Unreleased section still holds entries,
+    meaning a line that is neither blank nor a heading. Both readings
+    ignore fenced code blocks, so an example heading inside a fence is
+    never taken for a release entry.
+    """
     text = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
-    match = re.search(
-        r"^## \[(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)\]", text, flags=re.MULTILINE
-    )
-    if not match:
-        fail("no released version entry (## [x.y.z]) found in CHANGELOG.md")
-    return match.group(1)
+    headings = []
+    unreleased_nonempty = False
+    in_unreleased = False
+    for line in _outside_fences(text):
+        if line.startswith("## "):
+            in_unreleased = line.strip() == "## [Unreleased]"
+            match = re.match(r"## \[(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)\]", line)
+            if match:
+                headings.append(match.group(1))
+            continue
+        if in_unreleased and line.strip() and not line.startswith("#"):
+            unreleased_nonempty = True
+    return headings, unreleased_nonempty
 
 
 def package_fallback_version() -> str:
@@ -110,9 +149,11 @@ def main() -> None:
             ROOT / "crates" / "placekit-core" / "Cargo.toml"
         ),
         "Cargo.lock": cargo_lock_version(),
-        "CHANGELOG.md": changelog_version(),
         "python/placekit/__init__.py": package_fallback_version(),
     }
+    headings, unreleased_nonempty = changelog_state()
+    if headings:
+        found["CHANGELOG.md"] = headings[0]
     static_pyproject = pyproject_version()
     if static_pyproject is not None:
         found["pyproject.toml"] = static_pyproject
@@ -124,7 +165,17 @@ def main() -> None:
         fail("versions disagree")
     version = versions.pop()
 
+    if headings.count(version) > 1:
+        fail(f"CHANGELOG.md has more than one release heading for version {version}")
+
     if len(sys.argv) > 1:
+        if unreleased_nonempty:
+            fail(
+                "CHANGELOG.md still holds entries under Unreleased, "
+                "fold them into the release entry before tagging"
+            )
+        if not headings:
+            fail("no released version entry (## [x.y.z]) found in CHANGELOG.md")
         expected = sys.argv[1].removeprefix("v")
         if expected != version:
             fail(f"expected {expected} (from argument), manifests say {version}")

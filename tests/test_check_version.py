@@ -36,12 +36,32 @@ def make_copy(tmp_path: Path) -> Path:
     return tmp_path
 
 
-def run_guard(tree: Path) -> subprocess.CompletedProcess:
+def run_guard(tree: Path, *args: str) -> subprocess.CompletedProcess:
     return subprocess.run(
-        [sys.executable, str(tree / "scripts" / "check_version.py")],
+        [sys.executable, str(tree / "scripts" / "check_version.py"), *args],
         capture_output=True,
         text=True,
     )
+
+
+def make_release_ready(tree: Path) -> Path:
+    """Fold the copied changelog into the shape tag day expects.
+
+    The Unreleased heading is left empty and a dated release heading
+    takes the entries that sat under it, which is the fold the release
+    checklist asks for before the tag is cut.
+    """
+    changelog = tree / "CHANGELOG.md"
+    lines = changelog.read_text().splitlines(keepends=True)
+    out = []
+    for i, line in enumerate(lines):
+        out.append(line)
+        if line.startswith("## [Unreleased]"):
+            out.append("\n## [0.1.0] - 2026-11-01\n")
+            out.extend(lines[i + 1 :])
+            break
+    changelog.write_text("".join(out))
+    return tree
 
 
 def mutate_lock_version(lock_text: str, new_version: str) -> str:
@@ -76,9 +96,12 @@ def test_guard_fails_when_cargo_lock_disagrees(tmp_path: Path) -> None:
 def test_guard_accepts_a_prerelease_changelog_heading(tmp_path: Path) -> None:
     tree = make_copy(tmp_path)
     changelog = tree / "CHANGELOG.md"
-    # Move every carrier to the same prerelease version.
+    # Move every carrier to the same prerelease version, with the
+    # prerelease release heading taking the Unreleased entries.
     text = changelog.read_text()
-    text = text.replace("## [0.1.0]", "## [0.2.0-rc.1]")
+    text = text.replace(
+        "## [Unreleased]", "## [Unreleased]\n\n## [0.2.0-rc.1] - 2026-11-01", 1
+    )
     changelog.write_text(text)
     for rel in ("Cargo.toml", "crates/placekit-core/Cargo.toml"):
         path = tree / rel
@@ -89,3 +112,75 @@ def test_guard_accepts_a_prerelease_changelog_heading(tmp_path: Path) -> None:
     init.write_text(init.read_text().replace('"0.1.0"', '"0.2.0-rc.1"'))
     result = run_guard(tree)
     assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_guard_refuses_a_tag_over_a_nonempty_unreleased_section(
+    tmp_path: Path,
+) -> None:
+    result = run_guard(make_copy(tmp_path), "v0.1.0")
+    assert result.returncode == 1
+    assert "Unreleased" in result.stdout
+
+
+def test_guard_refuses_a_tag_with_no_release_heading(tmp_path: Path) -> None:
+    tree = make_copy(tmp_path)
+    changelog = tree / "CHANGELOG.md"
+    # A changelog with an empty Unreleased section and no release
+    # heading at all, so only the missing heading can fail the guard.
+    changelog.write_text("# Changelog\n\n## [Unreleased]\n")
+    result = run_guard(tree, "v0.1.0")
+    assert result.returncode == 1
+    assert "no released version entry" in result.stdout
+
+
+def test_guard_passes_on_a_folded_changelog_with_a_tag(tmp_path: Path) -> None:
+    result = run_guard(make_release_ready(make_copy(tmp_path)), "v0.1.0")
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "matches 0.1.0" in result.stdout
+
+
+def test_guard_fails_on_a_duplicate_release_heading(tmp_path: Path) -> None:
+    tree = make_release_ready(make_copy(tmp_path))
+    changelog = tree / "CHANGELOG.md"
+    changelog.write_text(
+        changelog.read_text()
+        + "\n## [0.1.0] - 2026-11-02\n\n### Added\n\n- A second entry section.\n"
+    )
+    result = run_guard(tree, "v0.1.0")
+    assert result.returncode == 1
+    assert "more than one release heading" in result.stdout
+
+
+def test_guard_ignores_a_release_heading_inside_a_fenced_block(
+    tmp_path: Path,
+) -> None:
+    tree = make_release_ready(make_copy(tmp_path))
+    changelog = tree / "CHANGELOG.md"
+    text = changelog.read_text()
+    text = text.replace(
+        "## [Unreleased]\n",
+        "## [Unreleased]\n\n```markdown\n## [9.9.9]\n```\n",
+        1,
+    )
+    changelog.write_text(text)
+    result = run_guard(tree, "v0.1.0")
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+@pytest.mark.parametrize(
+    "argument,expected_code",
+    [
+        ("0.1.0", 0),
+        ("v0.1.0", 0),
+        ("0.1", 1),
+        ("0.1.0.1", 1),
+        ("vv0.1.0", 1),
+        ("0.1.0-rc.1", 1),
+        ("V0.1.0", 1),
+    ],
+)
+def test_guard_argument_shapes(
+    tmp_path: Path, argument: str, expected_code: int
+) -> None:
+    result = run_guard(make_release_ready(make_copy(tmp_path)), argument)
+    assert result.returncode == expected_code, result.stdout + result.stderr
