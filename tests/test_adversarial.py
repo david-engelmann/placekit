@@ -151,6 +151,81 @@ def test_endless_iterables_refuse_promptly_on_every_slot(api_key, base_url):
     assert "all endless slots refused" in completed.stdout
 
 
+def test_cycling_mapping_refuses_at_the_ceiling(api_key, base_url):
+    # F01 family, the mapping shape the endless test cannot see:
+    # the mapping copy bound counted entries stored, so a mapping
+    # whose item stream cycles over keys it already yielded never
+    # grew the result and never tripped the ceiling, and the call
+    # hung. The bound now counts items consumed. The calls run in
+    # a subprocess under a hard timeout; on the old code the test
+    # fails by timeout, not by assertion.
+    script = textwrap.dedent(
+        """
+        import sys
+        from collections.abc import Mapping
+
+        from placekit import Client
+        from placekit.exceptions import ConfigError
+
+        client = Client(sys.argv[2], base_url=sys.argv[1])
+
+
+        class CyclingMapping(Mapping):
+            def __getitem__(self, key):
+                raise KeyError(key)
+
+            def __iter__(self):
+                return iter(())
+
+            def __len__(self):
+                return 0
+
+            def items(self):
+                keys = ("origin", "other")
+                index = 0
+                while True:
+                    yield (keys[index % 2], index)
+                    index += 1
+
+
+        def expect_config_error(label, thunk):
+            try:
+                thunk()
+            except ConfigError:
+                print("ok", label)
+                return
+            except Exception as exc:
+                print("FAIL", label, type(exc).__name__)
+                sys.exit(1)
+            print("FAIL", label, "returned without error")
+            sys.exit(1)
+
+
+        expect_config_error(
+            "text_search routing_parameters cycling mapping",
+            lambda: client.text_search(
+                "q", routing_parameters=CyclingMapping()
+            ),
+        )
+        expect_config_error(
+            "text_search ev_options cycling mapping",
+            lambda: client.text_search(
+                "q", ev_options=CyclingMapping()
+            ),
+        )
+        print("cycling mappings refused")
+        """
+    )
+    completed = subprocess.run(
+        [sys.executable, "-c", script, base_url, api_key],
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    assert "cycling mappings refused" in completed.stdout
+
+
 def test_iterable_failure_during_materialisation_wraps_as_config_error(
     client, stub_server
 ):
@@ -317,6 +392,27 @@ def test_code_strings_refuse_control_characters_and_surrogates(
         client.autocomplete("q", region="e\x7f")
     with pytest.raises(ConfigError):
         client.place_photo("places/x/photos/\ud800")
+    assert stub_server.last_request is None
+
+
+def test_code_list_items_refuse_control_characters(client, stub_server):
+    # The character refusal covered the scalar code strings
+    # (language, region, the session token, the resolved
+    # identifiers). The list slots that carry codes were
+    # materialised as strings and nothing more, so a region code
+    # or a type filter item carrying a newline was sent verbatim
+    # inside the request body. The items now pass the same
+    # character validation as the scalars, on every code carrying
+    # list slot.
+    stub_server.last_request = None
+    with pytest.raises(ConfigError):
+        client.autocomplete("cafe", included_region_codes=["U\nS"])
+    with pytest.raises(ConfigError):
+        client.nearby_search((0.0, 0.0), 100.0, included_types=["cafe\r\n"])
+    with pytest.raises(ConfigError):
+        client.text_search("q", price_levels=["PRICE_LEVEL_\x00FREE"])
+    with pytest.raises(ConfigError):
+        client.autocomplete("cafe", included_primary_types=["cafe\ud800"])
     assert stub_server.last_request is None
 
 

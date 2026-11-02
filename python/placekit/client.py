@@ -17,7 +17,12 @@ from typing import Any, Callable, Iterable, Optional
 from . import _placekit
 from ._placekit import PlacesError as _CorePlacesError
 from .exceptions import ConfigError, DecodeError, raise_translated
-from .fields import MAX_MATERIALIZED_ITEMS, FieldsLike, normalize_fields
+from .fields import (
+    MAX_MATERIALIZED_ITEMS,
+    FieldsLike,
+    _materialize_bounded,
+    normalize_fields,
+)
 from .types import COLLECTION_CITIES, COLLECTION_REGIONS
 from .models import (
     AutocompleteResult,
@@ -59,7 +64,15 @@ def _string_list(
     is refused with a ConfigError instead of being consumed until
     memory runs out, and anything the iterable raises while being
     read surfaces as a ConfigError with the original exception
-    chained (R20-F10).
+    chained (R20-F10). The read itself is the one shared bounded
+    loop in the fields module.
+
+    Every slot this helper serves carries codes (type filters,
+    price levels, region codes), so each item passes the same
+    character validation the scalar code strings get: an item
+    carrying control characters or unpaired surrogates is refused
+    with a ConfigError instead of reaching the wire inside the
+    request body.
     """
     if value is None:
         return None
@@ -69,42 +82,15 @@ def _string_list(
             f"string: {value!r}"
         )
     limit = MAX_MATERIALIZED_ITEMS if max_items is None else max_items
-    try:
-        iterator = iter(value)
-    except TypeError as exc:
-        raise ConfigError(
-            f"{name} must be an iterable of strings, got {value!r}"
-        ) from exc
-    except Exception as exc:
-        raise ConfigError(
-            f"{name} could not be read as an iterable: {exc!r}"
-        ) from exc
-    items: list[str] = []
-    while True:
-        try:
-            item = next(iterator)
-        except StopIteration:
-            break
-        except Exception as exc:
-            raise ConfigError(
-                f"{name} raised while being read: {exc!r}"
-            ) from exc
-        items.append(item)
-        if len(items) > limit:
-            if max_items is None:
-                raise ConfigError(
-                    f"{name} materialised past the ceiling of "
-                    f"{limit} items; refusing to consume an "
-                    "unbounded iterable"
-                )
-            raise ConfigError(
-                f"{name} takes at most {limit} items, got more"
-            )
+    items = _materialize_bounded(
+        name, value, limit, documented_maximum=max_items is not None
+    )
     for item in items:
         if not isinstance(item, str):
             raise ConfigError(
                 f"{name} items must be strings, got {item!r}"
             )
+        _validate_code_string(name, item)
     return items or None
 
 
@@ -251,36 +237,27 @@ _MAX_DICT_DEPTH = 128
 def _mapping_copy(name: str, value: Mapping) -> dict[str, Any]:
     """Copy one caller mapping under the materialisation ceiling.
 
-    The copy is built item by item instead of through ``dict(...)``
-    so a mapping whose item stream never ends is refused after the
-    ceiling instead of being consumed forever, and anything the
-    mapping raises while being read surfaces as a ConfigError with
-    the original exception chained (R20-F01 and F11).
+    The copy is built from the mapping's item stream through the
+    one shared bounded read loop in the fields module, which
+    counts items as they are consumed rather than entries
+    stored. A mapping whose stream never ends is refused after
+    the ceiling instead of being consumed forever, including a
+    stream that cycles over keys it already yielded and so never
+    grows the result, and anything the mapping raises while being
+    read surfaces as a ConfigError with the original exception
+    chained (R20-F01 and F11).
     """
+    entries = _materialize_bounded(
+        name,
+        (pair for pair in value.items()),
+        MAX_MATERIALIZED_ITEMS,
+    )
     try:
-        iterator = iter(value.items())
+        return dict(entries)
     except Exception as exc:
         raise ConfigError(
-            f"{name} could not be read as a mapping: {exc!r}"
+            f"{name} raised while being read: {exc!r}"
         ) from exc
-    result: dict[str, Any] = {}
-    while True:
-        try:
-            key, item = next(iterator)
-        except StopIteration:
-            break
-        except Exception as exc:
-            raise ConfigError(
-                f"{name} raised while being read: {exc!r}"
-            ) from exc
-        result[key] = item
-        if len(result) > MAX_MATERIALIZED_ITEMS:
-            raise ConfigError(
-                f"{name} materialised past the ceiling of "
-                f"{MAX_MATERIALIZED_ITEMS} entries; refusing to "
-                "consume an unbounded mapping"
-            )
-    return result
 
 
 def _validate_dict_body(

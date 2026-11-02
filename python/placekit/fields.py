@@ -25,7 +25,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from typing import Iterable, Tuple, Union
+from typing import Any, Iterable, Tuple, Union
 
 from .exceptions import ConfigError
 
@@ -37,6 +37,57 @@ from .exceptions import ConfigError
 #: ConfigError after this many items instead of being consumed
 #: until memory runs out (R20-F01 and F02).
 MAX_MATERIALIZED_ITEMS = 1000
+
+
+def _materialize_bounded(
+    name: str,
+    iterable: Iterable[Any],
+    limit: int,
+    *,
+    documented_maximum: bool = False,
+) -> list:
+    """Materialise one caller iterable under a bound, in one place.
+
+    This is the single bounded read loop behind the field mask
+    builder and the client's list and mapping parameters, with
+    one error wording for every slot. Items are counted as they
+    are consumed, never by any container they land in, so a
+    stream that never ends is refused after the limit even when
+    it cycles over values it already yielded. Anything the
+    iterable raises while being read surfaces as a ConfigError
+    with the original exception chained. ``documented_maximum``
+    marks a limit the API documentation states for the slot,
+    which words the refusal as the slot's own maximum; every
+    other limit is the universal ceiling and words it as one.
+    """
+    try:
+        iterator = iter(iterable)
+    except Exception as exc:
+        raise ConfigError(
+            f"{name} could not be read as an iterable: {exc!r}"
+        ) from exc
+    items: list = []
+    while True:
+        try:
+            item = next(iterator)
+        except StopIteration:
+            break
+        except Exception as exc:
+            raise ConfigError(
+                f"{name} raised while being read: {exc!r}"
+            ) from exc
+        items.append(item)
+        if len(items) > limit:
+            if documented_maximum:
+                raise ConfigError(
+                    f"{name} takes at most {limit} items, got more"
+                )
+            raise ConfigError(
+                f"{name} materialised past the ceiling of "
+                f"{limit} items; refusing to consume an "
+                "unbounded iterable"
+            )
+    return items
 
 #: Default paths requested by text_search when no fields are given.
 TEXT_SEARCH_FIELDS: Tuple[str, ...] = (
@@ -208,34 +259,9 @@ class FieldMask:
             )
         if isinstance(paths, (set, frozenset)):
             paths = sorted(paths)
-        try:
-            iterator = iter(paths)
-        except TypeError as exc:
-            raise ConfigError(
-                "FieldMask.of expects an iterable of field paths, "
-                f"got {paths!r}"
-            ) from exc
-        except Exception as exc:
-            raise ConfigError(
-                f"field paths could not be read as an iterable: {exc!r}"
-            ) from exc
-        items: list[str] = []
-        while True:
-            try:
-                item = next(iterator)
-            except StopIteration:
-                break
-            except Exception as exc:
-                raise ConfigError(
-                    f"field paths raised while being read: {exc!r}"
-                ) from exc
-            items.append(item)
-            if len(items) > MAX_MATERIALIZED_ITEMS:
-                raise ConfigError(
-                    "field paths materialised past the ceiling of "
-                    f"{MAX_MATERIALIZED_ITEMS} items; refusing to "
-                    "consume an unbounded iterable"
-                )
+        items = _materialize_bounded(
+            "field paths", paths, MAX_MATERIALIZED_ITEMS
+        )
         return cls(*items)
 
     @classmethod
