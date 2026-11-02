@@ -555,6 +555,19 @@ class _Base:
             raise ConfigError(
                 f"{name} must be a string, got {value!r}", context=context
             )
+        if any(0xD800 <= ord(char) <= 0xDFFF for char in value):
+            # An unpaired surrogate can never be encoded as UTF-8,
+            # so it can never reach the wire. Left alone it failed
+            # inside the native conversion with a message naming
+            # the codec instead of the argument the caller must fix
+            # (Round 25, the free text half of the scalar slot
+            # finding). The refusal names the argument here, where
+            # every free text argument is checked.
+            raise ConfigError(
+                f"{name} must not contain unpaired surrogates, "
+                f"got {value!r}",
+                context=context,
+            )
         return value
 
     @staticmethod
@@ -807,16 +820,20 @@ class _Base:
         return _drop_none(
             {
                 "textQuery": query,
-                "pageToken": page_token,
+                "pageToken": _validate_code_string("page_token", page_token),
                 "languageCode": _validate_code_string("language", language),
                 "regionCode": _validate_code_string("region", region),
-                "rankPreference": rank_preference,
+                "rankPreference": _validate_code_string(
+                    "rank_preference", rank_preference
+                ),
                 "openNow": _validate_bool("open_now", open_now),
                 "priceLevels": _string_list("price_levels", price_levels),
                 "strictTypeFiltering": _validate_bool(
                     "strict_type_filtering", strict_type_filtering
                 ),
-                "includedType": included_type,
+                "includedType": _validate_code_string(
+                    "included_type", included_type
+                ),
                 "locationBias": _location_body(location_bias, "location_bias"),
                 "locationRestriction": _location_body(
                     location_restriction, "location_restriction"
@@ -883,7 +900,9 @@ class _Base:
                 ),
                 "languageCode": _validate_code_string("language", language),
                 "regionCode": _validate_code_string("region", region),
-                "rankPreference": rank_preference,
+                "rankPreference": _validate_code_string(
+                    "rank_preference", rank_preference
+                ),
                 "routingParameters": _routing_body(routing_parameters),
                 "includeFutureOpeningBusinesses": _validate_bool(
                     "include_future_opening_businesses",
@@ -935,7 +954,9 @@ class _Base:
                 "input": input_text,
                 "languageCode": _validate_code_string("language", language),
                 "regionCode": _validate_code_string("region", region),
-                "sessionToken": session_token,
+                "sessionToken": _validate_code_string(
+                    "session_token", session_token
+                ),
                 "includedRegionCodes": _string_list(
                     "included_region_codes", included_region_codes
                 ),
