@@ -9,7 +9,7 @@ use crate::errors::Error;
 
 /// Upper bound on the number of paths in one mask (R4-11). The
 /// largest curated default, the Place Details default below, holds
-/// 72 paths; the bound exists so an unbounded caller supplied list
+/// 72 paths. The bound exists so an unbounded caller supplied list
 /// cannot build an unbounded header.
 const MAX_MASK_PATHS: usize = 100;
 
