@@ -28,7 +28,7 @@ from placekit.exceptions import (
     PlacesError,
     RateLimitError,
 )
-from placekit.fields import FieldMask, normalize_fields
+from placekit.fields import MAX_MATERIALIZED_ITEMS, FieldMask, normalize_fields
 from placekit.models import (
     AddressComponent,
     Place,
@@ -207,7 +207,8 @@ def test_components_ceiling_is_config_error():
 
 
 # ---------------------------------------------------------------------
-# Single pass iterables answer with their contents (M2, RT2).
+# Single pass iterables answer with their contents (M2, RT2). A one
+# shot iterable stored on a Place is refused instead (repair, F3).
 
 
 def test_generator_components_answer_directly():
@@ -216,16 +217,46 @@ def test_generator_components_answer_directly():
     assert [c.long_text for c in found] == ["Main St"]
 
 
-def test_place_holding_a_generator_answers_per_call():
+def test_place_holding_a_generator_is_config_error():
+    # Repair of red team F3. A one shot iterable stored on a
+    # Place used to answer with its contents on the first
+    # helper call and read empty on every later one, silently
+    # flipping the answers for an unchanged place. The
+    # components a Place carries must be a list or tuple, and
+    # the refusal is the same on the first call and on a later
+    # one, so no answer ever depends on call order.
     place = _place(address_components=(c for c in COMPS), postal_address=None)
+    with pytest.raises(ConfigError):
+        address.country_code(place)
+    with pytest.raises(ConfigError):
+        address.country_code(place)
+
+
+def test_place_holding_a_generator_is_config_error_for_flags():
+    place = _place(address_components=(c for c in COMPS), postal_address=None)
+    with pytest.raises(ConfigError):
+        address.address_flags(place)
+
+
+class _ComponentBag:
+    """A durable looking iterable that is neither list nor tuple."""
+
+    def __iter__(self):
+        return iter(COMPS)
+
+
+def test_place_holding_another_iterable_is_config_error():
+    place = _place(address_components=_ComponentBag(), postal_address=None)
+    with pytest.raises(ConfigError):
+        address.country_code(place)
+
+
+def test_place_holding_a_tuple_of_components_answers():
+    # A tuple is a durable sequence and stays accepted on a
+    # Place, read after read.
+    place = _place(address_components=tuple(COMPS), postal_address=None)
     assert address.country_code(place) == "US"
-
-
-def test_place_holding_a_generator_answers_flags():
-    place = _place(address_components=(c for c in COMPS), postal_address=None)
-    flags = address.address_flags(place)
-    assert flags.has_route is True
-    assert flags.has_country is True
+    assert address.address_flags(place).has_route is True
 
 
 def test_corrupt_place_components_escape_nowhere():
@@ -470,3 +501,188 @@ def test_async_docstrings_carry_the_sync_content():
         async_doc = inspect.getdoc(getattr(AsyncClient, name))
         assert async_doc.startswith(f"Async version of ``Client.{name}``.")
         assert async_doc.split("\n\n", 1)[1] == sync_doc.split("\n\n", 1)[1]
+
+
+# ---------------------------------------------------------------------
+# Repair pins: the address entry guard (red team F1 and F2), the
+# shared safe repr (standards Minor), and the FieldMask
+# constructor ceiling (red team I1).
+
+
+def test_uninitialised_component_is_config_error():
+    # F1: an instance built without its constructor has no
+    # attributes to read, and the read used to escape as a
+    # bare AttributeError out of the components funnel.
+    bare = object.__new__(AddressComponent)
+    with pytest.raises(ConfigError):
+        address.find_components([bare], "route")
+
+
+def test_uninitialised_place_is_config_error():
+    bare = object.__new__(Place)
+    with pytest.raises(ConfigError):
+        address.resolve_city(bare)
+    with pytest.raises(ConfigError):
+        address.address_flags(bare)
+
+
+def test_uninitialised_postal_address_is_config_error():
+    bare = object.__new__(PostalAddress)
+    with pytest.raises(ConfigError):
+        address.postal_locality(bare)
+
+
+def test_uninitialised_plus_code_is_config_error():
+    bare = object.__new__(PlusCode)
+    with pytest.raises(ConfigError):
+        address.split_plus_code(bare)
+
+
+class _UpperBoom(str):
+    def upper(self):
+        raise RuntimeError("upper boom")
+
+
+def test_hostile_upper_country_code_is_config_error_with_chain():
+    # F2: the routing read uppercases the country code after
+    # validation, and a string subclass whose upper raises
+    # used to escape as the bare RuntimeError.
+    evil = AddressComponent(
+        long_text="Nowhere", short_text=_UpperBoom("US"), types=["country"]
+    )
+    place = _place(address_components=[evil, LOCALITY], postal_address=None)
+    with pytest.raises(ConfigError) as excinfo:
+        address.resolve_city(place)
+    assert isinstance(excinfo.value.__cause__, RuntimeError)
+
+
+def test_hostile_upper_postal_region_code_is_config_error():
+    place = _place(
+        address_components=[LOCALITY],
+        postal_address=PostalAddress(region_code=_UpperBoom("US")),
+    )
+    with pytest.raises(ConfigError):
+        address.resolve_city(place)
+
+
+class _EqBoom(str):
+    def __eq__(self, other):
+        raise RuntimeError("eq boom")
+
+    __hash__ = str.__hash__
+
+
+def test_types_item_with_hostile_eq_is_config_error():
+    comp = AddressComponent(
+        long_text="Main St", short_text="Main", types=[_EqBoom("route")]
+    )
+    with pytest.raises(ConfigError):
+        address.find_components([comp], "route")
+
+
+class _IterBoom(list):
+    def __iter__(self):
+        raise RuntimeError("iter boom")
+
+
+class _ContainsBoom(list):
+    def __contains__(self, item):
+        raise RuntimeError("contains boom")
+
+
+def test_types_with_hostile_iter_is_config_error():
+    comp = AddressComponent(long_text="x", short_text="y", types=["route"])
+    object.__setattr__(comp, "types", _IterBoom(["route"]))
+    with pytest.raises(ConfigError):
+        address.find_components([comp], "route")
+
+
+def test_types_with_hostile_contains_is_config_error():
+    comp = AddressComponent(long_text="x", short_text="y", types=["route"])
+    object.__setattr__(comp, "types", _ContainsBoom(["route"]))
+    with pytest.raises(ConfigError):
+        address.find_components([comp], "route")
+
+
+class _GetterBoomComponent(AddressComponent):
+    @property
+    def long_text(self):  # type: ignore[override]
+        raise RuntimeError("getter boom")
+
+
+def test_component_property_getter_that_raises_is_config_error():
+    evil = object.__new__(_GetterBoomComponent)
+    object.__setattr__(evil, "short_text", "Main")
+    object.__setattr__(evil, "types", ["route"])
+    object.__setattr__(evil, "language_code", None)
+    object.__setattr__(evil, "raw", {})
+    with pytest.raises(ConfigError):
+        address.find_components([evil], "route")
+
+
+class _GetterBoomPlace(Place):
+    @property
+    def formatted_address(self):  # type: ignore[override]
+        raise RuntimeError("place getter boom")
+
+
+def test_place_property_getter_that_raises_is_config_error():
+    evil = object.__new__(_GetterBoomPlace)
+    object.__setattr__(evil, "address_components", list(COMPS))
+    object.__setattr__(evil, "postal_address", None)
+    with pytest.raises(ConfigError):
+        address.resolve_city(evil)
+
+
+class _GetterBoomPostal(PostalAddress):
+    @property
+    def locality(self):  # type: ignore[override]
+        raise RuntimeError("postal getter boom")
+
+
+def test_postal_property_getter_that_raises_is_config_error():
+    evil = object.__new__(_GetterBoomPostal)
+    object.__setattr__(evil, "region_code", "US")
+    with pytest.raises(ConfigError):
+        address.postal_locality(evil)
+
+
+class _InterruptBoom(list):
+    def __iter__(self):
+        raise KeyboardInterrupt
+
+
+def test_base_exception_from_a_caller_value_passes_through():
+    # The guard wraps Exception only. A BaseException raised
+    # by a caller supplied value stays the caller's own, the
+    # standing posture everywhere in the library.
+    comp = AddressComponent(long_text="x", short_text="y", types=["route"])
+    object.__setattr__(comp, "types", _InterruptBoom(["route"]))
+    with pytest.raises(KeyboardInterrupt):
+        address.find_components([comp], "route")
+
+
+def test_deliberate_config_error_keeps_its_own_message():
+    # A ConfigError raised deliberately inside a helper
+    # passes through the guard unchanged, message and all,
+    # and gains no chained cause from the guard.
+    with pytest.raises(ConfigError) as excinfo:
+        address.find_components(None, "route")
+    assert "components must be a sequence" in str(excinfo.value)
+    assert excinfo.value.__cause__ is None
+
+
+def test_address_shares_the_fields_safe_repr():
+    from placekit.fields import _safe_repr
+
+    assert address._safe_repr is _safe_repr
+
+
+def test_fieldmask_constructor_enforces_the_ceiling():
+    # I1: the constructor now refuses past the same ceiling
+    # FieldMask.of enforces, so both doors into the type
+    # refuse the same absurd sizes.
+    mask = FieldMask(*(["places.id"] * MAX_MATERIALIZED_ITEMS))
+    assert mask.paths == ("places.id",)
+    with pytest.raises(ConfigError):
+        FieldMask(*(["places.id"] * (MAX_MATERIALIZED_ITEMS + 1)))
