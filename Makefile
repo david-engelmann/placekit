@@ -3,7 +3,8 @@
 # .github/workflows/ci.yml), so there is one gate, not two.
 #
 # The Python steps need a development venv with the dev extras, which
-# carry pytest, mypy and maturin on the one pin pyproject declares:
+# pin pytest, mypy and maturin to the exact versions pyproject
+# declares, so the gate never resolves a floating tool:
 #   python -m venv .venv && .venv/bin/pip install -e '.[dev]'
 # Cargo must be on PATH for the Rust steps.
 
