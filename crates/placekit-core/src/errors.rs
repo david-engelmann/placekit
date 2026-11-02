@@ -16,7 +16,7 @@ pub enum Error {
         message: String,
         code: Option<i64>,
         details: Vec<serde_json::Value>,
-        retry_after: Option<u64>,
+        retry_after: Option<f64>,
     },
     /// Quota exhausted or rate limit hit (HTTP 429, `RESOURCE_EXHAUSTED`).
     #[error("rate limit or quota exceeded (HTTP {status}): {message}")]
@@ -26,7 +26,7 @@ pub enum Error {
         message: String,
         code: Option<i64>,
         details: Vec<serde_json::Value>,
-        retry_after: Option<u64>,
+        retry_after: Option<f64>,
     },
     /// The requested resource does not exist (HTTP 404, `NOT_FOUND`).
     #[error("not found (HTTP {status}): {message}")]
@@ -36,7 +36,7 @@ pub enum Error {
         message: String,
         code: Option<i64>,
         details: Vec<serde_json::Value>,
-        retry_after: Option<u64>,
+        retry_after: Option<f64>,
     },
     /// The request itself was malformed (HTTP 400, `INVALID_ARGUMENT`
     /// or `FAILED_PRECONDITION`).
@@ -47,7 +47,7 @@ pub enum Error {
         message: String,
         code: Option<i64>,
         details: Vec<serde_json::Value>,
-        retry_after: Option<u64>,
+        retry_after: Option<f64>,
     },
     /// Any other error response from the API.
     #[error("places API error (HTTP {status} {google_status}): {message}")]
@@ -57,7 +57,7 @@ pub enum Error {
         message: String,
         code: Option<i64>,
         details: Vec<serde_json::Value>,
-        retry_after: Option<u64>,
+        retry_after: Option<f64>,
     },
     /// The request never produced an HTTP response (DNS, connect, TLS,
     /// timeout, or a dropped connection).
@@ -172,9 +172,10 @@ impl Error {
         }
     }
 
-    /// The value of a `Retry-After` response header in whole seconds,
-    /// when the failing response carried one.
-    pub fn retry_after(&self) -> Option<u64> {
+    /// The value of a `Retry-After` response header in seconds, when
+    /// the failing response carried one. Fractional header values keep
+    /// their fraction (Round 24); the declared Python type is `float`.
+    pub fn retry_after(&self) -> Option<f64> {
         match self {
             Error::Auth { retry_after, .. }
             | Error::RateLimit { retry_after, .. }
@@ -187,7 +188,7 @@ impl Error {
 
     /// Attach a parsed `Retry-After` value to an API error. Other
     /// variants have nowhere to carry it and are returned unchanged.
-    pub(crate) fn with_retry_after(mut self, retry_after: Option<u64>) -> Error {
+    pub(crate) fn with_retry_after(mut self, retry_after: Option<f64>) -> Error {
         match &mut self {
             Error::Auth {
                 retry_after: slot, ..
@@ -815,8 +816,8 @@ mod tests {
 
     #[test]
     fn retry_after_round_trips() {
-        let err = Error::from_response(429, "").with_retry_after(Some(7));
-        assert_eq!(err.retry_after(), Some(7));
+        let err = Error::from_response(429, "").with_retry_after(Some(7.0));
+        assert_eq!(err.retry_after(), Some(7.0));
         let err = Error::from_response(429, "");
         assert_eq!(err.retry_after(), None);
     }

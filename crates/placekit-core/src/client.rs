@@ -668,13 +668,23 @@ impl Client {
 /// the element index for a list member, and a failure at the root
 /// itself keeps the bare serde message. The HTTP status rides along
 /// exactly as it did through the plain decode.
+///
+/// Round 24: the root failure renders its path through
+/// serde_path_to_error as a bare `?` placeholder (a root segment
+/// whose key serde cannot name), which the Python layer then quoted
+/// as if it were a field name. A path of `.` or `?` is the root and
+/// keeps the bare message, and a trailing `.?` segment (a failure
+/// naming a container's unnamed member) trims to the parent path
+/// that is known.
 fn decode_typed<T: DeserializeOwned>(body: &str, status: u16) -> Result<T, Error> {
     let mut deserializer = serde_json::Deserializer::from_str(body);
     serde_path_to_error::deserialize(&mut deserializer).map_err(|e| {
         let path = e.path().to_string();
         let inner = e.into_inner();
-        let detail = if path == "." {
+        let detail = if path == "." || path == "?" {
             inner.to_string()
+        } else if let Some(parent) = path.strip_suffix(".?") {
+            format!("{parent}: {inner}")
         } else {
             format!("{path}: {inner}")
         };
@@ -782,7 +792,7 @@ fn envelope_error(
     status: u16,
     body: &str,
     content_type: Option<&str>,
-    retry_after: Option<u64>,
+    retry_after: Option<f64>,
 ) -> Option<Error> {
     if Error::has_error_envelope(body) {
         Some(
@@ -793,11 +803,13 @@ fn envelope_error(
     }
 }
 
-/// The `Retry-After` header as whole seconds, when present. Both
-/// forms are read (R4-25): delta seconds, and the HTTP date form,
-/// where a date in the past yields zero (retry now). An unparseable
-/// value is left unread, as before.
-fn retry_after_of(response: &reqwest::Response) -> Option<u64> {
+/// The `Retry-After` header in seconds, when present. Both forms
+/// are read (R4-25): delta seconds, and the HTTP date form, where a
+/// date in the past yields zero (retry now). Fractional delta
+/// values keep their fraction (Round 24, the declared Python type
+/// is `float`); a negative or non-finite delta and an unparseable
+/// value are left unread.
+fn retry_after_of(response: &reqwest::Response) -> Option<f64> {
     let raw = response
         .headers()
         .get(reqwest::header::RETRY_AFTER)?
@@ -806,15 +818,19 @@ fn retry_after_of(response: &reqwest::Response) -> Option<u64> {
     parse_retry_after(raw, std::time::SystemTime::now())
 }
 
-fn parse_retry_after(raw: &str, now: std::time::SystemTime) -> Option<u64> {
+fn parse_retry_after(raw: &str, now: std::time::SystemTime) -> Option<f64> {
     let raw = raw.trim();
-    if let Ok(seconds) = raw.parse::<u64>() {
-        return Some(seconds);
+    if let Ok(seconds) = raw.parse::<f64>() {
+        return if seconds.is_finite() && seconds >= 0.0 {
+            Some(seconds)
+        } else {
+            None
+        };
     }
     let when = httpdate::parse_http_date(raw).ok()?;
     match when.duration_since(now) {
-        Ok(duration) => Some(duration.as_secs()),
-        Err(_) => Some(0),
+        Ok(duration) => Some(duration.as_secs_f64()),
+        Err(_) => Some(0.0),
     }
 }
 
@@ -1586,16 +1602,20 @@ mod tests {
     #[test]
     fn retry_after_parses_delta_seconds_and_http_dates() {
         // R4-25: both header forms are read; a past date is zero.
+        // Round 24: the value is float seconds end to end, fractional
+        // deltas keep their fraction, and a negative delta is unread.
         let now = httpdate::parse_http_date("Sun, 06 Nov 1994 08:49:37 GMT").unwrap();
-        assert_eq!(parse_retry_after("7", now), Some(7));
+        assert_eq!(parse_retry_after("7", now), Some(7.0));
+        assert_eq!(parse_retry_after("7.5", now), Some(7.5));
+        assert_eq!(parse_retry_after("-3", now), None);
         assert_eq!(
             parse_retry_after("Thu, 06 Nov 2994 08:49:37 GMT", now),
-            Some(31_556_995_200)
+            Some(31_556_995_200.0)
         );
         let later = httpdate::parse_http_date("Thu, 06 Nov 2994 08:49:37 GMT").unwrap();
         assert_eq!(
             parse_retry_after("Sun, 06 Nov 1994 08:49:37 GMT", later),
-            Some(0)
+            Some(0.0)
         );
         assert_eq!(parse_retry_after("whenever", now), None);
     }
