@@ -64,7 +64,7 @@ from typing import Optional, Sequence
 
 from . import types
 from .exceptions import ConfigError
-from .fields import MAX_MATERIALIZED_ITEMS, _materialize_bounded
+from .fields import MAX_MATERIALIZED_ITEMS, _materialize_bounded, _safe_repr
 from .models import AddressComponent, Place, PlusCode, PostalAddress
 
 # Component carriers assign from the types module constants so one
@@ -189,21 +189,6 @@ class AddressFlags:
     has_postal_address: bool
     has_country: bool
     has_city_carrier: bool
-
-
-def _safe_repr(value: object) -> str:
-    """The repr of a caller supplied value for an error message.
-
-    A value whose own repr raises must not escape through the
-    message that reports it, so a repr failure falls back to the
-    type name. The message is built only after the failure is
-    known, and it never formats a hostile value unguarded
-    (Round 24, the FieldMask lesson applied here too).
-    """
-    try:
-        return repr(value)
-    except Exception:
-        return f"<{type(value).__name__} whose repr raised>"
 
 
 def _checked_components(
