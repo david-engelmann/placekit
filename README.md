@@ -111,7 +111,7 @@ One billing note on the defaults. They include fields from the Enterprise billin
 
 ### Reading attributes the mask did not request
 
-A place from a search call only carries the fields the search mask asked for. Reading an attribute outside the mask gives None, an empty list, or an empty default, never an error and never a fabricated value, and the object cannot say whether the field was unrequested or simply had no value. The `raw` attribute on every model is the response body itself rather than a reserialization of the typed fields, so a name sits in `raw` exactly when the response carried that field, and membership in `raw` is an exact record of what arrived. Two habits follow. Check membership in `raw` with the wire name when the distinction matters. Call `place_details` with the place when the full modelled set is needed, since its default mask requests every modelled field.
+A place from a search call only carries the fields the search mask asked for. Reading an attribute outside the mask gives None, an empty list, or an empty default, never an error and never a fabricated value, and the object cannot say whether the field was unrequested or simply had no value. The `raw` attribute on every model is the response body itself rather than a reserialization of the typed fields, so a name sits in `raw` exactly when the response carried that field, and membership in `raw` is an exact record of what arrived. The one exception is `PhotoMedia`, the downloaded photo form, which carries no `raw` because its content bytes are the body. Two habits follow. Check membership in `raw` with the wire name when the distinction matters. Call `place_details` with the place when the full modelled set is needed, since its default mask requests every modelled field.
 
 ## Constants
 
@@ -129,11 +129,11 @@ result = client.nearby_search(
 )
 ```
 
-The modules are snapshots of the official tables and a convenience only. The client accepts any string in these slots, including values this version has never heard of, so a type or language the API adds tomorrow works without waiting for a placekit release.
+The modules are snapshots of the official tables and a convenience only. The client accepts any string in the type and language slots, including values this version has never heard of, so a type or language the API adds tomorrow works without waiting for a placekit release. The ranking slots are the exception, because the ranking preferences form a closed set in the API, and an unknown ranking value fails locally with a `ConfigError` naming the values the endpoint accepts.
 
 ## Addresses
 
-`placekit.address` reads the structured address a place already carries and answers the questions its two carrier sets raise. It looks components up by type and has a reader for the components that carry no type at all, reads the country and the administrative area across both carrier sets, and splits plus codes from a plus code object or a compound code string. Its `postal_code` reader returns a `PostalCodeResult` that carries the value with its carrier, a present or absent status, and any competing value the other carrier set holds, and the postal address readers read the second carrier set on its own terms. Presence helpers and an `address_flags` summary answer the shape questions about a place. City resolution is the careful part, because which carrier holds the city changes by country and the carriers sometimes disagree on the same place, so `resolve_city` returns the value with the carrier it came from and a confidence grade in the open.
+`placekit.address` reads the structured address a place already carries and answers the questions its two carrier sets raise. It looks components up by type and has a reader for the components that carry no type at all, reads the country and the postal code across both carrier sets, reads the administrative area from the components alone with its postal counterpart read by the separate `postal_administrative_area` reader, and splits plus codes from a plus code object or a compound code string. Its `postal_code` reader returns a `PostalCodeResult` that carries the value with its carrier, a present or absent status, and any competing value the other carrier set holds, and the postal address readers read the second carrier set on its own terms. Presence helpers and an `address_flags` summary answer the shape questions about a place. City resolution is the careful part, because which carrier holds the city changes by country and the carriers sometimes disagree on the same place, so `resolve_city` returns the value with the carrier it came from and a confidence grade in the open.
 
 ```python
 from placekit import address
@@ -152,9 +152,9 @@ The normalization guide teaches the address handling the recorded corpus and thi
 
 ## Errors
 
-Every failure raises a subclass of `PlacesError`, carrying `status_code` and `google_status` when the error came from the API.
+Every failure raises a subclass of `PlacesError`, carrying `status_code` and `google_status` when the error came from the API. The one exception is saving a downloaded photo, where `PhotoMedia.save` raises the `OSError` family for a path the filesystem refuses, by design.
 
-Classification follows the Google envelope status first and the HTTP code second, so the exception class and `status_code` can come from different sources. A quota envelope on an HTTP 500 is a `RateLimitError` with `status_code` 500, and the `status_mismatch` attribute is True whenever the envelope code and the HTTP status disagree. API exceptions also carry `retryable`, which says whether a caller side retry can plausibly succeed, and `retry_after`, the seconds from a `Retry-After` header when the response sent one. Exceptions raised by a client call carry `context`, naming the call that failed, and failures from the address helpers and from field mask construction carry the helper name or the mask as their context the same way. Model decode errors carry no context, and their messages name the model and the payload key instead. API exceptions also carry the parsed envelope details, as `error_code` and `details` and `field_violations` and `quota_violations`, so a rejected request shows which fields it broke and which quota it hit.
+Classification follows the Google envelope status first and the HTTP code second, so the exception class and `status_code` can come from different sources. A quota envelope on an HTTP 500 is a `RateLimitError` with `status_code` 500, and the `status_mismatch` attribute is True whenever the envelope code and the HTTP status disagree. API exceptions also carry `retryable`, which says whether a caller side retry can plausibly succeed, and `retry_after`, the seconds from a `Retry-After` header when the response sent one. Exceptions raised by a client call carry `context`, naming the call that failed, and failures from the address helpers and from field mask construction carry the helper name or the mask as their context the same way, with an address failure naming the innermost helper that raised it rather than the helper the caller invoked. Model decode errors carry no context of their own, and their messages name the model and the payload key instead. A decode failure reached through a client call still arrives carrying that call context, because the client attaches it the way it does for every error a call raises. API exceptions also carry the parsed envelope details, as `error_code` and `details` and `field_violations` and `quota_violations`, so a rejected request shows which fields it broke and which quota it hit.
 
 | Exception | Raised when |
 | --- | --- |
@@ -223,7 +223,7 @@ On Windows the venv binaries live under `.venv\Scripts`, so the same steps use `
 make check
 ```
 
-That runs the rustfmt and clippy checks, the Rust test suite, a version coherence check across the manifests, the lockfile and the changelog, an em dash scan, a maturin develop build, a stubtest pass over the type stubs, and the Python suite.
+That runs the rustfmt and clippy checks, the Rust test suite, a version coherence check across the manifests and the lockfile, an em dash scan, a maturin develop build, a stubtest pass over the type stubs, and the Python suite. The changelog joins the version comparison once it carries a release heading, and the publish form of the check enforces the changelog on the tag path.
 
 The test suites need no Google API key and no network. The client tests run against a local stub server that serves recorded fixtures, and the Rust tests decode the same fixtures. The corpus conformance and accounting suites and the proof suites for both guides decode the recorded fixtures directly, and none of them passes through the stub server.
 

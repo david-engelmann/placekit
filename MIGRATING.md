@@ -39,9 +39,12 @@ Five changes explain almost every edit a port makes. They are stated
 here once and then met again inside the examples.
 
 1. Field masks decide what a response carries, and billing follows
-   the mask. Each endpoint has a default mask, and the details
-   default requests every modelled field. An attribute missing from
-   a result is usually a field the mask never asked for.
+   the mask. The search and details endpoints each have a curated
+   default mask, and the details default requests every modelled
+   field. Autocomplete has no default mask, so the API default field
+   set governs a call that passes no fields, and place_photo takes
+   no fields argument at all. An attribute missing from a result is
+   usually a field the mask never asked for.
 2. Locations are coordinates. There are no string locations anywhere
    in placekit and no hidden geocode call behind any method. The
    caller supplies latitude and longitude, always.
@@ -206,8 +209,9 @@ What changed, in the order the code meets it.
   caller chooses. Dimensions rename to max_width_px and
   max_height_px, and the cap is 4800, up from the legacy 1600.
   Passing the photo object with neither size downloads at the
-  photo native width, capped at 4800, so a thumbnail caller passes
-  sizes explicitly, as this example does.
+  photo native width, capped at 4800, or at the photo height when
+  it carries no width, so a thumbnail caller passes sizes
+  explicitly, as this example does.
 
 ## Example 2. Following the next page
 
@@ -276,7 +280,8 @@ result = client.autocomplete(
     session_token=session_token,
 )
 for prediction in result.place_predictions:
-    print(prediction.text.text)
+    if prediction.text is not None:
+        print(prediction.text.text)
     print(prediction.place_id)
 
 # The session closes with one details call, on one chosen
@@ -301,7 +306,9 @@ plain list of region codes.
 The predictions list became place_predictions, and query
 predictions live in their own list, query_predictions, which fills
 only when include_query_predictions is passed. description became
-text.text, with text a FormattedText on the prediction.
+text.text, with text an optional FormattedText on the prediction
+that the example guards before printing, because a prediction the
+API returned without a text object holds None there.
 matched_substrings became text.matches, whose entries carry
 start_offset and end_offset, and either offset may be None when
 the API returned only one end of a match. terms has no equivalent
@@ -389,18 +396,18 @@ two working habits instead.
 The first habit is the raw membership check. When the distinction
 matters, test the wire name against the object raw, as in
 "websiteUri" in place.raw. A name present in raw was carried by
-the response, and a name absent from it was not. The check has
-one limit. A modelled field the response carried as an explicit
-null, or as an explicitly empty list, loses its key when the core
-reserializes the response, so membership is exact for unmodelled
-fields and at the model layer rather than through the client for
-those two shapes.
+the response, and a name absent from it was not. The check is
+exact through the client and on the direct layer alike. The
+client builds raw from the response body itself, parsed once,
+at every model level, so a modelled field the response carried
+as an explicit null keeps its key with a None value behind it,
+and an explicitly empty list keeps its key as an empty list,
+exactly as an unmodelled field does.
 
 The second habit is the upgrade. Call place_details when the full
 modelled set is needed, because its default mask requests every
 modelled field, and an attribute still reading None on a details
-result is a field the API had no value for, within the membership
-limit above.
+result is a field the API had no value for.
 
 The billing warning belongs here, at the point where the habit
 forms. A default place_details call is billed at the Place Details

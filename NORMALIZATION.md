@@ -692,9 +692,12 @@ is mask backed or unobserved. A place with neither carrier set returns
 absence from country and city and postal extraction, and only the plus
 code split may still yield a value.
 
-[Stated rule] Helpers over wire shaped input do not raise. Caller
-argument errors sit outside wire shaped input and raise ConfigError from
-placekit.exceptions. A bare string or bytes value where a component
+[Stated rule] Helpers over wire shaped input do not raise on the
+shapes the wire can send. A malformed hand built component is a
+caller argument error and raises ConfigError from
+placekit.exceptions, because a component whose fields carry values
+of the wrong type, or a plain mapping standing in the components
+list, is not wire data. A bare string or bytes value where a component
 sequence belongs raises ConfigError, and a nonstring type name raises
 ConfigError, and an empty type name raises ConfigError, because returning
 None there would dress a caller bug as a recorded absence.
