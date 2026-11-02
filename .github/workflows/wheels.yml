@@ -62,22 +62,8 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
-      # The native binary records source paths in its panic
-      # locations, and unremapped those paths name the machine that
-      # built the wheel. RUSTFLAGS reaches the build on every
-      # platform because the maturin action forwards it, into its
-      # manylinux container as well. The container mounts this
-      # workspace at the same absolute path as the runner, while
-      # the Rust it installs there keeps its cargo home under /root.
       - name: Keep build machine paths out of the binary
-        shell: bash
-        run: |
-          if [ "$RUNNER_OS" = "Linux" ]; then
-            cargo_home=/root/.cargo
-          else
-            cargo_home="${CARGO_HOME:-$HOME/.cargo}"
-          fi
-          printf 'RUSTFLAGS=--remap-path-prefix %s=. --remap-path-prefix %s=.cargo\n' "${{ github.workspace }}" "$cargo_home" >> "$GITHUB_ENV"
+        uses: ./.github/actions/remap-build-paths
       - name: Build wheels
         uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1
         with:
@@ -108,19 +94,8 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
-      # The native binary records source paths in its panic
-      # locations, and unremapped those paths name the machine that
-      # built the wheel. RUSTFLAGS reaches the build on every
-      # platform because the maturin action forwards it.
       - name: Keep build machine paths out of the binary
-        shell: bash
-        run: |
-          if [ "$RUNNER_OS" = "Linux" ]; then
-            cargo_home=/root/.cargo
-          else
-            cargo_home="${CARGO_HOME:-$HOME/.cargo}"
-          fi
-          printf 'RUSTFLAGS=--remap-path-prefix %s=. --remap-path-prefix %s=.cargo\n' "${{ github.workspace }}" "$cargo_home" >> "$GITHUB_ENV"
+        uses: ./.github/actions/remap-build-paths
       - name: Build wheels
         uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1
         with:
@@ -155,19 +130,8 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
-      # The native binary records source paths in its panic
-      # locations, and unremapped those paths name the machine that
-      # built the wheel. RUSTFLAGS reaches the build on every
-      # platform because the maturin action forwards it.
       - name: Keep build machine paths out of the binary
-        shell: bash
-        run: |
-          if [ "$RUNNER_OS" = "Linux" ]; then
-            cargo_home=/root/.cargo
-          else
-            cargo_home="${CARGO_HOME:-$HOME/.cargo}"
-          fi
-          printf 'RUSTFLAGS=--remap-path-prefix %s=. --remap-path-prefix %s=.cargo\n' "${{ github.workspace }}" "$cargo_home" >> "$GITHUB_ENV"
+        uses: ./.github/actions/remap-build-paths
       - name: Build wheels
         uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1
         env:

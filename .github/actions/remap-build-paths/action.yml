@@ -1,0 +1,29 @@
+name: remap-build-paths
+description: >-
+  Append two --remap-path-prefix entries to RUSTFLAGS so the native
+  binary records no build machine paths. The binary records source
+  paths in its panic locations, and unremapped those paths name the
+  machine that built the wheel. RUSTFLAGS reaches the build on every
+  platform because the maturin action forwards it, into its manylinux
+  container as well. The container mounts the workspace at the same
+  absolute path as the runner, while the Rust it installs there keeps
+  its cargo home under /root, which is why the Linux branch below
+  names /root/.cargo directly. Any RUSTFLAGS already in the
+  environment are kept, and the remap entries are appended after them.
+runs:
+  using: "composite"
+  steps:
+    - name: Append path remapping to RUSTFLAGS
+      shell: bash
+      run: |
+        if [ "$RUNNER_OS" = "Linux" ]; then
+          cargo_home=/root/.cargo
+        else
+          cargo_home="${CARGO_HOME:-$HOME/.cargo}"
+        fi
+        remap_flags="--remap-path-prefix ${{ github.workspace }}=. --remap-path-prefix ${cargo_home}=.cargo"
+        if [ -n "${RUSTFLAGS:-}" ]; then
+          printf 'RUSTFLAGS=%s %s\n' "$RUSTFLAGS" "$remap_flags" >> "$GITHUB_ENV"
+        else
+          printf 'RUSTFLAGS=%s\n' "$remap_flags" >> "$GITHUB_ENV"
+        fi
