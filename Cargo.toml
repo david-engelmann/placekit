@@ -24,7 +24,7 @@ futures-util = "0.3"
 serde = "1"
 pyo3 = { version = "0.23", features = ["abi3-py310", "extension-module"] }
 pyo3-async-runtimes = { version = "0.23", features = ["tokio-runtime"] }
-tokio = { version = "1", features = ["rt-multi-thread", "net", "time"] }
+tokio = { version = "1", features = ["rt-multi-thread", "time"] }
 pythonize = "0.23"
 serde_json = "1"
 
