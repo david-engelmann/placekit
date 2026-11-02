@@ -449,12 +449,18 @@ difference where there is one.
 ## Constants
 
 placekit.types, placekit.lang and placekit.ranking carry the
-vocabulary as plain strings, and the client accepts any string in
-these slots. The modules are a convenience and a typo guard, not a
-gate, and a value the modules have never heard of still passes to
-the API untouched.
+vocabulary as plain strings, and the modules themselves are a
+convenience and a typo guard, not a gate. In the type and
+language slots the client accepts any string as far as vocabulary
+goes, and a value the modules have never heard of still passes to
+the API untouched. The ranking slots are the exception, because
+the ranking preferences form a closed set in the API, and an
+unknown ranking value fails locally with a `ConfigError` naming
+the values the endpoint accepts. In every slot a string carrying
+control characters or unpaired surrogates is refused locally
+before it can reach the wire.
 
-The ranking rule comes first because it breaks loudly. Legacy
+The ranking rule breaks loudly. Legacy
 PROMINENCE has no equivalent constant. Nearby Search ranks by
 ranking.POPULARITY or ranking.DISTANCE, and Text Search ranks by
 ranking.RELEVANCE or ranking.DISTANCE. Legacy lowercase wire

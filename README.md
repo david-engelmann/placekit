@@ -129,7 +129,7 @@ result = client.nearby_search(
 )
 ```
 
-The modules are snapshots of the official tables and a convenience only. The client accepts any string in the type and language slots, including values this version has never heard of, so a type or language the API adds tomorrow works without waiting for a placekit release. The ranking slots are the exception, because the ranking preferences form a closed set in the API, and an unknown ranking value fails locally with a `ConfigError` naming the values the endpoint accepts.
+The modules are snapshots of the official tables and a convenience only. The client accepts any string in the type and language slots, including values this version has never heard of, so a type or language the API adds tomorrow works without waiting for a placekit release. The one refusal in those slots is a string carrying control characters or unpaired surrogates, which fails locally with a `ConfigError` naming the argument. The ranking slots are the exception, because the ranking preferences form a closed set in the API, and an unknown ranking value fails locally with a `ConfigError` naming the values the endpoint accepts.
 
 ## Addresses
 
