@@ -90,8 +90,7 @@ def _materialize_bounded(
     return items
 
 #: Default paths requested by text_search when no fields are given.
-TEXT_SEARCH_FIELDS: Tuple[str, ...] = (
-    "places.id",
+TEXT_SEARCH_FIELDS: Tuple[str, ...] = (    "places.id",
     "places.name",
     "places.displayName",
     "places.formattedAddress",
@@ -208,6 +207,35 @@ PLACE_DETAILS_FIELDS: Tuple[str, ...] = (
 _SEGMENT = re.compile(r"[A-Za-z][A-Za-z0-9]+")
 
 
+def _safe_repr(value: Any) -> str:
+    """The repr of a caller supplied value for an error message.
+
+    A member whose own repr raises must not escape through the
+    message that reports it, so a repr failure falls back to the
+    type name and the ConfigError exists before any hostile
+    value is formatted into it (Round 24, RT4).
+    """
+    try:
+        return repr(value)
+    except Exception:
+        return f"<{type(value).__name__} whose repr raised>"
+
+
+def _set_sort_key(value: Any) -> tuple[int, str]:
+    """A sort key for set members that cannot raise.
+
+    String members sort among themselves exactly as a plain
+    sort orders them, so a set of paths keeps its deterministic
+    header order. A member of any other type sorts after the
+    strings by its safe repr and is then refused by the
+    constructor as a ConfigError, instead of the comparison
+    itself escaping as a bare TypeError (Round 24, RT4).
+    """
+    if isinstance(value, str):
+        return (0, value)
+    return (1, _safe_repr(value))
+
+
 @dataclass(frozen=True, slots=True)
 class FieldMask:
     """An immutable, validated set of field paths for one request.
@@ -228,7 +256,9 @@ class FieldMask:
             raise ConfigError("FieldMask requires at least one field path")
         for path in paths:
             if not isinstance(path, str) or not _valid_path(path):
-                raise ConfigError(f"invalid field mask path: {path!r}")
+                raise ConfigError(
+                    f"invalid field mask path: {_safe_repr(path)}"
+                )
         # A mask is a set of paths; duplicates are dropped keeping
         # first seen order so the header is stable for a given input.
         object.__setattr__(self, "paths", tuple(dict.fromkeys(paths)))
@@ -239,8 +269,13 @@ class FieldMask:
         return ",".join(self.paths)
 
     @classmethod
-    def of(cls, paths: Iterable[str]) -> "FieldMask":
+    def of(cls, paths: "FieldMask | Iterable[str]") -> "FieldMask":
         """Build a mask from any iterable of paths.
+
+        A FieldMask passes through unchanged, so a mask can be
+        rebuilt from itself the way the client methods already
+        accept one in the ``fields`` argument (Round 24, the one
+        genuine defect inside the composition finding).
 
         A single string is not an iterable of paths for this purpose;
         it is rejected rather than shredded into one-character paths.
@@ -252,16 +287,19 @@ class FieldMask:
         exception chained, so a hostile or endless iterable fails
         the way every other local misuse fails (R20-F01 and F10).
         """
+        if isinstance(paths, FieldMask):
+            return paths
         if isinstance(paths, (str, bytes)):
             raise ConfigError(
                 "FieldMask.of expects an iterable of field paths, "
-                f"not a single string: {paths!r}"
+                f"not a single string: {_safe_repr(paths)}"
             )
-        if isinstance(paths, (set, frozenset)):
-            paths = sorted(paths)
+        from_set = isinstance(paths, (set, frozenset))
         items = _materialize_bounded(
             "field paths", paths, MAX_MATERIALIZED_ITEMS
         )
+        if from_set:
+            items = sorted(items, key=_set_sort_key)
         return cls(*items)
 
     @classmethod
@@ -303,6 +341,17 @@ def normalize_fields(fields: FieldsLike) -> list[str] | None:
     if isinstance(fields, (str, bytes)):
         raise ConfigError(
             "fields must be an iterable of field paths or a FieldMask, "
-            f"not a single string: {fields!r}"
+            f"not a single string: {_safe_repr(fields)}"
         )
     return list(FieldMask.of(fields).paths)
+
+
+__all__ = [
+    "MAX_MATERIALIZED_ITEMS",
+    "NEARBY_SEARCH_FIELDS",
+    "PLACE_DETAILS_FIELDS",
+    "TEXT_SEARCH_FIELDS",
+    "FieldMask",
+    "FieldsLike",
+    "normalize_fields",
+]
