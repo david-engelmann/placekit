@@ -18,7 +18,14 @@ the call returns and is never inherited across a fork. The copy
 census pins the shape of the optimisation itself, at most one
 deep copy per decoded node on the direct layer and one fewer
 than that through a client conversion, where the top node adopts
-its raw instead of copying it.
+its raw instead of copying it. The window pins assert the
+ownership state and the adoption identity directly, so a leaked
+window, a refused window, or a window inherited across a fork
+fails on the state itself rather than on an outcome the fail
+safe copying path would make true either way. The address pins
+count the component scans behind one flags call beside the
+validations, so the scan sharing cannot regress silently while
+the validation count stays at one.
 """
 
 from __future__ import annotations
@@ -126,18 +133,47 @@ def test_client_results_do_not_reach_each_other(api_key, base_url):
     )
 
 
+def test_decode_inside_a_window_adopts_the_windows_raw_root():
+    # The in window path itself, pinned by identity. A decode
+    # whose raw source is the window's own raw root adopts that
+    # tree as the top node's raw instead of copying it, which is
+    # the one copy a client conversion saves over the direct
+    # layer. Were the window not open, or the ownership refused,
+    # the raw would come back as a copy and the identity would
+    # fail, so this pin can fail for the failure it names.
+    root = _small_payload()
+    typed = copy.deepcopy(root)
+    with models._owned_decode(root):
+        assert models._ownership() is not None
+        place = Place.from_api(typed, raw=root)
+    assert place.raw is root
+    # Below the top node the per node raw copies still stand, so
+    # a child raw is an equal but separate tree.
+    assert place.display_name.raw == root["displayName"]
+    assert place.display_name.raw is not root["displayName"]
+    place.display_name.raw["text"] = "Mutated"
+    assert root["displayName"]["text"] == "Cafe"
+
+
 def test_the_owned_window_closes_when_the_call_returns(api_key, base_url):
     client = Client(api_key, base_url=base_url)
-    client.text_search("cafes in Sydney")
-    # A direct decode after a client call is a direct decode. The
-    # window the conversion opened is gone, so the caller's dict
-    # is copied exactly as it is for a caller who never owned a
-    # client.
+    result = client.text_search("cafes in Sydney")
+    # The ownership state itself is the evidence, asserted
+    # directly rather than through an isolation outcome the fail
+    # safe copying path would make true on both paths. The
+    # window the conversion opened is closed when the call
+    # returns, so the accessor reports no window in this context.
+    assert models._ownership() is None
+    # A decode aimed at the returned result's own raw tree, the
+    # very tree the conversion window held, must copy that tree
+    # rather than adopt it. Had the window leaked past the call,
+    # the decode would meet the leaked window, recognise its raw
+    # root, and hand back the tree itself.
     payload = _small_payload()
-    place = Place.from_api(payload)
-    payload["displayName"]["text"] = "Mutated"
-    assert place.display_text == "Cafe"
-    assert place.raw["displayName"]["text"] == "Cafe"
+    place = Place.from_api(payload, raw=result.raw)
+    assert place.raw is not result.raw
+    place.raw["places"][0]["displayName"]["text"] = "Mutated"
+    assert result.raw["places"][0]["displayName"]["text"] != "Mutated"
 
 
 class _Census:
@@ -196,28 +232,42 @@ def test_client_conversion_copies_one_fewer_than_once_per_node():
 def test_forked_child_does_not_inherit_the_owned_window(tmp_path):
     script = textwrap.dedent(
         """
-        import json, os, sys
+        import copy, json, os, sys
         sys.path.insert(0, sys.argv[2])
         from placekit import models
         from placekit.models import Place
 
-        payload = {
+        root = {
             "id": "ChIJx",
             "displayName": {"text": "Cafe", "languageCode": "en"},
             "types": ["cafe"],
         }
+        typed = copy.deepcopy(root)
         outcome = {}
-        with models._owned_decode({"id": "root"}):
+        with models._owned_decode(root):
             pid = os.fork()
             if pid == 0:
-                # The grandchild inherits the memory of the window
-                # but not its process, so its decode must take the
-                # ordinary path and copy the caller's dict.
-                place = Place.from_api(payload)
-                payload["displayName"]["text"] = "Mutated"
-                outcome["isolated"] = (
-                    place.display_text == "Cafe"
-                    and place.raw["displayName"]["text"] == "Cafe"
+                # The child inherits the memory of the window but
+                # not its process. The ownership accessor must
+                # refuse the inherited state outright, asserted
+                # directly rather than through an isolation
+                # outcome the fail safe copying path would make
+                # true on both paths.
+                outcome["ownership_refused"] = (
+                    models._ownership() is None
+                )
+                # A decode aimed at the inherited raw root must
+                # copy that root rather than adopt it, which is
+                # the path the refusal protects. Without the
+                # process check the decode would meet the
+                # inherited window and hand back the root itself.
+                place = Place.from_api(typed, raw=root)
+                outcome["root_copied_not_adopted"] = (
+                    place.raw is not root
+                )
+                place.raw["displayName"]["text"] = "Mutated"
+                outcome["root_untouched"] = (
+                    root["displayName"]["text"] == "Cafe"
                 )
                 with open(sys.argv[1], "w") as fh:
                     json.dump(outcome, fh)
@@ -240,7 +290,12 @@ def test_forked_child_does_not_inherit_the_owned_window(tmp_path):
         timeout=60,
     )
     assert completed.returncode == 0, completed.stderr
-    assert json.loads(outcome_path.read_text())["isolated"] is True
+    outcome = json.loads(outcome_path.read_text())
+    assert outcome == {
+        "ownership_refused": True,
+        "root_copied_not_adopted": True,
+        "root_untouched": True,
+    }
 
 
 def _counted_validations(monkeypatch):
@@ -281,3 +336,33 @@ def test_place_level_readings_validate_the_components_once(monkeypatch):
         reading(place)
         assert calls["n"] == 1, reading.__name__
         monkeypatch.undo()
+
+
+def test_address_flags_pays_one_scan_per_composed_reading(monkeypatch):
+    place = _corpus_place()
+    scans = {"cores": 0, "public": 0}
+    for core in ("_scan_components", "_scan_component", "_scan_long_text"):
+        real = getattr(address, core)
+
+        def counting(checked, type_name, _real=real):
+            scans["cores"] += 1
+            return _real(checked, type_name)
+
+        monkeypatch.setattr(address, core, counting)
+    real_find = address.find_components
+
+    def counting_find(components, type_name):
+        scans["public"] += 1
+        return real_find(components, type_name)
+
+    monkeypatch.setattr(address, "find_components", counting_find)
+    address.address_flags(place)
+    # The flags compose from the scan cores over the one checked
+    # list, twelve core scans for the richest corpus place, and
+    # no reading routes back through the public find helpers,
+    # which rescan the list on every call. Before the sharing,
+    # one flags call paid 16.2 find_components scans over the
+    # same list, and this pin keeps that shape from returning
+    # while every other test stays green.
+    assert scans["public"] == 0
+    assert scans["cores"] == 12
