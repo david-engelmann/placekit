@@ -34,7 +34,6 @@ Homepage = "https://github.com/david-engelmann/placekit"
 Repository = "https://github.com/david-engelmann/placekit"
 Issues = "https://github.com/david-engelmann/placekit/issues"
 Changelog = "https://github.com/david-engelmann/placekit/blob/main/CHANGELOG.md"
-Documentation = "https://github.com/david-engelmann/placekit"
 
 [project.optional-dependencies]
 dev = ["pytest>=8", "mypy>=1.11", "maturin>=1.7,<2.0"]
