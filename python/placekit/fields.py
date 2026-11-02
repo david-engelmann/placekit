@@ -90,7 +90,8 @@ def _materialize_bounded(
     return items
 
 #: Default paths requested by text_search when no fields are given.
-TEXT_SEARCH_FIELDS: Tuple[str, ...] = (    "places.id",
+TEXT_SEARCH_FIELDS: Tuple[str, ...] = (
+    "places.id",
     "places.name",
     "places.displayName",
     "places.formattedAddress",
@@ -247,6 +248,11 @@ class FieldMask:
     The mask is a frozen dataclass, so assigning to ``paths`` after
     construction raises ``dataclasses.FrozenInstanceError``; build a
     new mask instead of editing one (A23).
+
+    A mask carries at most ``MAX_MATERIALIZED_ITEMS`` paths, the
+    same ceiling ``FieldMask.of`` enforces on the iterables it
+    reads, so the two public doors into the type refuse the same
+    absurd sizes (Round 24 repair).
     """
 
     paths: Tuple[str, ...]
@@ -254,6 +260,11 @@ class FieldMask:
     def __init__(self, *paths: str) -> None:
         if not paths:
             raise ConfigError("FieldMask requires at least one field path")
+        if len(paths) > MAX_MATERIALIZED_ITEMS:
+            raise ConfigError(
+                f"FieldMask takes at most {MAX_MATERIALIZED_ITEMS} "
+                f"field paths, got {len(paths)}"
+            )
         for path in paths:
             if not isinstance(path, str) or not _valid_path(path):
                 raise ConfigError(
