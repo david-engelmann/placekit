@@ -764,6 +764,11 @@ impl PyClient {
         let request: NearbySearchRequest = body_to_request(&body)?;
         let mask = mask_from(py, fields)?;
         let inner = self.handle(py)?;
+        // Resolve the runtime on this fallible path first (Round
+        // 23): the bridge resolves it again at spawn and finds it
+        // cached for this process, so a build failure is reported
+        // here as a typed error instead of escaping from inside the
+        // spawn machinery, whose signature cannot return one.
         shared_runtime().map_err(|e| to_pyerr(py, e))?;
         future_into_py_fork_aware(py, async move {
             let result = run_guarded(inner.nearby_search(&request, mask.as_ref())).await;
@@ -813,6 +818,11 @@ impl PyClient {
     ) -> PyResult<Bound<'py, PyAny>> {
         let mask = mask_from(py, fields)?;
         let inner = self.handle(py)?;
+        // Resolve the runtime on this fallible path first (Round
+        // 23): the bridge resolves it again at spawn and finds it
+        // cached for this process, so a build failure is reported
+        // here as a typed error instead of escaping from inside the
+        // spawn machinery, whose signature cannot return one.
         shared_runtime().map_err(|e| to_pyerr(py, e))?;
         future_into_py_fork_aware(py, async move {
             let result = run_guarded(inner.place_details(
@@ -855,6 +865,11 @@ impl PyClient {
         let request: AutocompleteRequest = body_to_request(&body)?;
         let mask = mask_from(py, fields)?;
         let inner = self.handle(py)?;
+        // Resolve the runtime on this fallible path first (Round
+        // 23): the bridge resolves it again at spawn and finds it
+        // cached for this process, so a build failure is reported
+        // here as a typed error instead of escaping from inside the
+        // spawn machinery, whose signature cannot return one.
         shared_runtime().map_err(|e| to_pyerr(py, e))?;
         future_into_py_fork_aware(py, async move {
             let result = run_guarded(inner.autocomplete(&request, mask.as_ref())).await;
@@ -894,6 +909,11 @@ impl PyClient {
         skip_http_redirect: bool,
     ) -> PyResult<Bound<'py, PyAny>> {
         let inner = self.handle(py)?;
+        // Resolve the runtime on this fallible path first (Round
+        // 23): the bridge resolves it again at spawn and finds it
+        // cached for this process, so a build failure is reported
+        // here as a typed error instead of escaping from inside the
+        // spawn machinery, whose signature cannot return one.
         shared_runtime().map_err(|e| to_pyerr(py, e))?;
         future_into_py_fork_aware(py, async move {
             let result = run_guarded(inner.place_photo(
