@@ -92,6 +92,7 @@ All notable changes to placekit are recorded here. The format follows Keep a Cha
 
 ### Fixed
 
+- A synthesized test fixture and its pin were corrected to the documented shape. The synthesized consumer alert fixture carried `consumerAlert.details` as a list of one Details object, where both the REST JSON representation and the RPC reference document a single Details object, and the test that pins the fixture indexed it as a list. The fixture now carries the single object and the pin reads it as one. No library behaviour changes.
 - Error envelopes that arrive on a success HTTP status now raise the typed exception for their Google status on every endpoint, photos included, instead of decoding as empty results or returning the envelope JSON as image bytes.
 - Response bodies are read under a size cap, gzipped bodies decompress, and a failed body read keeps both the HTTP status and the read failure in the resulting error instead of dropping one of them.
 - Photo downloads are checked against their declared content type and the signature of the format it claims before the bytes can be saved as an image, and photo failures served by an image host after a redirect are worded as image host failures.

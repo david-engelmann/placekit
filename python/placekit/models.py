@@ -1197,7 +1197,7 @@ class ReviewSummary:
 class ConsumerAlert:
     """A consumer alert about a place, with its headline and language.
 
-    The detail blocks under the headline stay in ``Place.raw``. The
+    The single details object under the headline stays in raw. The
     overview is a plain string here, not a LocalizedText, because the
     wire carries the language as the sibling field below.
     """
