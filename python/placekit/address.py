@@ -212,6 +212,41 @@ def _checked_components(
     return components
 
 
+# Scan cores over an already checked component list. Every public
+# helper validates its list once through _checked_components and
+# then works through these cores, so one public call pays the
+# validation and the scans once no matter how many readings it
+# composes. Before this sharing, address_flags alone revalidated
+# the same list seventeen times and rescanned it sixteen times
+# (Round 21 Finding 5). The cores assume the check has run and
+# the type name is valid, and they answer in list order exactly
+# as the helpers they sit under always have.
+def _scan_components(
+    checked: Sequence[AddressComponent], type_name: str
+) -> tuple[AddressComponent, ...]:
+    return tuple(
+        component for component in checked if type_name in component.types
+    )
+
+
+def _scan_component(
+    checked: Sequence[AddressComponent], type_name: str
+) -> Optional[AddressComponent]:
+    for component in checked:
+        if type_name in component.types:
+            return component
+    return None
+
+
+def _scan_long_text(
+    checked: Sequence[AddressComponent], type_name: str
+) -> Optional[str]:
+    for component in checked:
+        if type_name in component.types and component.long_text:
+            return component.long_text
+    return None
+
+
 # Routing into a stated answer or the generic chain matches the
 # country code without regard to letter case, so a lowercase or
 # mixed case signal still reaches the answer its country carries.
@@ -329,6 +364,15 @@ def untyped_components(
     )
 
 
+def _country_code_from_components(
+    checked: Sequence[AddressComponent],
+) -> Optional[str]:
+    for component in _scan_components(checked, types.TYPE_COUNTRY):
+        if component.short_text:
+            return component.short_text
+    return None
+
+
 def country_code_from_components(
     components: Sequence[AddressComponent],
 ) -> Optional[str]:
@@ -339,10 +383,16 @@ def country_code_from_components(
     The value comes back as sent and is never uppercased or
     mapped to another code.
     """
-    for component in find_components(components, types.TYPE_COUNTRY):
-        if component.short_text:
-            return component.short_text
-    return None
+    return _country_code_from_components(_checked_components(components))
+
+
+def _country_code(
+    place: Place, checked: Sequence[AddressComponent]
+) -> Optional[str]:
+    code = _country_code_from_components(checked)
+    if code is not None:
+        return code
+    return postal_region_code(place.postal_address)
 
 
 def country_code(place: Place) -> Optional[str]:
@@ -353,10 +403,7 @@ def country_code(place: Place) -> Optional[str]:
     back to the region code of the postal address, and it
     returns None when neither carrier yields a value.
     """
-    code = country_code_from_components(place.address_components)
-    if code is not None:
-        return code
-    return postal_region_code(place.postal_address)
+    return _country_code(place, _checked_components(place.address_components))
 
 
 def administrative_area(place: Place) -> Optional[str]:
@@ -392,20 +439,11 @@ def postal_code_from_postal_address(
     return postal_address.postal_code or None
 
 
-def postal_code(place: Place) -> PostalCodeResult:
-    """Return the postal code reading for a place.
-
-    When both carriers hold the same code the carrier reports
-    both of them. When they hold different codes the headline
-    carries the component value, because the component list is
-    the fuller record and the postal address is a derived
-    summary of it, and the postal value stays visible in the
-    competing fields. When neither carrier holds a code the
-    status reports absence, which the recorded Dubai set proves
-    can be a property of a country rather than a gap.
-    """
-    country = country_code(place)
-    component_value = postal_code_from_components(place.address_components)
+def _postal_code(
+    place: Place, checked: Sequence[AddressComponent]
+) -> PostalCodeResult:
+    country = _country_code(place, checked)
+    component_value = _scan_long_text(checked, types.TYPE_POSTAL_CODE)
     postal_value = postal_code_from_postal_address(place.postal_address)
     if component_value is not None and postal_value is not None:
         if component_value == postal_value:
@@ -431,14 +469,31 @@ def postal_code(place: Place) -> PostalCodeResult:
     return PostalCodeResult(None, None, POSTAL_ABSENT, country)
 
 
+def postal_code(place: Place) -> PostalCodeResult:
+    """Return the postal code reading for a place.
+
+    When both carriers hold the same code the carrier reports
+    both of them. When they hold different codes the headline
+    carries the component value, because the component list is
+    the fuller record and the postal address is a derived
+    summary of it, and the postal value stays visible in the
+    competing fields. When neither carrier holds a code the
+    status reports absence, which the recorded Dubai set proves
+    can be a property of a country rather than a gap.
+    """
+    return _postal_code(place, _checked_components(place.address_components))
+
+
 def _no_city(country: Optional[str]) -> CityResolution:
     return CityResolution(None, None, CONFIDENCE_NONE, country)
 
 
-def _british_resolutions(place: Place, country: Optional[str]) -> tuple[CityResolution, ...]:
-    components = place.address_components
-    locality = component_long_text(components, types.TYPE_LOCALITY)
-    town = component_long_text(components, types.TYPE_POSTAL_TOWN)
+def _british_resolutions(
+    country: Optional[str],
+    checked: Sequence[AddressComponent],
+) -> tuple[CityResolution, ...]:
+    locality = _scan_long_text(checked, types.TYPE_LOCALITY)
+    town = _scan_long_text(checked, types.TYPE_POSTAL_TOWN)
     if locality is not None and town is not None:
         if locality != town:
             return (
@@ -467,21 +522,15 @@ def _british_resolutions(place: Place, country: Optional[str]) -> tuple[CityReso
     return (_no_city(country),)
 
 
-def city_resolutions(place: Place) -> tuple[CityResolution, ...]:
-    """Return every city reading the applicable rules produce.
-
-    The tuple holds one element in every country except the
-    United Kingdom on a place where the civil place and the
-    mailing town differ, where it holds both values in that
-    order and each carries the other in its competing fields.
-    """
-    country = country_code(place)
+def _city_resolutions(
+    place: Place, checked: Sequence[AddressComponent]
+) -> tuple[CityResolution, ...]:
+    country = _country_code(place, checked)
     route = _routing_country(country)
-    components = place.address_components
     if route in CONTESTED_COUNTRIES:
-        return _british_resolutions(place, country)
+        return _british_resolutions(country, checked)
     if route in PRECEDENCE_COUNTRIES:
-        locality = component_long_text(components, types.TYPE_LOCALITY)
+        locality = _scan_long_text(checked, types.TYPE_LOCALITY)
         if locality is not None:
             return (
                 CityResolution(locality, CARRIER_LOCALITY, CONFIDENCE_PRIMARY, country),
@@ -505,7 +554,7 @@ def city_resolutions(place: Place) -> tuple[CityResolution, ...]:
         (types.TYPE_SUBLOCALITY_LEVEL_2, CARRIER_SUBLOCALITY_LEVEL_2),
     )
     for type_name, carrier in generic_chain:
-        value = component_long_text(components, type_name)
+        value = _scan_long_text(checked, type_name)
         if value is not None:
             return (CityResolution(value, carrier, CONFIDENCE_HEURISTIC, country),)
     postal_value = postal_locality(place.postal_address)
@@ -519,6 +568,19 @@ def city_resolutions(place: Place) -> tuple[CityResolution, ...]:
             ),
         )
     return (_no_city(country),)
+
+
+def city_resolutions(place: Place) -> tuple[CityResolution, ...]:
+    """Return every city reading the applicable rules produce.
+
+    The tuple holds one element in every country except the
+    United Kingdom on a place where the civil place and the
+    mailing town differ, where it holds both values in that
+    order and each carries the other in its competing fields.
+    """
+    return _city_resolutions(
+        place, _checked_components(place.address_components)
+    )
 
 
 def resolve_city(place: Place) -> CityResolution:
@@ -537,6 +599,25 @@ def resolve_city(place: Place) -> CityResolution:
     return city_resolutions(place)[0]
 
 
+def _resolve_district(
+    place: Place, checked: Sequence[AddressComponent]
+) -> DistrictResolution:
+    country = _country_code(place, checked)
+    route = _routing_country(country)
+    if route == "JP":
+        type_name = types.TYPE_SUBLOCALITY_LEVEL_2
+        carrier = CARRIER_SUBLOCALITY_LEVEL_2
+    elif route == "AE":
+        type_name = types.TYPE_SUBLOCALITY_LEVEL_1
+        carrier = CARRIER_SUBLOCALITY_LEVEL_1
+    else:
+        return DistrictResolution(None, None, CONFIDENCE_NONE, country)
+    value = _scan_long_text(checked, type_name)
+    if value is None:
+        return DistrictResolution(None, None, CONFIDENCE_NONE, country)
+    return DistrictResolution(value, carrier, CONFIDENCE_PRIMARY, country)
+
+
 def resolve_district(place: Place) -> DistrictResolution:
     """Return the district reading for a place.
 
@@ -548,20 +629,9 @@ def resolve_district(place: Place) -> DistrictResolution:
     sublocality is never a district source under any
     circumstance.
     """
-    country = country_code(place)
-    route = _routing_country(country)
-    if route == "JP":
-        type_name = types.TYPE_SUBLOCALITY_LEVEL_2
-        carrier = CARRIER_SUBLOCALITY_LEVEL_2
-    elif route == "AE":
-        type_name = types.TYPE_SUBLOCALITY_LEVEL_1
-        carrier = CARRIER_SUBLOCALITY_LEVEL_1
-    else:
-        return DistrictResolution(None, None, CONFIDENCE_NONE, country)
-    value = component_long_text(place.address_components, type_name)
-    if value is None:
-        return DistrictResolution(None, None, CONFIDENCE_NONE, country)
-    return DistrictResolution(value, carrier, CONFIDENCE_PRIMARY, country)
+    return _resolve_district(
+        place, _checked_components(place.address_components)
+    )
 
 
 def has_street_number(components: Sequence[AddressComponent]) -> bool:
@@ -589,18 +659,31 @@ def has_subpremise(components: Sequence[AddressComponent]) -> bool:
     return find_component(components, types.TYPE_SUBPREMISE) is not None
 
 
+def _spans_multiple_routes(checked: Sequence[AddressComponent]) -> bool:
+    routes = [
+        component
+        for component in _scan_components(checked, types.TYPE_ROUTE)
+        if component.long_text
+    ]
+    return len(routes) >= 2
+
+
 def spans_multiple_routes(components: Sequence[AddressComponent]) -> bool:
     """Return whether two or more route components carry text.
 
     Only route components with a nonempty long text count, so
     one named route beside one empty route reads as one route.
     """
-    routes = [
-        component
-        for component in find_components(components, types.TYPE_ROUTE)
-        if component.long_text
-    ]
-    return len(routes) >= 2
+    return _spans_multiple_routes(_checked_components(components))
+
+
+def _has_no_street_level(checked: Sequence[AddressComponent]) -> bool:
+    return not (
+        _scan_component(checked, types.TYPE_STREET_NUMBER) is not None
+        or _scan_component(checked, types.TYPE_ROUTE) is not None
+        or _scan_component(checked, types.TYPE_PREMISE) is not None
+        or _scan_component(checked, types.TYPE_SUBPREMISE) is not None
+    )
 
 
 def has_no_street_level(components: Sequence[AddressComponent]) -> bool:
@@ -610,12 +693,14 @@ def has_no_street_level(components: Sequence[AddressComponent]) -> bool:
     or a subpremise component, and the flag is true only when
     none of the four exists.
     """
-    checked = _checked_components(components)
-    return not (
-        has_street_number(checked)
-        or has_route(checked)
-        or has_premise(checked)
-        or has_subpremise(checked)
+    return _has_no_street_level(_checked_components(components))
+
+
+def _is_premise_level(checked: Sequence[AddressComponent]) -> bool:
+    return (
+        _scan_component(checked, types.TYPE_PREMISE) is not None
+        and _scan_component(checked, types.TYPE_STREET_NUMBER) is None
+        and _scan_component(checked, types.TYPE_ROUTE) is None
     )
 
 
@@ -627,12 +712,7 @@ def is_premise_level(place: Place) -> bool:
     which is the Japanese block addressing shape the recorded
     corpus holds.
     """
-    components = place.address_components
-    return (
-        has_premise(components)
-        and not has_street_number(components)
-        and not has_route(components)
-    )
+    return _is_premise_level(_checked_components(place.address_components))
 
 
 def address_flags(place: Place) -> AddressFlags:
@@ -644,19 +724,23 @@ def address_flags(place: Place) -> AddressFlags:
     when a country read yields a value, and the city carrier
     flag is true exactly when city resolution yields a value.
     """
-    components = place.address_components
+    checked = _checked_components(place.address_components)
     return AddressFlags(
-        has_street_number=has_street_number(components),
-        has_route=has_route(components),
-        has_premise=has_premise(components),
-        has_subpremise=has_subpremise(components),
-        is_premise_level=is_premise_level(place),
-        spans_multiple_routes=spans_multiple_routes(components),
-        has_no_street_level=has_no_street_level(components),
-        has_postal_code=postal_code(place).status == POSTAL_PRESENT,
+        has_street_number=_scan_component(checked, types.TYPE_STREET_NUMBER)
+        is not None,
+        has_route=_scan_component(checked, types.TYPE_ROUTE) is not None,
+        has_premise=_scan_component(checked, types.TYPE_PREMISE) is not None,
+        has_subpremise=_scan_component(checked, types.TYPE_SUBPREMISE)
+        is not None,
+        is_premise_level=_is_premise_level(checked),
+        spans_multiple_routes=_spans_multiple_routes(checked),
+        has_no_street_level=_has_no_street_level(checked),
+        has_postal_code=_postal_code(place, checked).status == POSTAL_PRESENT,
         has_postal_address=place.postal_address is not None,
-        has_country=country_code(place) is not None,
-        has_city_carrier=resolve_city(place).value is not None,
+        has_country=_country_code(place, checked) is not None,
+        has_city_carrier=(
+            _city_resolutions(place, checked)[0].value is not None
+        ),
     )
 
 
