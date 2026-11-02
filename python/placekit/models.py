@@ -284,7 +284,7 @@ def _validate_payload(data: Any, model: str) -> None:
         ) from exc
 
 
-def _prepare_payload(data: Any, model: str) -> dict[str, Any]:
+def _validate_and_copy_payload(data: Any, model: str) -> dict[str, Any]:
     """Validate and copy one ``from_api`` payload.
 
     Every decoder in this module promises one strictness policy
@@ -365,7 +365,7 @@ def _prepare(
     """Settle the two sources of one ``from_api`` decode.
 
     Every decoder opens with this call. It validates the payload
-    under the same rules as ``_prepare_payload`` and returns the
+    under the same rules as ``_validate_and_copy_payload`` and returns the
     payload to read attributes from beside the payload to keep as
     the node's ``raw``, with the copies between them paid only
     where a copy is load bearing (Round 21).
@@ -397,7 +397,7 @@ def _prepare(
             # raw of its own, copied from the payload it reads.
             return data, copy.deepcopy(data)
         return data, copy.deepcopy(raw)
-    prepared = _prepare_payload(data, model)
+    prepared = _validate_and_copy_payload(data, model)
     if raw is None or raw is data:
         return prepared, prepared
     return prepared, copy.deepcopy(raw)
