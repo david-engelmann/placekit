@@ -231,6 +231,33 @@ def _model_list(value: Any, model: str, key: str) -> list:
     )
 
 
+def _model_elements(
+    value: Any, model: str, key: str, raw: Any, decode: Any
+) -> list:
+    """Decode one list of sub payloads, naming the position of a
+    failure.
+
+    Every list of child models decodes through here, so when one
+    element fails, the refusal names the parent model, the wire
+    key and the element index in front of the child's own
+    message, instead of the child's message alone losing which
+    element of the collection failed (Round 24, the actionable
+    half of the decode dialect finding). ``decode`` is the child
+    class's ``from_api``, called with the element and its raw
+    source at the same index.
+    """
+    decoded = []
+    for i, item in enumerate(_model_list(value, model, key)):
+        try:
+            decoded.append(decode(item, _raw_element(raw, key, i, item)))
+        except DecodeError as exc:
+            raise DecodeError(
+                f"{model} payload key {key!r} element {i} failed "
+                f"to decode: {exc.message}"
+            ) from exc
+    return decoded
+
+
 #: The deepest container nesting a ``from_api`` payload may carry.
 #: Past it the payload is refused with a DecodeError before any
 #: decoding runs, so deep nesting can no longer kill decoding with
@@ -598,18 +625,13 @@ class Photo:
             name=_as_str(data.get("name", ""), "Photo", "name"),
             width_px=_as_int(data.get("widthPx", 0), "Photo", "widthPx"),
             height_px=_as_int(data.get("heightPx", 0), "Photo", "heightPx"),
-            author_attributions=[
-                AuthorAttribution.from_api(
-                    a, _raw_element(raw, "authorAttributions", i, a)
-                )
-                for i, a in enumerate(
-                    _model_list(
-                        data.get("authorAttributions", []),
-                        "Photo",
-                        "authorAttributions",
-                    )
-                )
-            ],
+            author_attributions=_model_elements(
+                data.get("authorAttributions", []),
+                "Photo",
+                "authorAttributions",
+                raw,
+                AuthorAttribution.from_api,
+            ),
             flag_content_uri=_as_str(
                 data.get("flagContentUri"), "Photo", "flagContentUri"
             ),
@@ -761,16 +783,13 @@ class OpeningHours:
         data, raw = _prepare(data, raw, "OpeningHours")
         return cls(
             open_now=_optional_bool(data.get("openNow"), "OpeningHours", "openNow"),
-            periods=[
-                Period.from_api(p, _raw_element(raw, "periods", i, p))
-                for i, p in enumerate(
-                    _model_list(
-                        data.get("periods", []),
-                        "OpeningHours",
-                        "periods",
-                    )
-                )
-            ],
+            periods=_model_elements(
+                data.get("periods", []),
+                "OpeningHours",
+                "periods",
+                raw,
+                Period.from_api,
+            ),
             weekday_descriptions=_str_list(
                 data.get("weekdayDescriptions", []),
                 "OpeningHours",
@@ -782,16 +801,13 @@ class OpeningHours:
             next_open_time=_as_str(
                 data.get("nextOpenTime"), "OpeningHours", "nextOpenTime"
             ),
-            special_days=[
-                SpecialDay.from_api(d, _raw_element(raw, "specialDays", i, d))
-                for i, d in enumerate(
-                    _model_list(
-                        data.get("specialDays", []),
-                        "OpeningHours",
-                        "specialDays",
-                    )
-                )
-            ],
+            special_days=_model_elements(
+                data.get("specialDays", []),
+                "OpeningHours",
+                "specialDays",
+                raw,
+                SpecialDay.from_api,
+            ),
             secondary_hours_type=_as_str(
                 data.get("secondaryHoursType"),
                 "OpeningHours",
@@ -1396,18 +1412,13 @@ class EvChargeOptions:
             connector_count=_optional_int(
                 data.get("connectorCount"), "EvChargeOptions", "connectorCount"
             ),
-            connector_aggregation=[
-                ConnectorAggregation.from_api(
-                    a, _raw_element(raw, "connectorAggregation", i, a)
-                )
-                for i, a in enumerate(
-                    _model_list(
-                        data.get("connectorAggregation", []),
-                        "EvChargeOptions",
-                        "connectorAggregation",
-                    )
-                )
-            ],
+            connector_aggregation=_model_elements(
+                data.get("connectorAggregation", []),
+                "EvChargeOptions",
+                "connectorAggregation",
+                raw,
+                ConnectorAggregation.from_api,
+            ),
             raw=raw,
         )
 
@@ -1511,28 +1522,20 @@ class AddressDescriptor:
     ) -> "AddressDescriptor":
         data, raw = _prepare(data, raw, "AddressDescriptor")
         return cls(
-            landmarks=[
-                Landmark.from_api(
-                    landmark, _raw_element(raw, "landmarks", i, landmark)
-                )
-                for i, landmark in enumerate(
-                    _model_list(
-                        data.get("landmarks", []),
-                        "AddressDescriptor",
-                        "landmarks",
-                    )
-                )
-            ],
-            areas=[
-                Area.from_api(area, _raw_element(raw, "areas", i, area))
-                for i, area in enumerate(
-                    _model_list(
-                        data.get("areas", []),
-                        "AddressDescriptor",
-                        "areas",
-                    )
-                )
-            ],
+            landmarks=_model_elements(
+                data.get("landmarks", []),
+                "AddressDescriptor",
+                "landmarks",
+                raw,
+                Landmark.from_api,
+            ),
+            areas=_model_elements(
+                data.get("areas", []),
+                "AddressDescriptor",
+                "areas",
+                raw,
+                Area.from_api,
+            ),
             raw=raw,
         )
 
@@ -1762,42 +1765,27 @@ class Place:
                 if current_hours
                 else None
             ),
-            current_secondary_opening_hours=[
-                OpeningHours.from_api(
-                    h, _raw_element(raw, "currentSecondaryOpeningHours", i, h)
-                )
-                for i, h in enumerate(
-                    _model_list(
-                        data.get("currentSecondaryOpeningHours", []),
-                        "Place",
-                        "currentSecondaryOpeningHours",
-                    )
-                )
-            ],
-            regular_secondary_opening_hours=[
-                OpeningHours.from_api(
-                    h, _raw_element(raw, "regularSecondaryOpeningHours", i, h)
-                )
-                for i, h in enumerate(
-                    _model_list(
-                        data.get("regularSecondaryOpeningHours", []),
-                        "Place",
-                        "regularSecondaryOpeningHours",
-                    )
-                )
-            ],
-            address_components=[
-                AddressComponent.from_api(
-                    c, _raw_element(raw, "addressComponents", i, c)
-                )
-                for i, c in enumerate(
-                    _model_list(
-                        data.get("addressComponents", []),
-                        "Place",
-                        "addressComponents",
-                    )
-                )
-            ],
+            current_secondary_opening_hours=_model_elements(
+                data.get("currentSecondaryOpeningHours", []),
+                "Place",
+                "currentSecondaryOpeningHours",
+                raw,
+                OpeningHours.from_api,
+            ),
+            regular_secondary_opening_hours=_model_elements(
+                data.get("regularSecondaryOpeningHours", []),
+                "Place",
+                "regularSecondaryOpeningHours",
+                raw,
+                OpeningHours.from_api,
+            ),
+            address_components=_model_elements(
+                data.get("addressComponents", []),
+                "Place",
+                "addressComponents",
+                raw,
+                AddressComponent.from_api,
+            ),
             plus_code=PlusCode.from_api(
                 plus_code, _raw_subtree(raw, "plusCode", plus_code)
             )
@@ -1862,36 +1850,27 @@ class Place:
             moved_place_id=_as_str(
                 data.get("movedPlaceId"), "Place", "movedPlaceId"
             ),
-            photos=[
-                Photo.from_api(p, _raw_element(raw, "photos", i, p))
-                for i, p in enumerate(
-                    _model_list(
-                        data.get("photos", []),
-                        "Place",
-                        "photos",
-                    )
-                )
-            ],
-            attributions=[
-                Attribution.from_api(a, _raw_element(raw, "attributions", i, a))
-                for i, a in enumerate(
-                    _model_list(
-                        data.get("attributions", []),
-                        "Place",
-                        "attributions",
-                    )
-                )
-            ],
-            reviews=[
-                Review.from_api(r, _raw_element(raw, "reviews", i, r))
-                for i, r in enumerate(
-                    _model_list(
-                        data.get("reviews", []),
-                        "Place",
-                        "reviews",
-                    )
-                )
-            ],
+            photos=_model_elements(
+                data.get("photos", []),
+                "Place",
+                "photos",
+                raw,
+                Photo.from_api,
+            ),
+            attributions=_model_elements(
+                data.get("attributions", []),
+                "Place",
+                "attributions",
+                raw,
+                Attribution.from_api,
+            ),
+            reviews=_model_elements(
+                data.get("reviews", []),
+                "Place",
+                "reviews",
+                raw,
+                Review.from_api,
+            ),
             takeout=_optional_bool(data.get("takeout"), "Place", "takeout"),
             delivery=_optional_bool(data.get("delivery"), "Place", "delivery"),
             dine_in=_optional_bool(data.get("dineIn"), "Place", "dineIn"),
@@ -2073,16 +2052,13 @@ class RoutingSummary:
     ) -> "RoutingSummary":
         data, raw = _prepare(data, raw, "RoutingSummary")
         return cls(
-            legs=[
-                Leg.from_api(leg, _raw_element(raw, "legs", i, leg))
-                for i, leg in enumerate(
-                    _model_list(
-                        data.get("legs", []),
-                        "RoutingSummary",
-                        "legs",
-                    )
-                )
-            ],
+            legs=_model_elements(
+                data.get("legs", []),
+                "RoutingSummary",
+                "legs",
+                raw,
+                Leg.from_api,
+            ),
             directions_uri=_as_str(
                 data.get("directionsUri"), "RoutingSummary", "directionsUri"
             ),
@@ -2118,34 +2094,26 @@ class TextSearchResult:
     ) -> "TextSearchResult":
         data, raw = _prepare(data, raw, "TextSearchResult")
         return cls(
-            places=[
-                Place.from_api(p, _raw_element(raw, "places", i, p))
-                for i, p in enumerate(
-                    _model_list(
-                        data.get("places", []),
-                        "TextSearchResult",
-                        "places",
-                    )
-                )
-            ],
+            places=_model_elements(
+                data.get("places", []),
+                "TextSearchResult",
+                "places",
+                raw,
+                Place.from_api,
+            ),
             next_page_token=_as_str(
                 data.get("nextPageToken"), "TextSearchResult", "nextPageToken"
             ),
             search_uri=_as_str(
                 data.get("searchUri"), "TextSearchResult", "searchUri"
             ),
-            routing_summaries=[
-                RoutingSummary.from_api(
-                    s, _raw_element(raw, "routingSummaries", i, s)
-                )
-                for i, s in enumerate(
-                    _model_list(
-                        data.get("routingSummaries", []),
-                        "TextSearchResult",
-                        "routingSummaries",
-                    )
-                )
-            ],
+            routing_summaries=_model_elements(
+                data.get("routingSummaries", []),
+                "TextSearchResult",
+                "routingSummaries",
+                raw,
+                RoutingSummary.from_api,
+            ),
             raw=raw,
         )
 
@@ -2178,28 +2146,20 @@ class NearbySearchResult:
     ) -> "NearbySearchResult":
         data, raw = _prepare(data, raw, "NearbySearchResult")
         return cls(
-            places=[
-                Place.from_api(p, _raw_element(raw, "places", i, p))
-                for i, p in enumerate(
-                    _model_list(
-                        data.get("places", []),
-                        "NearbySearchResult",
-                        "places",
-                    )
-                )
-            ],
-            routing_summaries=[
-                RoutingSummary.from_api(
-                    s, _raw_element(raw, "routingSummaries", i, s)
-                )
-                for i, s in enumerate(
-                    _model_list(
-                        data.get("routingSummaries", []),
-                        "NearbySearchResult",
-                        "routingSummaries",
-                    )
-                )
-            ],
+            places=_model_elements(
+                data.get("places", []),
+                "NearbySearchResult",
+                "places",
+                raw,
+                Place.from_api,
+            ),
+            routing_summaries=_model_elements(
+                data.get("routingSummaries", []),
+                "NearbySearchResult",
+                "routingSummaries",
+                raw,
+                RoutingSummary.from_api,
+            ),
             raw=raw,
         )
 
@@ -2242,16 +2202,13 @@ class FormattedText:
         data, raw = _prepare(data, raw, "FormattedText")
         return cls(
             text=_as_str(data.get("text", ""), "FormattedText", "text"),
-            matches=[
-                StringMatch.from_api(m, _raw_element(raw, "matches", i, m))
-                for i, m in enumerate(
-                    _model_list(
-                        data.get("matches", []),
-                        "FormattedText",
-                        "matches",
-                    )
-                )
-            ],
+            matches=_model_elements(
+                data.get("matches", []),
+                "FormattedText",
+                "matches",
+                raw,
+                StringMatch.from_api,
+            ),
             raw=raw,
         )
 
@@ -2419,16 +2376,13 @@ class AutocompleteResult:
     ) -> "AutocompleteResult":
         data, raw = _prepare(data, raw, "AutocompleteResult")
         return cls(
-            suggestions=[
-                Suggestion.from_api(s, _raw_element(raw, "suggestions", i, s))
-                for i, s in enumerate(
-                    _model_list(
-                        data.get("suggestions", []),
-                        "AutocompleteResult",
-                        "suggestions",
-                    )
-                )
-            ],
+            suggestions=_model_elements(
+                data.get("suggestions", []),
+                "AutocompleteResult",
+                "suggestions",
+                raw,
+                Suggestion.from_api,
+            ),
             raw=raw,
         )
 
@@ -2481,3 +2435,50 @@ class PhotoUriResult:
             name=_as_str(data.get("name", ""), "PhotoUriResult", "name"),
             raw=raw,
         )
+
+
+__all__ = [
+    "AccessibilityOptions",
+    "AddressComponent",
+    "AddressDescriptor",
+    "Area",
+    "Attribution",
+    "AuthorAttribution",
+    "AutocompleteResult",
+    "ConnectorAggregation",
+    "ConsumerAlert",
+    "Date",
+    "EvChargeOptions",
+    "FormattedText",
+    "GenerativeSummary",
+    "GoogleMapsLinks",
+    "Landmark",
+    "LatLng",
+    "Leg",
+    "LocalizedText",
+    "Money",
+    "NearbySearchResult",
+    "OpeningHours",
+    "OpeningPoint",
+    "ParkingOptions",
+    "PaymentOptions",
+    "Period",
+    "Photo",
+    "PhotoMedia",
+    "PhotoUriResult",
+    "Place",
+    "PlacePrediction",
+    "PlusCode",
+    "PostalAddress",
+    "PriceRange",
+    "QueryPrediction",
+    "Review",
+    "ReviewSummary",
+    "RoutingSummary",
+    "SpecialDay",
+    "StringMatch",
+    "Suggestion",
+    "TextSearchResult",
+    "TimeZone",
+    "Viewport",
+]
