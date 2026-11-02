@@ -51,14 +51,22 @@ argument error raises ConfigError from placekit.exceptions,
 the same discipline the client layer keeps. A component list
 is materialised once per call, so a one shot iterable answers
 with the contents it carried on that call rather than reading
-empty on a second pass. A model field of the wrong type on a
-hand built Place, component or postal address raises at the
-reading that touches it instead of flowing into a result under
-a type it does not have.
+empty on a second pass. The components a Place carries face a
+stricter rule and must be a list or tuple, because a Place is
+reused across calls and a one shot iterable stored on it would
+be spent by the first reading and read empty by every later
+one. A model field of the wrong type on a hand built Place,
+component or postal address raises at the reading that touches
+it instead of flowing into a result under a type it does not
+have, and a value that raises while it is being read or used,
+an instance built without its constructor or a property
+getter or method that raises, surfaces as the same
+ConfigError with the original failure chained.
 """
 
 from __future__ import annotations
 
+import functools
 from dataclasses import dataclass
 from typing import Optional, Sequence
 
@@ -189,6 +197,40 @@ class AddressFlags:
     has_postal_address: bool
     has_country: bool
     has_city_carrier: bool
+
+
+def _entry_guard(fn):
+    """Run one public helper under the module entry guard.
+
+    The funnels validate the values a caller hands in, but a
+    validated value can still raise while it is being read or
+    used. An instance built without its constructor has no
+    attributes to read, a subclass property getter can raise
+    at the read itself, and a string or list subclass can
+    raise inside the method or membership test the reading
+    performs. The client layer wraps exactly this class
+    around its argument phase, and every public helper here
+    runs under the same discipline, so an Exception a caller
+    supplied value raises surfaces as a ConfigError with the
+    original chained. A ConfigError raised deliberately
+    inside passes through unchanged, and a BaseException
+    passes through untouched, the standing posture everywhere
+    in the library (Round 24 repair, red team F1 and F2).
+    """
+
+    @functools.wraps(fn)
+    def guarded(*args, **kwargs):
+        try:
+            return fn(*args, **kwargs)
+        except ConfigError:
+            raise
+        except Exception as exc:
+            raise ConfigError(
+                f"an argument for {fn.__name__} raised while it "
+                f"was being read: {exc!r}"
+            ) from exc
+
+    return guarded
 
 
 def _checked_components(
@@ -326,6 +368,17 @@ def _checked_place(place: Place) -> tuple[AddressComponent, ...]:
     address is validated at its reads, through the postal
     readers, so a corrupt postal field raises exactly where a
     reading touches it.
+
+    The components themselves must be a list or tuple here,
+    stricter than the components funnel, which accepts any
+    iterable once for the call that receives it. A Place is a
+    durable object its caller reads across many calls, so a
+    one shot iterable stored in its components field would be
+    spent by the first helper that touched the place and read
+    empty for every later one, silently flipping answers
+    between calls on an unchanged place (Round 24 repair, red
+    team F3). The field is annotated as a list on the model,
+    and this is that annotation enforced at the reading.
     """
     if not isinstance(place, Place):
         raise ConfigError(f"place must be a Place, got {_safe_repr(place)}")
@@ -336,7 +389,13 @@ def _checked_place(place: Place) -> tuple[AddressComponent, ...]:
             "place formatted_address must be a string, "
             f"got {_safe_repr(place.formatted_address)}"
         )
-    return _checked_components(place.address_components)
+    components = place.address_components
+    if not isinstance(components, (list, tuple)):
+        raise ConfigError(
+            "place address_components must be a list or tuple, "
+            f"got {_safe_repr(components)}"
+        )
+    return _checked_components(components)
 
 
 # Scan cores over an already checked component list. Every public
@@ -393,6 +452,7 @@ def _checked_type_name(type_name: str) -> str:
     return type_name
 
 
+@_entry_guard
 def find_component(
     components: Sequence[AddressComponent], type_name: str
 ) -> Optional[AddressComponent]:
@@ -406,6 +466,7 @@ def find_component(
     return matches[0] if matches else None
 
 
+@_entry_guard
 def find_components(
     components: Sequence[AddressComponent], type_name: str
 ) -> tuple[AddressComponent, ...]:
@@ -424,6 +485,7 @@ def find_components(
     )
 
 
+@_entry_guard
 def component_long_text(
     components: Sequence[AddressComponent], type_name: str
 ) -> Optional[str]:
@@ -438,6 +500,7 @@ def component_long_text(
     return None
 
 
+@_entry_guard
 def component_short_text(
     components: Sequence[AddressComponent], type_name: str
 ) -> Optional[str]:
@@ -452,6 +515,7 @@ def component_short_text(
     return None
 
 
+@_entry_guard
 def component_long_texts(
     components: Sequence[AddressComponent], type_name: str
 ) -> tuple[str, ...]:
@@ -463,6 +527,7 @@ def component_long_texts(
     )
 
 
+@_entry_guard
 def component_short_texts(
     components: Sequence[AddressComponent], type_name: str
 ) -> tuple[str, ...]:
@@ -474,6 +539,7 @@ def component_short_texts(
     )
 
 
+@_entry_guard
 def untyped_components(
     components: Sequence[AddressComponent],
 ) -> tuple[AddressComponent, ...]:
@@ -500,6 +566,7 @@ def _country_code_from_components(
     return None
 
 
+@_entry_guard
 def country_code_from_components(
     components: Sequence[AddressComponent],
 ) -> Optional[str]:
@@ -522,6 +589,7 @@ def _country_code(
     return postal_region_code(place.postal_address)
 
 
+@_entry_guard
 def country_code(place: Place) -> Optional[str]:
     """Return the region code for a place from either carrier set.
 
@@ -533,6 +601,7 @@ def country_code(place: Place) -> Optional[str]:
     return _country_code(place, _checked_place(place))
 
 
+@_entry_guard
 def administrative_area(place: Place) -> Optional[str]:
     """Return the level 1 administrative area long text.
 
@@ -546,6 +615,7 @@ def administrative_area(place: Place) -> Optional[str]:
     )
 
 
+@_entry_guard
 def postal_code_from_components(
     components: Sequence[AddressComponent],
 ) -> Optional[str]:
@@ -553,6 +623,7 @@ def postal_code_from_components(
     return component_long_text(components, types.TYPE_POSTAL_CODE)
 
 
+@_entry_guard
 def postal_code_from_postal_address(
     postal_address: Optional[PostalAddress],
 ) -> Optional[str]:
@@ -594,6 +665,7 @@ def _postal_code(
     return PostalCodeResult(None, None, POSTAL_ABSENT, country)
 
 
+@_entry_guard
 def postal_code(place: Place) -> PostalCodeResult:
     """Return the postal code reading for a place.
 
@@ -695,6 +767,7 @@ def _city_resolutions(
     return (_no_city(country),)
 
 
+@_entry_guard
 def city_resolutions(place: Place) -> tuple[CityResolution, ...]:
     """Return every city reading the applicable rules produce.
 
@@ -706,6 +779,7 @@ def city_resolutions(place: Place) -> tuple[CityResolution, ...]:
     return _city_resolutions(place, _checked_place(place))
 
 
+@_entry_guard
 def resolve_city(place: Place) -> CityResolution:
     """Return the headline city reading for a place.
 
@@ -741,6 +815,7 @@ def _resolve_district(
     return DistrictResolution(value, carrier, CONFIDENCE_PRIMARY, country)
 
 
+@_entry_guard
 def resolve_district(place: Place) -> DistrictResolution:
     """Return the district reading for a place.
 
@@ -755,6 +830,7 @@ def resolve_district(place: Place) -> DistrictResolution:
     return _resolve_district(place, _checked_place(place))
 
 
+@_entry_guard
 def has_street_number(components: Sequence[AddressComponent]) -> bool:
     """Return whether a street number component exists.
 
@@ -765,16 +841,19 @@ def has_street_number(components: Sequence[AddressComponent]) -> bool:
     return find_component(components, types.TYPE_STREET_NUMBER) is not None
 
 
+@_entry_guard
 def has_route(components: Sequence[AddressComponent]) -> bool:
     """Return whether a route component exists in the list."""
     return find_component(components, types.TYPE_ROUTE) is not None
 
 
+@_entry_guard
 def has_premise(components: Sequence[AddressComponent]) -> bool:
     """Return whether a premise component exists in the list."""
     return find_component(components, types.TYPE_PREMISE) is not None
 
 
+@_entry_guard
 def has_subpremise(components: Sequence[AddressComponent]) -> bool:
     """Return whether a subpremise component exists in the list."""
     return find_component(components, types.TYPE_SUBPREMISE) is not None
@@ -789,6 +868,7 @@ def _spans_multiple_routes(checked: Sequence[AddressComponent]) -> bool:
     return len(routes) >= 2
 
 
+@_entry_guard
 def spans_multiple_routes(components: Sequence[AddressComponent]) -> bool:
     """Return whether two or more route components carry text.
 
@@ -807,6 +887,7 @@ def _has_no_street_level(checked: Sequence[AddressComponent]) -> bool:
     )
 
 
+@_entry_guard
 def has_no_street_level(components: Sequence[AddressComponent]) -> bool:
     """Return whether no street level component exists.
 
@@ -825,6 +906,7 @@ def _is_premise_level(checked: Sequence[AddressComponent]) -> bool:
     )
 
 
+@_entry_guard
 def is_premise_level(place: Place) -> bool:
     """Return whether a place sits at premise level addressing.
 
@@ -836,6 +918,7 @@ def is_premise_level(place: Place) -> bool:
     return _is_premise_level(_checked_place(place))
 
 
+@_entry_guard
 def address_flags(place: Place) -> AddressFlags:
     """Return every presence flag for a place in one snapshot.
 
@@ -865,6 +948,7 @@ def address_flags(place: Place) -> AddressFlags:
     )
 
 
+@_entry_guard
 def split_compound_code(compound_code: Optional[str]) -> Optional[PlusCodeParts]:
     """Split a compound plus code into its code and locality text.
 
@@ -894,6 +978,7 @@ def split_compound_code(compound_code: Optional[str]) -> Optional[PlusCodeParts]
     return PlusCodeParts(code_part=code_part, locality_text=locality_text)
 
 
+@_entry_guard
 def split_plus_code(plus_code: Optional[PlusCode]) -> Optional[PlusCodeParts]:
     """Split the compound form of a plus code, when it carries one."""
     if plus_code is None:
@@ -905,6 +990,7 @@ def split_plus_code(plus_code: Optional[PlusCode]) -> Optional[PlusCodeParts]:
     return split_compound_code(plus_code.compound_code)
 
 
+@_entry_guard
 def postal_locality(postal_address: Optional[PostalAddress]) -> Optional[str]:
     """Return the locality field of a postal address.
 
@@ -914,6 +1000,7 @@ def postal_locality(postal_address: Optional[PostalAddress]) -> Optional[str]:
     return _postal_field(postal_address, "locality")
 
 
+@_entry_guard
 def postal_sublocality(postal_address: Optional[PostalAddress]) -> Optional[str]:
     """Return the sublocality field of a postal address.
 
@@ -924,6 +1011,7 @@ def postal_sublocality(postal_address: Optional[PostalAddress]) -> Optional[str]
     return _postal_field(postal_address, "sublocality")
 
 
+@_entry_guard
 def postal_administrative_area(
     postal_address: Optional[PostalAddress],
 ) -> Optional[str]:
@@ -931,6 +1019,7 @@ def postal_administrative_area(
     return _postal_field(postal_address, "administrative_area")
 
 
+@_entry_guard
 def postal_region_code(postal_address: Optional[PostalAddress]) -> Optional[str]:
     """Return the region code field of a postal address.
 
