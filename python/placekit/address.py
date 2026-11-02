@@ -45,6 +45,16 @@ across scripts. It does not promise disputed territory truth and
 it does not promise freshness of any value it returns. No
 resolved city from this module is a fact of the same kind as a
 place ID.
+
+Every helper validates its arguments at entry, and a caller
+argument error raises ConfigError from placekit.exceptions,
+the same discipline the client layer keeps. A component list
+is materialised once per call, so a one shot iterable answers
+with the contents it carried on that call rather than reading
+empty on a second pass. A model field of the wrong type on a
+hand built Place, component or postal address raises at the
+reading that touches it instead of flowing into a result under
+a type it does not have.
 """
 
 from __future__ import annotations
@@ -54,6 +64,7 @@ from typing import Optional, Sequence
 
 from . import types
 from .exceptions import ConfigError
+from .fields import MAX_MATERIALIZED_ITEMS, _materialize_bounded
 from .models import AddressComponent, Place, PlusCode, PostalAddress
 
 # Component carriers assign from the types module constants so one
@@ -180,19 +191,74 @@ class AddressFlags:
     has_city_carrier: bool
 
 
+def _safe_repr(value: object) -> str:
+    """The repr of a caller supplied value for an error message.
+
+    A value whose own repr raises must not escape through the
+    message that reports it, so a repr failure falls back to the
+    type name. The message is built only after the failure is
+    known, and it never formats a hostile value unguarded
+    (Round 24, the FieldMask lesson applied here too).
+    """
+    try:
+        return repr(value)
+    except Exception:
+        return f"<{type(value).__name__} whose repr raised>"
+
+
 def _checked_components(
     components: Sequence[AddressComponent],
-) -> Sequence[AddressComponent]:
+) -> tuple[AddressComponent, ...]:
+    """Validate one caller supplied component list and return it
+    materialised as a tuple.
+
+    The input is read exactly once, under the same bounded
+    ceiling the client applies to caller iterables, and every
+    helper works from the materialised tuple this returns. A
+    one shot iterable (a generator above all) therefore answers
+    with its real contents instead of the empty stream a second
+    read would see, which was the silent wrong answer of the
+    earlier shape, where validation consumed the input and the
+    scan then read the exhausted original (Round 24, M2).
+
+    Every caller shaped corruption raises ConfigError here, at
+    entry, so no public helper can escape as a bare builtin or
+    hand back a value of the wrong type. An element that is not
+    an AddressComponent is refused, and so is a text field or a
+    types item of the wrong type on an element that is one,
+    because the helpers hand those values back and match on
+    them. A null element inside the types list is a different
+    shape and stays untouched: the model layer settlement lands
+    one as None at its wire index, and membership reads past it
+    without error.
+    """
     if components is None or isinstance(components, (str, bytes)):
         raise ConfigError(
             "components must be a sequence of AddressComponent values "
             "and not None or a bare string or bytes"
         )
-    for component in components:
+    items = _materialize_bounded(
+        "components", components, MAX_MATERIALIZED_ITEMS
+    )
+    for component in items:
         if not isinstance(component, AddressComponent):
             raise ConfigError(
                 "components must hold AddressComponent values, "
-                f"got {component!r}"
+                f"got {_safe_repr(component)}"
+            )
+        if component.long_text is not None and not isinstance(
+            component.long_text, str
+        ):
+            raise ConfigError(
+                "component long_text must be a string, "
+                f"got {_safe_repr(component.long_text)}"
+            )
+        if component.short_text is not None and not isinstance(
+            component.short_text, str
+        ):
+            raise ConfigError(
+                "component short_text must be a string, "
+                f"got {_safe_repr(component.short_text)}"
             )
         if not isinstance(component.types, (list, tuple)):
             # The element posture matches the sequence posture
@@ -200,16 +266,92 @@ def _checked_components(
             # types field and nothing else, so a hand built
             # component can still carry a types value that is not
             # a list at all, an integer or None, and the membership
-            # test in the search then raised a bare TypeError. A
-            # null element inside the list is a different shape
-            # and stays untouched: the model layer settlement
-            # lands one as None at its wire index, and membership
-            # reads past it without error.
+            # test in the search then raised a bare TypeError.
             raise ConfigError(
                 "component types must be a list of strings, "
-                f"got {component.types!r}"
+                f"got {_safe_repr(component.types)}"
             )
-    return components
+        for item in component.types:
+            if item is not None and not isinstance(item, str):
+                raise ConfigError(
+                    "component types must hold strings, "
+                    f"got {_safe_repr(item)}"
+                )
+    return tuple(items)
+
+
+def _checked_postal_address(
+    postal_address: Optional[PostalAddress],
+) -> Optional[PostalAddress]:
+    """Validate the carrier type of a postal address argument.
+
+    None is the documented absence and passes. Anything that is
+    not a PostalAddress is a caller error and raises ConfigError
+    here instead of a bare AttributeError at the field read.
+    """
+    if postal_address is None:
+        return None
+    if not isinstance(postal_address, PostalAddress):
+        raise ConfigError(
+            "postal_address must be a PostalAddress, "
+            f"got {_safe_repr(postal_address)}"
+        )
+    return postal_address
+
+
+def _postal_field(
+    postal_address: Optional[PostalAddress], field_name: str
+) -> Optional[str]:
+    """Read one string field of a postal address under the field
+    reader rule.
+
+    A None postal address and a missing or empty field both read
+    as None. A field holding a value of the wrong type is a
+    caller error and raises ConfigError, because the readers
+    hand the value back under a string promise and returning it
+    unchecked made the result a lie about its own type
+    (Round 24, RT1). Every postal field read in this module
+    flows through here, so a corrupt field raises at the read
+    that touches it and a field no reading touches stays
+    unread.
+    """
+    checked = _checked_postal_address(postal_address)
+    if checked is None:
+        return None
+    value = getattr(checked, field_name)
+    if value is not None and not isinstance(value, str):
+        raise ConfigError(
+            f"postal_address {field_name} must be a string, "
+            f"got {_safe_repr(value)}"
+        )
+    return value or None
+
+
+def _checked_place(place: Place) -> tuple[AddressComponent, ...]:
+    """Validate one Place argument and return its components
+    checked and materialised.
+
+    Every Place taking helper enters through here, so a value
+    that is not a Place at all raises ConfigError instead of a
+    bare AttributeError naming an internal attribute, and the
+    components are validated once through the components funnel
+    and shared by every reading the helper composes (Round 24,
+    M1). The formatted address is validated with them because
+    every Place carries one under a string promise. The postal
+    address is validated at its reads, through the postal
+    readers, so a corrupt postal field raises exactly where a
+    reading touches it.
+    """
+    if not isinstance(place, Place):
+        raise ConfigError(f"place must be a Place, got {_safe_repr(place)}")
+    if place.formatted_address is not None and not isinstance(
+        place.formatted_address, str
+    ):
+        raise ConfigError(
+            "place formatted_address must be a string, "
+            f"got {_safe_repr(place.formatted_address)}"
+        )
+    return _checked_components(place.address_components)
 
 
 # Scan cores over an already checked component list. Every public
@@ -403,7 +545,7 @@ def country_code(place: Place) -> Optional[str]:
     back to the region code of the postal address, and it
     returns None when neither carrier yields a value.
     """
-    return _country_code(place, _checked_components(place.address_components))
+    return _country_code(place, _checked_place(place))
 
 
 def administrative_area(place: Place) -> Optional[str]:
@@ -414,8 +556,8 @@ def administrative_area(place: Place) -> Optional[str]:
     across request languages while the component text stayed
     stable.
     """
-    return component_long_text(
-        place.address_components, types.TYPE_ADMINISTRATIVE_AREA_LEVEL_1
+    return _scan_long_text(
+        _checked_place(place), types.TYPE_ADMINISTRATIVE_AREA_LEVEL_1
     )
 
 
@@ -434,9 +576,7 @@ def postal_code_from_postal_address(
     A None postal address and a missing or empty field both
     read as None under the field reader rule.
     """
-    if postal_address is None:
-        return None
-    return postal_address.postal_code or None
+    return _postal_field(postal_address, "postal_code")
 
 
 def _postal_code(
@@ -481,7 +621,7 @@ def postal_code(place: Place) -> PostalCodeResult:
     status reports absence, which the recorded Dubai set proves
     can be a property of a country rather than a gap.
     """
-    return _postal_code(place, _checked_components(place.address_components))
+    return _postal_code(place, _checked_place(place))
 
 
 def _no_city(country: Optional[str]) -> CityResolution:
@@ -578,9 +718,7 @@ def city_resolutions(place: Place) -> tuple[CityResolution, ...]:
     mailing town differ, where it holds both values in that
     order and each carries the other in its competing fields.
     """
-    return _city_resolutions(
-        place, _checked_components(place.address_components)
-    )
+    return _city_resolutions(place, _checked_place(place))
 
 
 def resolve_city(place: Place) -> CityResolution:
@@ -629,9 +767,7 @@ def resolve_district(place: Place) -> DistrictResolution:
     sublocality is never a district source under any
     circumstance.
     """
-    return _resolve_district(
-        place, _checked_components(place.address_components)
-    )
+    return _resolve_district(place, _checked_place(place))
 
 
 def has_street_number(components: Sequence[AddressComponent]) -> bool:
@@ -712,7 +848,7 @@ def is_premise_level(place: Place) -> bool:
     which is the Japanese block addressing shape the recorded
     corpus holds.
     """
-    return _is_premise_level(_checked_components(place.address_components))
+    return _is_premise_level(_checked_place(place))
 
 
 def address_flags(place: Place) -> AddressFlags:
@@ -724,7 +860,7 @@ def address_flags(place: Place) -> AddressFlags:
     when a country read yields a value, and the city carrier
     flag is true exactly when city resolution yields a value.
     """
-    checked = _checked_components(place.address_components)
+    checked = _checked_place(place)
     return AddressFlags(
         has_street_number=_scan_component(checked, types.TYPE_STREET_NUMBER)
         is not None,
@@ -754,7 +890,16 @@ def split_compound_code(compound_code: Optional[str]) -> Optional[PlusCodeParts]
     and that None means no compound form was present rather
     than no plus code at all. The locality text is reference
     text as sent and no helper feeds it into city resolution.
+    An input that is not a string at all is a caller error and
+    raises ConfigError.
     """
+    if compound_code is None:
+        return None
+    if not isinstance(compound_code, str):
+        raise ConfigError(
+            "compound_code must be a string, "
+            f"got {_safe_repr(compound_code)}"
+        )
     if not compound_code:
         return None
     code_part, separator, rest = compound_code.partition(" ")
@@ -768,6 +913,10 @@ def split_plus_code(plus_code: Optional[PlusCode]) -> Optional[PlusCodeParts]:
     """Split the compound form of a plus code, when it carries one."""
     if plus_code is None:
         return None
+    if not isinstance(plus_code, PlusCode):
+        raise ConfigError(
+            f"plus_code must be a PlusCode, got {_safe_repr(plus_code)}"
+        )
     return split_compound_code(plus_code.compound_code)
 
 
@@ -777,9 +926,7 @@ def postal_locality(postal_address: Optional[PostalAddress]) -> Optional[str]:
     A None postal address and a missing or empty field both
     read as None, and any other value returns as sent.
     """
-    if postal_address is None:
-        return None
-    return postal_address.locality or None
+    return _postal_field(postal_address, "locality")
 
 
 def postal_sublocality(postal_address: Optional[PostalAddress]) -> Optional[str]:
@@ -789,18 +936,14 @@ def postal_sublocality(postal_address: Optional[PostalAddress]) -> Optional[str]
     sublocality level 1 component, because the recorded Dubai
     set shows it copying the neighborhood value instead.
     """
-    if postal_address is None:
-        return None
-    return postal_address.sublocality or None
+    return _postal_field(postal_address, "sublocality")
 
 
 def postal_administrative_area(
     postal_address: Optional[PostalAddress],
 ) -> Optional[str]:
     """Return the administrative area field of a postal address."""
-    if postal_address is None:
-        return None
-    return postal_address.administrative_area or None
+    return _postal_field(postal_address, "administrative_area")
 
 
 def postal_region_code(postal_address: Optional[PostalAddress]) -> Optional[str]:
@@ -810,9 +953,7 @@ def postal_region_code(postal_address: Optional[PostalAddress]) -> Optional[str]
     None postal address and a missing or empty region code both
     read as None, and any other value returns as sent.
     """
-    if postal_address is None:
-        return None
-    return postal_address.region_code or None
+    return _postal_field(postal_address, "region_code")
 
 
 __all__ = [
