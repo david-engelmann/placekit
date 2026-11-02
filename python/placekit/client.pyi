@@ -1,5 +1,6 @@
-from types import TracebackType
-from typing import Any, Iterable, Optional
+from typing import Any, Iterable, NoReturn, Optional
+
+__all__ = ["AsyncClient", "Client"]
 
 from .fields import FieldsLike
 from .models import (
@@ -23,12 +24,15 @@ class Client:
         timeout: Optional[float] = ...,
     ) -> None: ...
     def close(self) -> None: ...
+    def __reduce__(self) -> NoReturn: ...
+    def __copy__(self) -> NoReturn: ...
+    def __deepcopy__(self, memo: dict[Any, Any]) -> NoReturn: ...
     def __enter__(self) -> "Client": ...
     def __exit__(
         self,
-        exc_type: Optional[type[BaseException]],
-        exc_value: Optional[BaseException],
-        traceback: Optional[TracebackType],
+        exc_type: object,
+        exc_value: object,
+        traceback: object,
     ) -> None: ...
     def text_search(
         self,
@@ -115,12 +119,15 @@ class AsyncClient:
         timeout: Optional[float] = ...,
     ) -> None: ...
     def close(self) -> None: ...
+    def __reduce__(self) -> NoReturn: ...
+    def __copy__(self) -> NoReturn: ...
+    def __deepcopy__(self, memo: dict[Any, Any]) -> NoReturn: ...
     async def __aenter__(self) -> "AsyncClient": ...
     async def __aexit__(
         self,
-        exc_type: Optional[type[BaseException]],
-        exc_value: Optional[BaseException],
-        traceback: Optional[TracebackType],
+        exc_type: object,
+        exc_value: object,
+        traceback: object,
     ) -> None: ...
     async def text_search(
         self,

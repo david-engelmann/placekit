@@ -1,5 +1,19 @@
 from typing import Any, NoReturn, Optional
 
+__all__ = [
+    "ApiError",
+    "AuthenticationError",
+    "ConfigError",
+    "DecodeError",
+    "InvalidRequestError",
+    "NetworkError",
+    "NotFoundError",
+    "PlacesError",
+    "QuotaError",
+    "RateLimitError",
+    "raise_translated",
+]
+
 class PlacesError(Exception):
     # F-S8, accepted as a known stubtest-silent inaccuracy: kind,
     # status_code and google_status are set at raise time on the
@@ -32,6 +46,8 @@ class PlacesError(Exception):
         retry_after: Optional[float] = ...,
         context: Optional[str] = ...,
     ) -> None: ...
+    def __str__(self) -> str: ...
+    def __repr__(self) -> str: ...
 
 class AuthenticationError(PlacesError): ...
 class RateLimitError(PlacesError): ...

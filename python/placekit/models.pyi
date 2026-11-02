@@ -2,6 +2,52 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, ClassVar, Optional
 
+__all__ = [
+    "AccessibilityOptions",
+    "AddressComponent",
+    "AddressDescriptor",
+    "Area",
+    "Attribution",
+    "AuthorAttribution",
+    "AutocompleteResult",
+    "ConnectorAggregation",
+    "ConsumerAlert",
+    "Date",
+    "EvChargeOptions",
+    "FormattedText",
+    "GenerativeSummary",
+    "GoogleMapsLinks",
+    "Landmark",
+    "LatLng",
+    "Leg",
+    "LocalizedText",
+    "Money",
+    "NearbySearchResult",
+    "OpeningHours",
+    "OpeningPoint",
+    "ParkingOptions",
+    "PaymentOptions",
+    "Period",
+    "Photo",
+    "PhotoMedia",
+    "PhotoUriResult",
+    "Place",
+    "PlacePrediction",
+    "PlusCode",
+    "PostalAddress",
+    "PriceRange",
+    "QueryPrediction",
+    "Review",
+    "ReviewSummary",
+    "RoutingSummary",
+    "SpecialDay",
+    "StringMatch",
+    "Suggestion",
+    "TextSearchResult",
+    "TimeZone",
+    "Viewport",
+]
+
 @dataclass(frozen=True, slots=True)
 class LocalizedText:
     __match_args__: ClassVar[tuple[str, ...]] = ('text', 'language_code', 'raw')
