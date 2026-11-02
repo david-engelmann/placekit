@@ -46,6 +46,8 @@ from __future__ import annotations
 import copy
 import math
 from dataclasses import dataclass, field
+from decimal import Decimal
+from fractions import Fraction
 from pathlib import Path
 from typing import Any, Optional
 
@@ -69,7 +71,14 @@ def _as_float(value: Any, model: str, key: str) -> float:
         raise DecodeError(f"{model} payload key {key!r} is not a number: {value!r}")
     try:
         return float(value)
-    except (TypeError, ValueError) as exc:
+    except Exception as exc:
+        # The catch is the whole Exception family, matching the
+        # integer decoder beside it. A huge integer in a float
+        # position raises OverflowError on conversion, which used
+        # to escape the direct layer bare (R20-F13), and a payload
+        # object whose own float conversion raises must surface
+        # the same way, as a DecodeError, never the bare builtin
+        # it raised.
         raise DecodeError(
             f"{model} payload key {key!r} is not a number: {value!r}"
         ) from exc
@@ -78,18 +87,36 @@ def _as_float(value: Any, model: str, key: str) -> float:
 def _as_int(value: Any, model: str, key: str) -> int:
     if isinstance(value, bool):
         raise DecodeError(f"{model} payload key {key!r} is not an integer: {value!r}")
-    if isinstance(value, float) and not value.is_integer():
+    try:
+        fractional = (
+            (isinstance(value, float) and not value.is_integer())
+            or (
+                isinstance(value, Decimal)
+                and value != value.to_integral_value()
+            )
+            or (isinstance(value, Fraction) and value.denominator != 1)
+        )
+    except Exception as exc:
+        raise DecodeError(
+            f"{model} payload key {key!r} is not an integer: {value!r}"
+        ) from exc
+    if fractional:
         # A fractional value in an integer position is refused, not
         # truncated (R20-F03). Silently dropping the fraction made
         # the typed view contradict raw with no signal; the Rust
         # core rejects the same shape at every position it models,
-        # and an exactly integral float still decodes normally.
+        # and an exactly integral value still decodes normally.
+        # The check covers every standard numeric type that can
+        # carry a fraction, float and Decimal and Fraction alike,
+        # because a recorded payload replayed through a parser
+        # that yields Decimal values reaches the same defect with
+        # a different type.
         raise DecodeError(
             f"{model} payload key {key!r} is not an integer: {value!r}"
         )
     try:
         result = int(value)
-    except (TypeError, ValueError, OverflowError) as exc:
+    except Exception as exc:
         raise DecodeError(
             f"{model} payload key {key!r} is not an integer: {value!r}"
         ) from exc
@@ -161,7 +188,17 @@ def _str_list(value: Any, model: str, key: str) -> list[str]:
         raise DecodeError(
             f"{model} payload key {key!r} is not a list: {value!r}"
         )
-    items = list(value)
+    try:
+        items = list(value)
+    except Exception as exc:
+        # A list subclass whose own iteration raises must surface
+        # as a DecodeError, not the bare builtin it raised; the
+        # helper trusts the container protocol, so the read is
+        # guarded the way the payload preparation is.
+        raise DecodeError(
+            f"{model} payload key {key!r} could not be read "
+            f"as a list: {exc!r}"
+        ) from exc
     for item in items:
         if item is not None and not isinstance(item, str):
             raise DecodeError(
@@ -177,7 +214,13 @@ def _model_list(value: Any, model: str, key: str) -> list:
     DecodeError naming the slot instead of a bare builtin from the
     iteration that follows (R20-F05)."""
     if isinstance(value, (list, tuple)):
-        return list(value)
+        try:
+            return list(value)
+        except Exception as exc:
+            raise DecodeError(
+                f"{model} payload key {key!r} could not be read "
+                f"as a list: {exc!r}"
+            ) from exc
     raise DecodeError(
         f"{model} payload key {key!r} is not a list: {value!r}"
     )
@@ -208,24 +251,38 @@ def _prepare_payload(data: Any, model: str) -> dict[str, Any]:
             f"{model} payload must be an object, got "
             f"{type(data).__name__}: {data!r}"
         )
-    stack = [(data, 1)]
-    while stack:
-        node, depth = stack.pop()
-        if isinstance(node, dict):
-            if depth > _MAX_PAYLOAD_DEPTH:
-                raise DecodeError(
-                    f"{model} payload is nested deeper than "
-                    f"{_MAX_PAYLOAD_DEPTH} levels"
-                )
-            stack.extend((child, depth + 1) for child in node.values())
-        elif isinstance(node, (list, tuple)):
-            if depth > _MAX_PAYLOAD_DEPTH:
-                raise DecodeError(
-                    f"{model} payload is nested deeper than "
-                    f"{_MAX_PAYLOAD_DEPTH} levels"
-                )
-            stack.extend((child, depth + 1) for child in node)
-    return copy.deepcopy(data)
+    try:
+        stack = [(data, 1)]
+        while stack:
+            node, depth = stack.pop()
+            if isinstance(node, dict):
+                if depth > _MAX_PAYLOAD_DEPTH:
+                    raise DecodeError(
+                        f"{model} payload is nested deeper than "
+                        f"{_MAX_PAYLOAD_DEPTH} levels"
+                    )
+                stack.extend((child, depth + 1) for child in node.values())
+            elif isinstance(node, (list, tuple)):
+                if depth > _MAX_PAYLOAD_DEPTH:
+                    raise DecodeError(
+                        f"{model} payload is nested deeper than "
+                        f"{_MAX_PAYLOAD_DEPTH} levels"
+                    )
+                stack.extend((child, depth + 1) for child in node)
+        return copy.deepcopy(data)
+    except DecodeError:
+        raise
+    except Exception as exc:
+        # The walk and the copy both trust the payload's own
+        # container protocols, so a mapping whose values method
+        # raises, or an object whose copy machinery raises, would
+        # otherwise defeat the guard that exists to convert
+        # malformed payloads into DecodeError. BaseException
+        # subclasses are process control flow and pass through
+        # untouched, here as everywhere in the library.
+        raise DecodeError(
+            f"{model} payload could not be read: {exc!r}"
+        ) from exc
 
 
 def _raw_subtree(raw: Any, key: str, fallback: Any) -> Any:

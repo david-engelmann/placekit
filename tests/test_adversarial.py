@@ -20,6 +20,8 @@ import json
 import subprocess
 import sys
 import textwrap
+from decimal import Decimal
+from fractions import Fraction
 from pathlib import Path
 
 import pytest
@@ -29,6 +31,7 @@ from placekit.exceptions import ConfigError, DecodeError
 from placekit.fields import MAX_MATERIALIZED_ITEMS, FieldMask
 from placekit.models import (
     AutocompleteResult,
+    LatLng,
     LocalizedText,
     Money,
     NearbySearchResult,
@@ -517,6 +520,88 @@ def test_direct_oversized_integer_in_a_typed_slot_refuses():
     place = Place.from_api({"id": "x", "someFutureField": huge})
     assert place.raw["someFutureField"] == huge
     repr(place)
+
+
+def test_direct_huge_integer_in_a_float_position_refuses():
+    # F13, from_api half: a huge integer in a float position raised
+    # a bare OverflowError out of the float conversion on the
+    # direct layer, because the float decoder caught a narrower
+    # exception family than the integer decoder beside it. Both
+    # from_api shapes from the spec review refuse as DecodeError.
+    huge = 10**400
+    with pytest.raises(DecodeError):
+        Place.from_api({"id": "x", "rating": huge})
+    with pytest.raises(DecodeError):
+        LatLng.from_api({"latitude": huge, "longitude": 0.0})
+
+
+def test_direct_fraction_positions_refuse_decimal_and_fraction():
+    # F03 completeness: the fraction refusal tested float
+    # membership only, so a Decimal or a Fraction carrying a
+    # fraction was silently truncated by the same conversion the
+    # repair closed for float. A recorded payload replayed through
+    # a parser that yields Decimal values (the standard library
+    # parse_float hook) reaches this path. Integral values of
+    # both types decode exactly.
+    with pytest.raises(DecodeError):
+        Place.from_api({"id": "x", "utcOffsetMinutes": Decimal("60.7")})
+    place = Place.from_api({"id": "x", "utcOffsetMinutes": Decimal("345.0")})
+    assert place.utc_offset_minutes == 345
+    with pytest.raises(DecodeError):
+        Money.from_api({"currencyCode": "USD", "units": Fraction(9, 2)})
+    money = Money.from_api({"currencyCode": "USD", "units": Fraction(8, 2)})
+    assert money.units == 4
+
+
+class _RaisingValuesDict(dict):
+    def values(self):
+        raise RuntimeError("evil values")
+
+
+class _RaisingIterList(list):
+    def __iter__(self):
+        raise RuntimeError("evil iteration")
+
+
+class _RaisingInt:
+    def __int__(self):
+        raise RuntimeError("evil int")
+
+
+class _RaisingIsIntegerFloat(float):
+    def is_integer(self):
+        raise RuntimeError("evil is_integer")
+
+
+class _RaisingFloat:
+    def __float__(self):
+        raise RuntimeError("evil float")
+
+
+def test_direct_hostile_payload_objects_surface_as_decode_error():
+    # The payload guard states the model layer promise: a
+    # malformed payload raises a DecodeError naming the problem
+    # and never a bare builtin. Payload objects that misbehave
+    # through the standard protocols defeated the helpers that
+    # trusted those protocols unguarded: a values method that
+    # raises inside payload preparation, iteration that raises
+    # inside both list helpers, and int, is_integer and float
+    # conversions that raise inside the scalar decoders. Every
+    # shape surfaces as DecodeError now.
+    with pytest.raises(DecodeError):
+        Place.from_api(_RaisingValuesDict({"id": "x"}))
+    with pytest.raises(DecodeError):
+        Place.from_api({"id": "x", "types": _RaisingIterList(["cafe"])})
+    with pytest.raises(DecodeError):
+        Place.from_api({"id": "x", "photos": _RaisingIterList([])})
+    with pytest.raises(DecodeError):
+        Place.from_api({"id": "x", "utcOffsetMinutes": _RaisingInt()})
+    with pytest.raises(DecodeError):
+        Place.from_api(
+            {"id": "x", "utcOffsetMinutes": _RaisingIsIntegerFloat(1.5)}
+        )
+    with pytest.raises(DecodeError):
+        Place.from_api({"id": "x", "rating": _RaisingFloat()})
 
 
 # The re-decode stability property (spec review): for every shipped
