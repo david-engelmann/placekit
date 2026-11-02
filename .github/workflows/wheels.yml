@@ -69,6 +69,10 @@ jobs:
         with:
           target: ${{ matrix.platform.target }}
           args: --release --locked --out dist --find-interpreter
+          # Pinned to the exact maturin version the dev environment
+          # carries, so the release build never resolves a floating
+          # build tool on tag day.
+          maturin-version: "1.15.0"
           sccache: "true"
           manylinux: "2_28"
       - name: Upload wheels
@@ -101,6 +105,10 @@ jobs:
         with:
           target: ${{ matrix.platform.target }}
           args: --release --locked --out dist --find-interpreter
+          # Pinned to the exact maturin version the dev environment
+          # carries, so the release build never resolves a floating
+          # build tool on tag day.
+          maturin-version: "1.15.0"
           sccache: "true"
       - name: Upload wheels
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -139,6 +147,10 @@ jobs:
         with:
           target: ${{ matrix.platform.target }}
           args: --release --locked --out dist --find-interpreter
+          # Pinned to the exact maturin version the dev environment
+          # carries, so the release build never resolves a floating
+          # build tool on tag day.
+          maturin-version: "1.15.0"
           sccache: "true"
       - name: Upload wheels
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -163,6 +175,10 @@ jobs:
         with:
           command: sdist
           args: --out dist
+          # Pinned to the exact maturin version the dev environment
+          # carries, so the release build never resolves a floating
+          # build tool on tag day.
+          maturin-version: "1.15.0"
       - name: Upload sdist
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
@@ -251,7 +267,7 @@ jobs:
           python-version: ${{ matrix.python-version }}
       - name: Install Rust for the sdist build
         if: ${{ matrix.sdist }}
-        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master branch tip (the action publishes branch refs, not versioned releases)
         with:
           toolchain: "1.88.0"
       - name: Download the artifact for this platform
