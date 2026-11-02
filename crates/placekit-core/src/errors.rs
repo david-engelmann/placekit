@@ -421,7 +421,18 @@ impl Error {
                     status
                 };
                 (
-                    parts.status.unwrap_or_default(),
+                    // The status truncates at the same bound as the
+                    // message (Round 28, Finding 1). The cap lands
+                    // before the classification match below and
+                    // cannot move a classification: every canonical
+                    // status is far shorter than the cap, and a
+                    // status longer than the cap never matched one,
+                    // padded or not, so it falls to the HTTP class
+                    // exactly as it did whole.
+                    parts
+                        .status
+                        .map(|s| s.chars().take(ENVELOPE_TEXT_CAP_CHARS).collect())
+                        .unwrap_or_default(),
                     parts
                         .message
                         .map(|m| m.chars().take(ENVELOPE_TEXT_CAP_CHARS).collect())
@@ -727,12 +738,15 @@ struct EnvelopeParts {
 }
 
 /// The character bound on server supplied text carried into an
-/// exception. The envelope message is truncated to it when the
-/// error is built, and every string inside the parsed details is
-/// truncated to it in the parse funnel (Round 25, Minor 6). The
-/// two caps are defined to be one bound, so they read from this
-/// one constant rather than from two literals that only imply
-/// the coupling (Round 25 landing repair).
+/// exception. The envelope status and message are truncated to
+/// it when the error is built, and every string inside the
+/// parsed details is truncated to it in the parse funnel (Round
+/// 25, Minor 6; the status joined them in Round 28, Finding 1,
+/// after the audit found it passing through whole while every
+/// neighbouring field was capped). The caps are defined to be
+/// one bound, so they read from this one constant rather than
+/// from literals that only imply the coupling (Round 25 landing
+/// repair).
 const ENVELOPE_TEXT_CAP_CHARS: usize = 500;
 
 /// Read the envelope fields of a response body, or `None` when the
@@ -1247,6 +1261,53 @@ mod tests {
         let text = err.to_string();
         assert!(text.contains(&"x".repeat(500)), "{text}");
         assert!(!text.contains(&"x".repeat(501)), "{text}");
+    }
+
+    #[test]
+    fn envelope_status_is_capped_on_the_whole_parse() {
+        // Round 28, Finding 1: the status was the one envelope
+        // string exempt from the cap the message and the detail
+        // strings already honour. At exactly the cap it is kept
+        // whole; one past it, it truncates to the cap.
+        let at_cap = "s".repeat(500);
+        let body = format!(r#"{{"error": {{"code": 400, "message": "m", "status": "{at_cap}"}}}}"#);
+        let err = Error::from_response(400, &body);
+        assert_eq!(err.google_status(), Some(at_cap.as_str()));
+
+        let one_past = "s".repeat(501);
+        let body =
+            format!(r#"{{"error": {{"code": 400, "message": "m", "status": "{one_past}"}}}}"#);
+        let err = Error::from_response(400, &body);
+        assert_eq!(err.google_status(), Some("s".repeat(500).as_str()));
+    }
+
+    #[test]
+    fn envelope_status_cap_cannot_move_classification() {
+        // A known status padded far past the cap never matched
+        // when it passed through whole, and truncation must not
+        // start matching it: the HTTP class decides, exactly as
+        // before the cap.
+        let padded = format!("RESOURCE_EXHAUSTED{}", "s".repeat(5_000));
+        let body = format!(r#"{{"error": {{"code": 400, "message": "m", "status": "{padded}"}}}}"#);
+        let err = Error::from_response(400, &body);
+        assert_eq!(err.google_status().map(str::len), Some(500));
+        assert_eq!(err.kind(), "invalid_request");
+    }
+
+    #[test]
+    fn envelope_status_is_capped_on_the_head_scan() {
+        // A value nested past the parser depth limit defeats the
+        // whole document parse, so the status is recovered by the
+        // tolerant head scan instead; the cap holds on that path
+        // too, fed by the same funnel.
+        let status = "s".repeat(5_000);
+        let nested = format!("{}{}", "[".repeat(200), "]".repeat(200));
+        let body = format!(
+            r#"{{"error": {{"code": 400, "message": "m", "status": "{status}", "details": [{nested}]}}}}"#
+        );
+        let err = Error::from_response(400, &body);
+        assert_eq!(err.google_status().map(str::len), Some(500));
+        assert_eq!(err.kind(), "invalid_request");
     }
 
     #[test]
