@@ -4,8 +4,8 @@ Responses arrive as dataclasses with attribute access, never raw dicts.
 Fields this client version does not model yet are preserved verbatim
 on ``raw``. Every model object that decodes from a JSON object
 preserves that object on its ``raw``, so nothing the API returns is
-silently lost at any level of the tree. ``raw`` is a deep copy
-sharing no mutable state with any other copy. ``PhotoMedia`` is the
+silently lost at any level of the tree. ``raw`` shares no mutable
+state with any other copy. ``PhotoMedia`` is the
 one class with no ``raw``, because its payload is bytes rather than
 a JSON object.
 
@@ -37,19 +37,24 @@ remain mutable in place, so a holder can still append to
 ``place.types`` or edit ``place.raw``; only rebinding is refused.
 They stay unhashable where they carry list fields; ``LatLng``, the
 one pure pair, is hashable. Every ``raw`` is a deep copy of the
-payload it came from, so the caller's dict, a result's raw and a
-child model's raw share no mutable state.
+payload it came from, or at the top of a client call the parsed
+body itself, which the client built for that call and holds no
+other reference to. Either way the caller's dict, a result's raw
+and a child's raw share no mutable state.
 """
 
 from __future__ import annotations
 
+import contextvars
 import copy
 import math
+import os
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from decimal import Decimal
 from fractions import Fraction
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Iterator, Optional
 
 from .exceptions import ConfigError, DecodeError
 
@@ -236,15 +241,17 @@ def _model_list(value: Any, model: str, key: str) -> list:
 _MAX_PAYLOAD_DEPTH = 128
 
 
-def _prepare_payload(data: Any, model: str) -> dict[str, Any]:
-    """Validate and copy one ``from_api`` payload.
+def _validate_payload(data: Any, model: str) -> None:
+    """Validate one ``from_api`` payload without copying it.
 
-    Every decoder in this module promises one strictness policy
-    (RC-18): a malformed payload raises a DecodeError naming the
-    problem, never a bare builtin. That promise starts here. The
-    payload must be a JSON object, its container nesting must stay
-    within the stated depth guard, and only then is it deep copied
-    for decoding (R20-F05 and F06).
+    The payload must be a JSON object and its container nesting
+    must stay within the stated depth guard, so deep nesting can
+    no longer kill decoding with a bare RecursionError inside the
+    payload copy (R20-F06). The walk trusts the payload's own
+    container protocols, so a mapping whose values method raises
+    surfaces as a DecodeError rather than the bare builtin it
+    raised. BaseException subclasses are process control flow and
+    pass through untouched, here as everywhere in the library.
     """
     if not isinstance(data, dict):
         raise DecodeError(
@@ -269,20 +276,131 @@ def _prepare_payload(data: Any, model: str) -> dict[str, Any]:
                         f"{_MAX_PAYLOAD_DEPTH} levels"
                     )
                 stack.extend((child, depth + 1) for child in node)
+    except DecodeError:
+        raise
+    except Exception as exc:
+        raise DecodeError(
+            f"{model} payload could not be read: {exc!r}"
+        ) from exc
+
+
+def _prepare_payload(data: Any, model: str) -> dict[str, Any]:
+    """Validate and copy one ``from_api`` payload.
+
+    Every decoder in this module promises one strictness policy
+    (RC-18): a malformed payload raises a DecodeError naming the
+    problem, never a bare builtin. That promise starts here. The
+    payload is validated under ``_validate_payload`` and only then
+    is it deep copied for decoding (R20-F05 and F06).
+    """
+    _validate_payload(data, model)
+    try:
         return copy.deepcopy(data)
     except DecodeError:
         raise
     except Exception as exc:
-        # The walk and the copy both trust the payload's own
-        # container protocols, so a mapping whose values method
-        # raises, or an object whose copy machinery raises, would
-        # otherwise defeat the guard that exists to convert
-        # malformed payloads into DecodeError. BaseException
-        # subclasses are process control flow and pass through
-        # untouched, here as everywhere in the library.
+        # An object whose copy machinery raises surfaces the same
+        # way as one whose containers cannot be read, as a
+        # DecodeError rather than the bare builtin it raised.
         raise DecodeError(
             f"{model} payload could not be read: {exc!r}"
         ) from exc
+
+
+class _DecodeOwnership:
+    """The ownership state of one client conversion.
+
+    The state pairs the parsed body tree the client built for one
+    conversion with the process that opened the window. The
+    pairing with the process id mirrors the bindings runtime slot
+    across fork (Round 19). A child process forked mid conversion
+    inherits the memory but not the conversion, so it must not
+    inherit the window either.
+    """
+
+    __slots__ = ("pid", "raw_root")
+
+    def __init__(self, raw_root: dict[str, Any]) -> None:
+        self.pid = os.getpid()
+        self.raw_root = raw_root
+
+
+_decode_ownership: contextvars.ContextVar[Optional[_DecodeOwnership]] = (
+    contextvars.ContextVar("placekit_decode_ownership", default=None)
+)
+
+
+@contextmanager
+def _owned_decode(raw_root: dict[str, Any]) -> Iterator[None]:
+    """Mark the conversion the client runs over one parsed body.
+
+    Inside the window the model layer knows both decode sources
+    are owned by the call itself. The client built the typed dict
+    fresh in the bindings for this call and parsed the body text
+    for this conversion alone, and it drops both when the call
+    returns. That ownership is what makes the copies the direct
+    layer needs against caller supplied input redundant here,
+    under the decoder discipline this module holds. Decoders read
+    their payload, they never mutate it, and they never retain a
+    part of it outside ``raw``. Only the client opens the window,
+    and only around the conversion of one response.
+    """
+    token = _decode_ownership.set(_DecodeOwnership(raw_root))
+    try:
+        yield
+    finally:
+        _decode_ownership.reset(token)
+
+
+def _ownership() -> Optional[_DecodeOwnership]:
+    ownership = _decode_ownership.get()
+    if ownership is not None and ownership.pid == os.getpid():
+        return ownership
+    return None
+
+
+def _prepare(
+    data: Any, raw: Optional[dict[str, Any]], model: str
+) -> tuple[dict[str, Any], Any]:
+    """Settle the two sources of one ``from_api`` decode.
+
+    Every decoder opens with this call. It validates the payload
+    under the same rules as ``_prepare_payload`` and returns the
+    payload to read attributes from beside the payload to keep as
+    the node's ``raw``, with the copies between them paid only
+    where a copy is load bearing (Round 21).
+
+    Off the client path the payload is deep copied once, because
+    a direct caller keeps their dict and the result must share no
+    mutable state with it. When the caller hands the same object
+    as both sources, which is what every child decode on that
+    path receives, the one copy serves both and no second copy is
+    made. A raw source handed over separately is deep copied,
+    because a node's raw must share no mutable state with its
+    parent's raw or with the caller's.
+
+    Inside a client conversion both sources are already owned by
+    the call, so the payload is read in place and only raw is
+    copied, once per node below the first. The first node's raw
+    is the parsed body itself, adopted rather than copied,
+    because the client built that tree for this conversion and
+    nothing outside the result ever holds it.
+    """
+    ownership = _ownership()
+    if ownership is not None:
+        _validate_payload(data, model)
+        if raw is ownership.raw_root:
+            return data, raw
+        if raw is None or raw is data:
+            # A node whose raw source is its own payload, because
+            # the raw tree held no subtree for it, still keeps a
+            # raw of its own, copied from the payload it reads.
+            return data, copy.deepcopy(data)
+        return data, copy.deepcopy(raw)
+    prepared = _prepare_payload(data, model)
+    if raw is None or raw is data:
+        return prepared, prepared
+    return prepared, copy.deepcopy(raw)
 
 
 def _raw_subtree(raw: Any, key: str, fallback: Any) -> Any:
@@ -345,8 +463,7 @@ class LocalizedText:
     def from_api(
         cls, data: dict[str, Any], raw: Optional[dict[str, Any]] = None
     ) -> "LocalizedText":
-        data = _prepare_payload(data, "LocalizedText")
-        raw = data if raw is None else copy.deepcopy(raw)
+        data, raw = _prepare(data, raw, "LocalizedText")
         return cls(
             text=_as_str(data.get("text", ""), "LocalizedText", "text"),
             language_code=_as_str(
@@ -388,8 +505,7 @@ class LatLng:
     def from_api(
         cls, data: dict[str, Any], raw: Optional[dict[str, Any]] = None
     ) -> "LatLng":
-        data = _prepare_payload(data, "LatLng")
-        raw = data if raw is None else copy.deepcopy(raw)
+        data, raw = _prepare(data, raw, "LatLng")
         return cls(
             latitude=_as_float(_require(data, "latitude", "LatLng"), "LatLng", "latitude"),
             longitude=_as_float(
@@ -415,8 +531,7 @@ class AuthorAttribution:
     def from_api(
         cls, data: dict[str, Any], raw: Optional[dict[str, Any]] = None
     ) -> "AuthorAttribution":
-        data = _prepare_payload(data, "AuthorAttribution")
-        raw = data if raw is None else copy.deepcopy(raw)
+        data, raw = _prepare(data, raw, "AuthorAttribution")
         return cls(
             display_name=_as_str(
                 data.get("displayName", ""), "AuthorAttribution", "displayName"
@@ -441,8 +556,7 @@ class Attribution:
     def from_api(
         cls, data: dict[str, Any], raw: Optional[dict[str, Any]] = None
     ) -> "Attribution":
-        data = _prepare_payload(data, "Attribution")
-        raw = data if raw is None else copy.deepcopy(raw)
+        data, raw = _prepare(data, raw, "Attribution")
         return cls(
             provider=_as_str(data.get("provider", ""), "Attribution", "provider"),
             provider_uri=_as_str(
@@ -479,8 +593,7 @@ class Photo:
     def from_api(
         cls, data: dict[str, Any], raw: Optional[dict[str, Any]] = None
     ) -> "Photo":
-        data = _prepare_payload(data, "Photo")
-        raw = data if raw is None else copy.deepcopy(raw)
+        data, raw = _prepare(data, raw, "Photo")
         return cls(
             name=_as_str(data.get("name", ""), "Photo", "name"),
             width_px=_as_int(data.get("widthPx", 0), "Photo", "widthPx"),
@@ -520,8 +633,7 @@ class Date:
     def from_api(
         cls, data: dict[str, Any], raw: Optional[dict[str, Any]] = None
     ) -> "Date":
-        data = _prepare_payload(data, "Date")
-        raw = data if raw is None else copy.deepcopy(raw)
+        data, raw = _prepare(data, raw, "Date")
         return cls(
             year=_as_int(data.get("year", 0), "Date", "year"),
             month=_as_int(data.get("month", 0), "Date", "month"),
@@ -550,8 +662,7 @@ class OpeningPoint:
     def from_api(
         cls, data: dict[str, Any], raw: Optional[dict[str, Any]] = None
     ) -> "OpeningPoint":
-        data = _prepare_payload(data, "OpeningPoint")
-        raw = data if raw is None else copy.deepcopy(raw)
+        data, raw = _prepare(data, raw, "OpeningPoint")
         date = data.get("date")
         return cls(
             date=Date.from_api(date, _raw_subtree(raw, "date", date))
@@ -577,8 +688,7 @@ class Period:
     def from_api(
         cls, data: dict[str, Any], raw: Optional[dict[str, Any]] = None
     ) -> "Period":
-        data = _prepare_payload(data, "Period")
-        raw = data if raw is None else copy.deepcopy(raw)
+        data, raw = _prepare(data, raw, "Period")
         open_point = data.get("open")
         close_point = data.get("close")
         return cls(
@@ -608,8 +718,7 @@ class SpecialDay:
     def from_api(
         cls, data: dict[str, Any], raw: Optional[dict[str, Any]] = None
     ) -> "SpecialDay":
-        data = _prepare_payload(data, "SpecialDay")
-        raw = data if raw is None else copy.deepcopy(raw)
+        data, raw = _prepare(data, raw, "SpecialDay")
         date = data.get("date")
         return cls(
             date=Date.from_api(date, _raw_subtree(raw, "date", date))
@@ -649,8 +758,7 @@ class OpeningHours:
     def from_api(
         cls, data: dict[str, Any], raw: Optional[dict[str, Any]] = None
     ) -> "OpeningHours":
-        data = _prepare_payload(data, "OpeningHours")
-        raw = data if raw is None else copy.deepcopy(raw)
+        data, raw = _prepare(data, raw, "OpeningHours")
         return cls(
             open_now=_optional_bool(data.get("openNow"), "OpeningHours", "openNow"),
             periods=[
@@ -710,8 +818,7 @@ class AddressComponent:
     def from_api(
         cls, data: dict[str, Any], raw: Optional[dict[str, Any]] = None
     ) -> "AddressComponent":
-        data = _prepare_payload(data, "AddressComponent")
-        raw = data if raw is None else copy.deepcopy(raw)
+        data, raw = _prepare(data, raw, "AddressComponent")
         return cls(
             long_text=_as_str(
                 data.get("longText", ""), "AddressComponent", "longText"
@@ -739,8 +846,7 @@ class PlusCode:
     def from_api(
         cls, data: dict[str, Any], raw: Optional[dict[str, Any]] = None
     ) -> "PlusCode":
-        data = _prepare_payload(data, "PlusCode")
-        raw = data if raw is None else copy.deepcopy(raw)
+        data, raw = _prepare(data, raw, "PlusCode")
         return cls(
             global_code=_as_str(data.get("globalCode", ""), "PlusCode", "globalCode"),
             compound_code=_as_str(
@@ -762,8 +868,7 @@ class Viewport:
     def from_api(
         cls, data: dict[str, Any], raw: Optional[dict[str, Any]] = None
     ) -> "Viewport":
-        data = _prepare_payload(data, "Viewport")
-        raw = data if raw is None else copy.deepcopy(raw)
+        data, raw = _prepare(data, raw, "Viewport")
         low = _require(data, "low", "Viewport")
         high = _require(data, "high", "Viewport")
         return cls(
@@ -796,8 +901,7 @@ class PostalAddress:
     def from_api(
         cls, data: dict[str, Any], raw: Optional[dict[str, Any]] = None
     ) -> "PostalAddress":
-        data = _prepare_payload(data, "PostalAddress")
-        raw = data if raw is None else copy.deepcopy(raw)
+        data, raw = _prepare(data, raw, "PostalAddress")
         return cls(
             region_code=_as_str(
                 data.get("regionCode"), "PostalAddress", "regionCode"
@@ -851,8 +955,7 @@ class Review:
     def from_api(
         cls, data: dict[str, Any], raw: Optional[dict[str, Any]] = None
     ) -> "Review":
-        data = _prepare_payload(data, "Review")
-        raw = data if raw is None else copy.deepcopy(raw)
+        data, raw = _prepare(data, raw, "Review")
         text = data.get("text")
         original = data.get("originalText")
         rating = data.get("rating")
@@ -915,8 +1018,7 @@ class PaymentOptions:
     def from_api(
         cls, data: dict[str, Any], raw: Optional[dict[str, Any]] = None
     ) -> "PaymentOptions":
-        data = _prepare_payload(data, "PaymentOptions")
-        raw = data if raw is None else copy.deepcopy(raw)
+        data, raw = _prepare(data, raw, "PaymentOptions")
         return cls(
             accepts_credit_cards=_optional_bool(
                 data.get("acceptsCreditCards"), "PaymentOptions", "acceptsCreditCards"
@@ -951,8 +1053,7 @@ class ParkingOptions:
     def from_api(
         cls, data: dict[str, Any], raw: Optional[dict[str, Any]] = None
     ) -> "ParkingOptions":
-        data = _prepare_payload(data, "ParkingOptions")
-        raw = data if raw is None else copy.deepcopy(raw)
+        data, raw = _prepare(data, raw, "ParkingOptions")
         return cls(
             free_parking_lot=_optional_bool(
                 data.get("freeParkingLot"), "ParkingOptions", "freeParkingLot"
@@ -993,8 +1094,7 @@ class AccessibilityOptions:
     def from_api(
         cls, data: dict[str, Any], raw: Optional[dict[str, Any]] = None
     ) -> "AccessibilityOptions":
-        data = _prepare_payload(data, "AccessibilityOptions")
-        raw = data if raw is None else copy.deepcopy(raw)
+        data, raw = _prepare(data, raw, "AccessibilityOptions")
         return cls(
             wheelchair_accessible_parking=_optional_bool(
                 data.get("wheelchairAccessibleParking"),
@@ -1035,8 +1135,7 @@ class TimeZone:
     def from_api(
         cls, data: dict[str, Any], raw: Optional[dict[str, Any]] = None
     ) -> "TimeZone":
-        data = _prepare_payload(data, "TimeZone")
-        raw = data if raw is None else copy.deepcopy(raw)
+        data, raw = _prepare(data, raw, "TimeZone")
         return cls(
             id=_as_str(data.get("id", ""), "TimeZone", "id"), raw=raw
         )
@@ -1057,8 +1156,7 @@ class GenerativeSummary:
     def from_api(
         cls, data: dict[str, Any], raw: Optional[dict[str, Any]] = None
     ) -> "GenerativeSummary":
-        data = _prepare_payload(data, "GenerativeSummary")
-        raw = data if raw is None else copy.deepcopy(raw)
+        data, raw = _prepare(data, raw, "GenerativeSummary")
         overview = data.get("overview")
         return cls(
             overview=LocalizedText.from_api(
@@ -1085,8 +1183,7 @@ class ReviewSummary:
     def from_api(
         cls, data: dict[str, Any], raw: Optional[dict[str, Any]] = None
     ) -> "ReviewSummary":
-        data = _prepare_payload(data, "ReviewSummary")
-        raw = data if raw is None else copy.deepcopy(raw)
+        data, raw = _prepare(data, raw, "ReviewSummary")
         text = data.get("text")
         return cls(
             text=LocalizedText.from_api(text, _raw_subtree(raw, "text", text))
@@ -1113,8 +1210,7 @@ class ConsumerAlert:
     def from_api(
         cls, data: dict[str, Any], raw: Optional[dict[str, Any]] = None
     ) -> "ConsumerAlert":
-        data = _prepare_payload(data, "ConsumerAlert")
-        raw = data if raw is None else copy.deepcopy(raw)
+        data, raw = _prepare(data, raw, "ConsumerAlert")
         return cls(
             overview=_as_str(data.get("overview", ""), "ConsumerAlert", "overview"),
             language_code=_as_str(
@@ -1140,8 +1236,7 @@ class GoogleMapsLinks:
     def from_api(
         cls, data: dict[str, Any], raw: Optional[dict[str, Any]] = None
     ) -> "GoogleMapsLinks":
-        data = _prepare_payload(data, "GoogleMapsLinks")
-        raw = data if raw is None else copy.deepcopy(raw)
+        data, raw = _prepare(data, raw, "GoogleMapsLinks")
         return cls(
             directions_uri=_as_str(
                 data.get("directionsUri"), "GoogleMapsLinks", "directionsUri"
@@ -1182,8 +1277,7 @@ class Money:
     def from_api(
         cls, data: dict[str, Any], raw: Optional[dict[str, Any]] = None
     ) -> "Money":
-        data = _prepare_payload(data, "Money")
-        raw = data if raw is None else copy.deepcopy(raw)
+        data, raw = _prepare(data, raw, "Money")
         return cls(
             currency_code=_as_str(
                 data.get("currencyCode", ""), "Money", "currencyCode"
@@ -1210,8 +1304,7 @@ class PriceRange:
     def from_api(
         cls, data: dict[str, Any], raw: Optional[dict[str, Any]] = None
     ) -> "PriceRange":
-        data = _prepare_payload(data, "PriceRange")
-        raw = data if raw is None else copy.deepcopy(raw)
+        data, raw = _prepare(data, raw, "PriceRange")
         start = data.get("startPrice")
         end = data.get("endPrice")
         return cls(
@@ -1246,8 +1339,7 @@ class ConnectorAggregation:
     def from_api(
         cls, data: dict[str, Any], raw: Optional[dict[str, Any]] = None
     ) -> "ConnectorAggregation":
-        data = _prepare_payload(data, "ConnectorAggregation")
-        raw = data if raw is None else copy.deepcopy(raw)
+        data, raw = _prepare(data, raw, "ConnectorAggregation")
         rate = data.get("maxChargeRateKw")
         return cls(
             type=_as_str(data.get("type", ""), "ConnectorAggregation", "type"),
@@ -1299,8 +1391,7 @@ class EvChargeOptions:
     def from_api(
         cls, data: dict[str, Any], raw: Optional[dict[str, Any]] = None
     ) -> "EvChargeOptions":
-        data = _prepare_payload(data, "EvChargeOptions")
-        raw = data if raw is None else copy.deepcopy(raw)
+        data, raw = _prepare(data, raw, "EvChargeOptions")
         return cls(
             connector_count=_optional_int(
                 data.get("connectorCount"), "EvChargeOptions", "connectorCount"
@@ -1341,8 +1432,7 @@ class Landmark:
     def from_api(
         cls, data: dict[str, Any], raw: Optional[dict[str, Any]] = None
     ) -> "Landmark":
-        data = _prepare_payload(data, "Landmark")
-        raw = data if raw is None else copy.deepcopy(raw)
+        data, raw = _prepare(data, raw, "Landmark")
         display = data.get("displayName")
         straight = data.get("straightLineDistanceMeters")
         travel = data.get("travelDistanceMeters")
@@ -1388,8 +1478,7 @@ class Area:
     def from_api(
         cls, data: dict[str, Any], raw: Optional[dict[str, Any]] = None
     ) -> "Area":
-        data = _prepare_payload(data, "Area")
-        raw = data if raw is None else copy.deepcopy(raw)
+        data, raw = _prepare(data, raw, "Area")
         display = data.get("displayName")
         return cls(
             name=_as_str(data.get("name", ""), "Area", "name"),
@@ -1420,8 +1509,7 @@ class AddressDescriptor:
     def from_api(
         cls, data: dict[str, Any], raw: Optional[dict[str, Any]] = None
     ) -> "AddressDescriptor":
-        data = _prepare_payload(data, "AddressDescriptor")
-        raw = data if raw is None else copy.deepcopy(raw)
+        data, raw = _prepare(data, raw, "AddressDescriptor")
         return cls(
             landmarks=[
                 Landmark.from_api(
@@ -1573,8 +1661,7 @@ class Place:
     def from_api(
         cls, data: dict[str, Any], raw: Optional[dict[str, Any]] = None
     ) -> "Place":
-        data = _prepare_payload(data, "Place")
-        raw = data if raw is None else copy.deepcopy(raw)
+        data, raw = _prepare(data, raw, "Place")
         display = data.get("displayName")
         location = data.get("location")
         hours = data.get("regularOpeningHours")
@@ -1959,8 +2046,7 @@ class Leg:
     def from_api(
         cls, data: dict[str, Any], raw: Optional[dict[str, Any]] = None
     ) -> "Leg":
-        data = _prepare_payload(data, "Leg")
-        raw = data if raw is None else copy.deepcopy(raw)
+        data, raw = _prepare(data, raw, "Leg")
         return cls(
             duration=_as_str(data.get("duration", ""), "Leg", "duration"),
             distance_meters=_optional_int(
@@ -1985,8 +2071,7 @@ class RoutingSummary:
     def from_api(
         cls, data: dict[str, Any], raw: Optional[dict[str, Any]] = None
     ) -> "RoutingSummary":
-        data = _prepare_payload(data, "RoutingSummary")
-        raw = data if raw is None else copy.deepcopy(raw)
+        data, raw = _prepare(data, raw, "RoutingSummary")
         return cls(
             legs=[
                 Leg.from_api(leg, _raw_element(raw, "legs", i, leg))
@@ -2031,8 +2116,7 @@ class TextSearchResult:
     def from_api(
         cls, data: dict[str, Any], raw: Optional[dict[str, Any]] = None
     ) -> "TextSearchResult":
-        data = _prepare_payload(data, "TextSearchResult")
-        raw = data if raw is None else copy.deepcopy(raw)
+        data, raw = _prepare(data, raw, "TextSearchResult")
         return cls(
             places=[
                 Place.from_api(p, _raw_element(raw, "places", i, p))
@@ -2092,8 +2176,7 @@ class NearbySearchResult:
     def from_api(
         cls, data: dict[str, Any], raw: Optional[dict[str, Any]] = None
     ) -> "NearbySearchResult":
-        data = _prepare_payload(data, "NearbySearchResult")
-        raw = data if raw is None else copy.deepcopy(raw)
+        data, raw = _prepare(data, raw, "NearbySearchResult")
         return cls(
             places=[
                 Place.from_api(p, _raw_element(raw, "places", i, p))
@@ -2133,8 +2216,7 @@ class StringMatch:
     def from_api(
         cls, data: dict[str, Any], raw: Optional[dict[str, Any]] = None
     ) -> "StringMatch":
-        data = _prepare_payload(data, "StringMatch")
-        raw = data if raw is None else copy.deepcopy(raw)
+        data, raw = _prepare(data, raw, "StringMatch")
         return cls(
             start_offset=_optional_int(data.get("startOffset"), "StringMatch", "startOffset"),
             end_offset=_optional_int(data.get("endOffset"), "StringMatch", "endOffset"),
@@ -2157,8 +2239,7 @@ class FormattedText:
     def from_api(
         cls, data: dict[str, Any], raw: Optional[dict[str, Any]] = None
     ) -> "FormattedText":
-        data = _prepare_payload(data, "FormattedText")
-        raw = data if raw is None else copy.deepcopy(raw)
+        data, raw = _prepare(data, raw, "FormattedText")
         return cls(
             text=_as_str(data.get("text", ""), "FormattedText", "text"),
             matches=[
@@ -2197,8 +2278,7 @@ class PlacePrediction:
     def from_api(
         cls, data: dict[str, Any], raw: Optional[dict[str, Any]] = None
     ) -> "PlacePrediction":
-        data = _prepare_payload(data, "PlacePrediction")
-        raw = data if raw is None else copy.deepcopy(raw)
+        data, raw = _prepare(data, raw, "PlacePrediction")
         text = data.get("text")
         structured = data.get("structuredFormat") or {}
         if not isinstance(structured, dict):
@@ -2248,8 +2328,7 @@ class QueryPrediction:
     def from_api(
         cls, data: dict[str, Any], raw: Optional[dict[str, Any]] = None
     ) -> "QueryPrediction":
-        data = _prepare_payload(data, "QueryPrediction")
-        raw = data if raw is None else copy.deepcopy(raw)
+        data, raw = _prepare(data, raw, "QueryPrediction")
         text = data.get("text")
         structured = data.get("structuredFormat") or {}
         if not isinstance(structured, dict):
@@ -2296,8 +2375,7 @@ class Suggestion:
     def from_api(
         cls, data: dict[str, Any], raw: Optional[dict[str, Any]] = None
     ) -> "Suggestion":
-        data = _prepare_payload(data, "Suggestion")
-        raw = data if raw is None else copy.deepcopy(raw)
+        data, raw = _prepare(data, raw, "Suggestion")
         prediction = data.get("placePrediction")
         query = data.get("queryPrediction")
         return cls(
@@ -2339,8 +2417,7 @@ class AutocompleteResult:
     def from_api(
         cls, data: dict[str, Any], raw: Optional[dict[str, Any]] = None
     ) -> "AutocompleteResult":
-        data = _prepare_payload(data, "AutocompleteResult")
-        raw = data if raw is None else copy.deepcopy(raw)
+        data, raw = _prepare(data, raw, "AutocompleteResult")
         return cls(
             suggestions=[
                 Suggestion.from_api(s, _raw_element(raw, "suggestions", i, s))
@@ -2398,8 +2475,7 @@ class PhotoUriResult:
     def from_api(
         cls, data: dict[str, Any], raw: Optional[dict[str, Any]] = None
     ) -> "PhotoUriResult":
-        data = _prepare_payload(data, "PhotoUriResult")
-        raw = data if raw is None else copy.deepcopy(raw)
+        data, raw = _prepare(data, raw, "PhotoUriResult")
         return cls(
             photo_uri=_as_str(data.get("photoUri", ""), "PhotoUriResult", "photoUri"),
             name=_as_str(data.get("name", ""), "PhotoUriResult", "name"),

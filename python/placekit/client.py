@@ -34,6 +34,7 @@ from .models import (
     Place,
     PlacePrediction,
     TextSearchResult,
+    _owned_decode,
 )
 
 
@@ -389,7 +390,9 @@ def _photo_result(tagged: tuple[str, Any, Any, int]) -> PhotoMedia | PhotoUriRes
     """
     tag, first, second, _status = tagged
     if tag == "uri":
-        return PhotoUriResult.from_api(first, raw=json.loads(second))
+        raw = json.loads(second)
+        with _owned_decode(raw):
+            return PhotoUriResult.from_api(first, raw=raw)
     if tag == "bytes":
         return PhotoMedia(content=first, content_type=second)
     raise DecodeError(f"photo result carried an unknown tag: {tag!r}")
@@ -755,12 +758,16 @@ class _Base:
         from the typed dict, and the body is parsed once here and
         handed down as the raw source at every model level, which
         is what makes raw the wire payload verbatim through the
-        client.
+        client. The conversion runs inside the model layer's owned
+        decode window, because the client built both sources for
+        this call alone and drops them when the call returns.
         """
         typed, body_text, status = payload
 
         def build(data: Any) -> Any:
-            return convert(data, raw=json.loads(body_text))
+            raw = json.loads(body_text)
+            with _owned_decode(raw):
+                return convert(data, raw=raw)
 
         return _Base._convert(build, typed, context, status=status)
 
