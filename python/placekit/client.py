@@ -37,6 +37,8 @@ from .models import (
     _owned_decode,
 )
 
+__all__ = ["AsyncClient", "Client"]
+
 
 def _drop_none(body: dict[str, Any]) -> dict[str, Any]:
     return {key: value for key, value in body.items() if value is not None}
@@ -501,9 +503,16 @@ class _Base:
     @staticmethod
     def _with_context(exc: ConfigError, context: str) -> ConfigError:
         """Attach the calling method as context to a locally raised
-        ConfigError that does not carry one yet (RC-03)."""
+        ConfigError that does not carry one yet (RC-03).
+
+        The exception is annotated in place and returned, never
+        rebuilt and never re-raised as its own cause (Round 24).
+        Rebuilding dropped any cause the original already carried,
+        and chaining the result to the original rendered one
+        failure as a duplicate pair of the same type carrying the
+        same message."""
         if exc.context is None:
-            return ConfigError(str(exc), context=context)
+            exc.context = context
         return exc
 
     @staticmethod
@@ -658,7 +667,7 @@ class _Base:
             _Base._validate_int_range("max_width_px", max_width_px, 1, 4800)
             _Base._validate_int_range("max_height_px", max_height_px, 1, 4800)
         except ConfigError as exc:
-            raise _Base._with_context(exc, context) from exc
+            raise _Base._with_context(exc, context)
         if max_width_px is None and max_height_px is None:
             raise ConfigError(
                 "place_photo requires at least one of max_width_px "
@@ -1015,7 +1024,11 @@ class Client(_Base):
         filters out places rated below it (0 to 5). ``ev_options`` and
         ``search_along_route`` take the API's camelCase dict shapes.
         ``routing_parameters`` takes a dict whose ``origin`` may be a
-        ``LatLng`` or a ``(latitude, longitude)`` tuple.
+        ``LatLng``, a ``(latitude, longitude)`` tuple or list, or a
+        latitude and longitude dict. The dict shaped parameters
+        (``location_bias``, ``location_restriction``, ``ev_options``,
+        ``search_along_route`` and ``routing_parameters``) accept any
+        mapping, not only a dict.
         """
         inner = self._ensure_open("text_search")
         self._check_no_running_loop("text_search")
@@ -1045,7 +1058,7 @@ class Client(_Base):
             )
             fields_list = normalize_fields(fields)
         except ConfigError as exc:
-            raise self._with_context(exc, "text_search") from exc
+            raise self._with_context(exc, "text_search")
         except Exception as exc:
             raise self._invalid_arguments("text_search", exc) from exc
         try:
@@ -1073,11 +1086,15 @@ class Client(_Base):
     ) -> NearbySearchResult:
         """Search for places around ``location`` within ``radius_m`` meters.
 
+        ``location`` may be a ``LatLng``, a ``(latitude, longitude)``
+        tuple or list, or a latitude and longitude dict.
         ``rank_preference`` is ``"DISTANCE"`` or ``"POPULARITY"``.
         The type filters take up to 50 place types each, and a type
         listed in both an included and an excluded filter is an
         error at the API. The stated limits are enforced locally;
         a longer list raises ``ConfigError`` before any request.
+        ``routing_parameters`` accepts any mapping, and its
+        ``origin`` takes the same coordinate shapes as ``location``.
         """
         inner = self._ensure_open("nearby_search")
         self._check_no_running_loop("nearby_search")
@@ -1098,7 +1115,7 @@ class Client(_Base):
             )
             fields_list = normalize_fields(fields)
         except ConfigError as exc:
-            raise self._with_context(exc, "nearby_search") from exc
+            raise self._with_context(exc, "nearby_search")
         except Exception as exc:
             raise self._invalid_arguments("nearby_search", exc) from exc
         try:
@@ -1141,7 +1158,7 @@ class Client(_Base):
             resolved_id = _validate_code_string("place_id", resolved_id)
             context = f"place_details place_id={resolved_id}"
         except ConfigError as exc:
-            raise self._with_context(exc, "place_details") from exc
+            raise self._with_context(exc, "place_details")
         except Exception as exc:
             raise self._invalid_arguments("place_details", exc) from exc
         try:
@@ -1152,7 +1169,7 @@ class Client(_Base):
             )
             fields_list = normalize_fields(fields)
         except ConfigError as exc:
-            raise self._with_context(exc, context) from exc
+            raise self._with_context(exc, context)
         except Exception as exc:
             raise self._invalid_arguments(context, exc) from exc
         try:
@@ -1187,13 +1204,16 @@ class Client(_Base):
     ) -> AutocompleteResult:
         """Get place predictions for partial input text.
 
-        Pass ``origin`` (a ``LatLng`` or a ``(latitude, longitude)``
-        tuple) to get ``distance_meters`` on predictions; without an
+        Pass ``origin`` (a ``LatLng``, a ``(latitude, longitude)``
+        tuple or list, or a latitude and longitude dict) to get
+        ``distance_meters`` on predictions; without an
         origin the API returns no distances. ``included_primary_types``
         takes up to 5 place types, or the single collection ``(cities)``
         or ``(regions)`` standing alone. The stated limit is enforced
         locally; a longer list, or a collection mixed with other
-        values, raises ``ConfigError`` before any request. A ``fields``
+        values, raises ``ConfigError`` before any request.
+        ``location_bias`` and ``location_restriction`` accept any
+        mapping. A ``fields``
         mask is optional on this endpoint.
         """
         inner = self._ensure_open("autocomplete")
@@ -1219,7 +1239,7 @@ class Client(_Base):
             )
             fields_list = normalize_fields(fields)
         except ConfigError as exc:
-            raise self._with_context(exc, "autocomplete") from exc
+            raise self._with_context(exc, "autocomplete")
         except Exception as exc:
             raise self._invalid_arguments("autocomplete", exc) from exc
         try:
@@ -1273,7 +1293,7 @@ class Client(_Base):
                 name, width, height, skip_http_redirect, context
             )
         except ConfigError as exc:
-            raise self._with_context(exc, "place_photo") from exc
+            raise self._with_context(exc, "place_photo")
         except Exception as exc:
             raise self._invalid_arguments("place_photo", exc) from exc
         try:
@@ -1339,7 +1359,21 @@ class AsyncClient(_Base):
         include_pure_service_area_businesses: Optional[bool] = None,
         include_future_opening_businesses: Optional[bool] = None,
     ) -> TextSearchResult:
-        """Async version of ``Client.text_search``."""
+        """Async version of ``Client.text_search``.
+
+        ``rank_preference`` is ``"RELEVANCE"`` or ``"DISTANCE"``.
+        ``price_levels`` takes API values such as ``"PRICE_LEVEL_MODERATE"``.
+        ``page_size`` caps how many results one page carries (1 to 20).
+        ``min_rating``
+        filters out places rated below it (0 to 5). ``ev_options`` and
+        ``search_along_route`` take the API's camelCase dict shapes.
+        ``routing_parameters`` takes a dict whose ``origin`` may be a
+        ``LatLng``, a ``(latitude, longitude)`` tuple or list, or a
+        latitude and longitude dict. The dict shaped parameters
+        (``location_bias``, ``location_restriction``, ``ev_options``,
+        ``search_along_route`` and ``routing_parameters``) accept any
+        mapping, not only a dict.
+        """
         inner = self._ensure_open("text_search")
         self._require_str("query", query, "text_search")
         try:
@@ -1367,7 +1401,7 @@ class AsyncClient(_Base):
             )
             fields_list = normalize_fields(fields)
         except ConfigError as exc:
-            raise self._with_context(exc, "text_search") from exc
+            raise self._with_context(exc, "text_search")
         except Exception as exc:
             raise self._invalid_arguments("text_search", exc) from exc
         try:
@@ -1393,7 +1427,18 @@ class AsyncClient(_Base):
         routing_parameters: Optional[dict[str, Any]] = None,
         include_future_opening_businesses: Optional[bool] = None,
     ) -> NearbySearchResult:
-        """Async version of ``Client.nearby_search``."""
+        """Async version of ``Client.nearby_search``.
+
+        ``location`` may be a ``LatLng``, a ``(latitude, longitude)``
+        tuple or list, or a latitude and longitude dict.
+        ``rank_preference`` is ``"DISTANCE"`` or ``"POPULARITY"``.
+        The type filters take up to 50 place types each, and a type
+        listed in both an included and an excluded filter is an
+        error at the API. The stated limits are enforced locally;
+        a longer list raises ``ConfigError`` before any request.
+        ``routing_parameters`` accepts any mapping, and its
+        ``origin`` takes the same coordinate shapes as ``location``.
+        """
         inner = self._ensure_open("nearby_search")
         try:
             body = self._nearby_search_body(
@@ -1412,7 +1457,7 @@ class AsyncClient(_Base):
             )
             fields_list = normalize_fields(fields)
         except ConfigError as exc:
-            raise self._with_context(exc, "nearby_search") from exc
+            raise self._with_context(exc, "nearby_search")
         except Exception as exc:
             raise self._invalid_arguments("nearby_search", exc) from exc
         try:
@@ -1454,7 +1499,7 @@ class AsyncClient(_Base):
             resolved_id = _validate_code_string("place_id", resolved_id)
             context = f"place_details place_id={resolved_id}"
         except ConfigError as exc:
-            raise self._with_context(exc, "place_details") from exc
+            raise self._with_context(exc, "place_details")
         except Exception as exc:
             raise self._invalid_arguments("place_details", exc) from exc
         try:
@@ -1465,7 +1510,7 @@ class AsyncClient(_Base):
             )
             fields_list = normalize_fields(fields)
         except ConfigError as exc:
-            raise self._with_context(exc, context) from exc
+            raise self._with_context(exc, context)
         except Exception as exc:
             raise self._invalid_arguments(context, exc) from exc
         try:
@@ -1498,7 +1543,20 @@ class AsyncClient(_Base):
         include_pure_service_area_businesses: Optional[bool] = None,
         include_future_opening_businesses: Optional[bool] = None,
     ) -> AutocompleteResult:
-        """Async version of ``Client.autocomplete``."""
+        """Async version of ``Client.autocomplete``.
+
+        Pass ``origin`` (a ``LatLng``, a ``(latitude, longitude)``
+        tuple or list, or a latitude and longitude dict) to get
+        ``distance_meters`` on predictions; without an
+        origin the API returns no distances. ``included_primary_types``
+        takes up to 5 place types, or the single collection ``(cities)``
+        or ``(regions)`` standing alone. The stated limit is enforced
+        locally; a longer list, or a collection mixed with other
+        values, raises ``ConfigError`` before any request.
+        ``location_bias`` and ``location_restriction`` accept any
+        mapping. A ``fields``
+        mask is optional on this endpoint.
+        """
         inner = self._ensure_open("autocomplete")
         self._require_str("input_text", input_text, "autocomplete")
         try:
@@ -1521,7 +1579,7 @@ class AsyncClient(_Base):
             )
             fields_list = normalize_fields(fields)
         except ConfigError as exc:
-            raise self._with_context(exc, "autocomplete") from exc
+            raise self._with_context(exc, "autocomplete")
         except Exception as exc:
             raise self._invalid_arguments("autocomplete", exc) from exc
         try:
@@ -1571,7 +1629,7 @@ class AsyncClient(_Base):
                 name, width, height, skip_http_redirect, context
             )
         except ConfigError as exc:
-            raise self._with_context(exc, "place_photo") from exc
+            raise self._with_context(exc, "place_photo")
         except Exception as exc:
             raise self._invalid_arguments("place_photo", exc) from exc
         try:
