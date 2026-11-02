@@ -17,7 +17,7 @@ import json
 import pytest
 
 from placekit import AsyncClient, Client
-from placekit.exceptions import DecodeError
+from placekit.exceptions import ApiError, DecodeError
 
 
 @pytest.fixture()
@@ -158,3 +158,18 @@ def test_wrongly_typed_field_refusal_names_its_path_async(
         assert "places[0].types" in excinfo.value.message
 
     asyncio.run(run())
+
+
+def test_over_cap_error_body_message_states_the_cap(client, raw_response):
+    # Round 23: an over cap error body used to be reported with the
+    # capped read length (262144) as if it were the body size. The
+    # message now states that the read stopped at the cap and the
+    # full size is unknown.
+    raw_response(500, b"x" * 300_000, "text/html")
+    with pytest.raises(ApiError) as excinfo:
+        client.text_search("cafes")
+    message = excinfo.value.message
+    assert "262144 byte cap" in message
+    assert "full size is unknown" in message
+    assert "error body of 262144 bytes" not in message
+    assert "300000" not in message

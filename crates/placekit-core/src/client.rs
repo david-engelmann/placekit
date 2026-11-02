@@ -715,7 +715,9 @@ async fn read_body_capped(response: reqwest::Response, cap: usize) -> BodyRead {
 
 /// Read an error response body and build the error from it. The read
 /// is capped and truncation is harmless (messages are capped again
-/// downstream). A read failure discards the partial body, which is
+/// downstream), and the error records that the read was capped when
+/// it was, so the capped length is never reported as the body size.
+/// A read failure discards the partial body, which is
 /// unreliable by definition, and keeps the HTTP fallback class with
 /// the read failure recorded in the message, so neither the status
 /// nor the read error is lost.
@@ -727,10 +729,14 @@ async fn read_error_body(
     use futures_util::StreamExt;
     let mut stream = response.bytes_stream();
     let mut buf = Vec::new();
+    let mut capped = false;
     while buf.len() < ERROR_BODY_CAP {
         match stream.next().await {
             Some(Ok(chunk)) => {
                 let take = (ERROR_BODY_CAP - buf.len()).min(chunk.len());
+                if take < chunk.len() {
+                    capped = true;
+                }
                 buf.extend_from_slice(&chunk[..take]);
             }
             Some(Err(e)) => {
@@ -739,7 +745,32 @@ async fn read_error_body(
             None => break,
         }
     }
-    Error::from_response_detailed(status, &String::from_utf8_lossy(&buf), content_type)
+    if buf.len() == ERROR_BODY_CAP && !capped {
+        // The read filled the cap exactly at a chunk boundary, so
+        // whether the body ended there or kept going is only known
+        // by asking the stream for more (Round 23). An over cap body
+        // used to be reported with the capped read length as if it
+        // were the body size; the probe keeps the two apart. A read
+        // failure past the cap does not change the classification:
+        // the capped prefix is already in hand and the body had not
+        // ended, so it counts as capped.
+        loop {
+            match stream.next().await {
+                Some(Ok(chunk)) if chunk.is_empty() => continue,
+                Some(Ok(_)) | Some(Err(_)) => {
+                    capped = true;
+                    break;
+                }
+                None => break,
+            }
+        }
+    }
+    let text = String::from_utf8_lossy(&buf);
+    if capped {
+        Error::from_capped_error_body(status, &text, content_type, ERROR_BODY_CAP)
+    } else {
+        Error::from_response_detailed(status, &text, content_type)
+    }
 }
 
 /// The mapped error for a success response whose body is actually a
@@ -2618,6 +2649,34 @@ mod tests {
         let err = block_on(client.text_search(&req, None)).unwrap_err();
         assert_eq!(err.kind(), "decode");
         assert!(!err.to_string().contains(".: "), "{err}");
+    }
+
+    #[test]
+    fn over_cap_error_body_reports_the_cap_not_a_size() {
+        // Round 23: bodies of 266301 and 1000061 bytes both used to
+        // be reported as an error body of 262144 bytes, the capped
+        // read length dressed as the size. The error now states the
+        // read stopped at the cap. A body of exactly the cap is not
+        // capped and keeps the size form.
+        let req = TextSearchRequest {
+            text_query: "cafes".to_owned(),
+            ..Default::default()
+        };
+        for size in [266_301usize, 1_000_061] {
+            let body = "x".repeat(size);
+            let stub = Stub::start(move |_| stub_json(500, &body));
+            let client = stub.client("k");
+            let err = block_on(client.text_search(&req, None)).unwrap_err();
+            let text = err.to_string();
+            assert!(text.contains("stopped at the 262144 byte cap"), "{text}");
+            assert!(!text.contains("error body of 262144 bytes"), "{text}");
+        }
+        let body = "x".repeat(262_144);
+        let stub = Stub::start(move |_| stub_json(500, &body));
+        let client = stub.client("k");
+        let err = block_on(client.text_search(&req, None)).unwrap_err();
+        let text = err.to_string();
+        assert!(text.contains("error body of 262144 bytes"), "{text}");
     }
 
     #[test]

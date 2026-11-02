@@ -344,6 +344,31 @@ impl Error {
         body: &str,
         content_type: Option<&str>,
     ) -> Error {
+        Self::from_response_read(status, body, content_type, None)
+    }
+
+    /// [`Error::from_response_detailed`] for an error body whose read
+    /// stopped at the read cap (Round 23). The body string is the
+    /// capped prefix, not the body, so the message built from a
+    /// non-envelope body must state that the read was capped rather
+    /// than reporting the prefix length as the body size it used to
+    /// claim. The envelope path is unaffected: a truncated envelope
+    /// parses or fails on its own contents either way.
+    pub(crate) fn from_capped_error_body(
+        status: u16,
+        body: &str,
+        content_type: Option<&str>,
+        read_cap: usize,
+    ) -> Error {
+        Self::from_response_read(status, body, content_type, Some(read_cap))
+    }
+
+    fn from_response_read(
+        status: u16,
+        body: &str,
+        content_type: Option<&str>,
+        read_cap: Option<usize>,
+    ) -> Error {
         let parsed = parse_envelope(body);
         let (google_status, message, code, details, class_status) = match parsed {
             Some(parts) => {
@@ -374,7 +399,7 @@ impl Error {
             }
             None => (
                 String::new(),
-                non_envelope_message(status, body, content_type),
+                non_envelope_message(status, body, content_type, read_cap),
                 None,
                 Vec::new(),
                 status,
@@ -561,19 +586,33 @@ fn transport_class(err: &reqwest::Error) -> &'static str {
 /// it would let a hostile or compromised endpoint place arbitrary
 /// text into caller logs and echo request data back through the same
 /// channel. The status and the body size are the facts the message
-/// carries. A parsed envelope is a different case and keeps its own
+/// carries, or the read cap when the read stopped there and the
+/// size is unknown. A parsed envelope is a different case and keeps its own
 /// message and attributes: those are the API's structured diagnostic,
 /// not raw body text. The content type is accepted so every error
 /// construction path takes the same inputs; it no longer shapes the
 /// message.
-fn non_envelope_message(status: u16, body: &str, _content_type: Option<&str>) -> String {
+fn non_envelope_message(
+    status: u16,
+    body: &str,
+    _content_type: Option<&str>,
+    read_cap: Option<usize>,
+) -> String {
     if body.trim().is_empty() {
         return format!("HTTP {status}");
     }
-    format!(
-        "HTTP {status} (error body of {} bytes, not a Places error envelope)",
-        body.len()
-    )
+    match read_cap {
+        // The read stopped at the cap, so the prefix length is not
+        // the body size and the message must not present it as one
+        // (Round 23): the true size is unknown once reading stops.
+        Some(cap) => format!(
+            "HTTP {status} (error body read stopped at the {cap} byte cap, so the full size is unknown, not a Places error envelope)"
+        ),
+        None => format!(
+            "HTTP {status} (error body of {} bytes, not a Places error envelope)",
+            body.len()
+        ),
+    }
 }
 
 /// One usable field set read from a Google error envelope. The parse
@@ -798,6 +837,23 @@ mod tests {
         let text = err.to_string();
         assert!(!text.contains("upstream exploded"), "{text}");
         assert!(text.contains("HTTP 500"), "{text}");
+    }
+
+    #[test]
+    fn capped_error_body_read_states_the_cap_not_a_size() {
+        // Round 23: an over cap error body was reported with the
+        // capped read length as if it were the body size. The capped
+        // construction states that the read stopped at the cap and
+        // the full size is unknown; the prefix length appears only
+        // as the cap figure itself.
+        let prefix = "y".repeat(256 * 1024);
+        let err = Error::from_capped_error_body(500, &prefix, Some("text/html"), 256 * 1024);
+        let text = err.to_string();
+        assert!(text.contains("HTTP 500"), "{text}");
+        assert!(text.contains("stopped at the 262144 byte cap"), "{text}");
+        assert!(text.contains("full size is unknown"), "{text}");
+        assert!(!text.contains("error body of 262144 bytes"), "{text}");
+        assert!(!text.contains("yyyy"), "{text}");
     }
 
     #[test]
