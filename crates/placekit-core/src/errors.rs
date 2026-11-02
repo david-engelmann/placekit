@@ -38,8 +38,8 @@ pub enum Error {
         details: Vec<serde_json::Value>,
         retry_after: Option<f64>,
     },
-    /// The request itself was malformed (HTTP 400, `INVALID_ARGUMENT`
-    /// or `FAILED_PRECONDITION`).
+    /// The request itself was malformed (HTTP 400, `INVALID_ARGUMENT`,
+    /// `FAILED_PRECONDITION` or `OUT_OF_RANGE`).
     #[error("invalid request (HTTP {status}): {message}")]
     InvalidRequest {
         status: u16,
@@ -50,7 +50,10 @@ pub enum Error {
         retry_after: Option<f64>,
     },
     /// Any other error response from the API.
-    #[error("places API error (HTTP {status} {google_status}): {message}")]
+    #[error(
+        "places API error (HTTP {status}{}): {message}",
+        google_status_segment(google_status)
+    )]
     Api {
         status: u16,
         google_status: String,
@@ -84,8 +87,12 @@ pub enum Error {
         source: Option<Box<dyn std::error::Error + Send + Sync>>,
     },
     /// The client itself was configured or called incorrectly. This is a
-    /// programming error, detected before any network traffic.
-    #[error("invalid client configuration or call: {detail}")]
+    /// programming error, detected before any network traffic. The
+    /// rendering is the specific detail alone (Round 25, Minor 8):
+    /// a fixed prefix saying the configuration or call was invalid
+    /// repeated the classification the type already carries into
+    /// every message built from this variant.
+    #[error("{detail}")]
     Config { detail: String },
 }
 
@@ -154,7 +161,11 @@ impl Error {
     /// retryable HTTP status (429, 500, 502, 503, 504) reports true,
     /// whichever variant carries it; quota errors report true; a plain
     /// API error whose Google status is a server side one reports true.
-    /// Errors carrying no status keep the conservative default, false.
+    /// A network error whose transport failure was a timeout reports
+    /// true (Round 25, Minor 11): the documented meaning of the flag
+    /// is whether a caller side retry can plausibly succeed, and a
+    /// timeout is the classic case where one can. Errors carrying no
+    /// status and no such signal keep the conservative default, false.
     /// No retry is attempted by the client itself.
     pub fn retryable(&self) -> bool {
         if let Some(status) = self.status_code() {
@@ -162,12 +173,33 @@ impl Error {
                 return true;
             }
         }
+        if self.is_timeout() {
+            return true;
+        }
         match self {
             Error::RateLimit { .. } => true,
             Error::Api { google_status, .. } => matches!(
                 google_status.as_str(),
                 "UNAVAILABLE" | "INTERNAL" | "DEADLINE_EXCEEDED"
             ),
+            _ => false,
+        }
+    }
+
+    /// True when this error is a network failure whose transport
+    /// class is a timeout. Every network detail opens with its
+    /// transport class token, so a timeout carries the token in
+    /// text; the typed source, when one was kept, answers directly
+    /// as the second check.
+    fn is_timeout(&self) -> bool {
+        match self {
+            Error::Network { detail, source } => {
+                detail.starts_with("timeout")
+                    || source
+                        .as_deref()
+                        .and_then(|s| s.downcast_ref::<reqwest::Error>())
+                        .is_some_and(|e| e.is_timeout())
+            }
             _ => false,
         }
     }
@@ -313,8 +345,9 @@ impl Error {
     /// 2. A Google status string decides the class first:
     ///    `UNAUTHENTICATED` and `PERMISSION_DENIED` are auth errors,
     ///    `RESOURCE_EXHAUSTED` is a rate limit, `NOT_FOUND` is not
-    ///    found, `INVALID_ARGUMENT` and `FAILED_PRECONDITION` are
-    ///    invalid requests, and the server side statuses `UNAVAILABLE`,
+    ///    found, `INVALID_ARGUMENT`, `FAILED_PRECONDITION` and
+    ///    `OUT_OF_RANGE` are invalid requests, and the server side
+    ///    statuses `UNAVAILABLE`,
     ///    `INTERNAL` and `DEADLINE_EXCEEDED` are plain API errors,
     ///    which never fall through to the client side HTTP classes.
     /// 3. With no status string, an envelope numeric `code` classifies
@@ -392,7 +425,7 @@ impl Error {
                     parts
                         .message
                         .map(|m| m.chars().take(500).collect())
-                        .unwrap_or_else(|| format!("HTTP {status}")),
+                        .unwrap_or_else(|| "the error envelope carried no message".to_owned()),
                     parts.code,
                     parts.details,
                     class_status,
@@ -432,7 +465,7 @@ impl Error {
                 details,
                 retry_after: None,
             },
-            "INVALID_ARGUMENT" | "FAILED_PRECONDITION" => Error::InvalidRequest {
+            "INVALID_ARGUMENT" | "FAILED_PRECONDITION" | "OUT_OF_RANGE" => Error::InvalidRequest {
                 status,
                 google_status,
                 message,
@@ -559,10 +592,40 @@ impl Error {
         }
     }
 
+    /// The error for an error response whose body read timed out
+    /// (Round 25, red team Minor 1). The HTTP class fallback used
+    /// to mask that timeout in full: no attribute and no message
+    /// token recorded that the caller's own deadline fired, and
+    /// the masked form reported retryable false on client error
+    /// statuses. The timeout is the fact a caller acts on, so it
+    /// surfaces as the network error it is, carrying the timeout
+    /// class token. The detail is a fixed string with no source
+    /// because this constructor also serves the photo path, whose
+    /// request URL carries the API key and whose transport
+    /// failures are never formatted (R4-07).
+    pub(crate) fn network_body_read_timeout() -> Error {
+        Error::Network {
+            detail: "timeout: the error body read timed out".to_owned(),
+            source: None,
+        }
+    }
+
     pub(crate) fn config(detail: impl Into<String>) -> Error {
         Error::Config {
             detail: detail.into(),
         }
+    }
+}
+
+/// The Google status segment of the Api headline: a space and the
+/// status when the envelope carried one, and nothing when it did
+/// not, so a failure with no Google status never renders an empty
+/// gap where the status would sit (Round 25, Minor 1).
+fn google_status_segment(google_status: &str) -> String {
+    if google_status.is_empty() {
+        String::new()
+    } else {
+        format!(" {google_status}")
     }
 }
 
@@ -586,31 +649,36 @@ fn transport_class(err: &reqwest::Error) -> &'static str {
 /// log most, and an unparsed body is wholly server chosen, so quoting
 /// it would let a hostile or compromised endpoint place arbitrary
 /// text into caller logs and echo request data back through the same
-/// channel. The status and the body size are the facts the message
-/// carries, or the read cap when the read stopped there and the
-/// size is unknown. A parsed envelope is a different case and keeps its own
-/// message and attributes: those are the API's structured diagnostic,
-/// not raw body text. The content type is accepted so every error
-/// construction path takes the same inputs; it no longer shapes the
-/// message.
+/// channel. The body size is the fact the message carries, or the
+/// read cap when the read stopped there and the size is unknown; the
+/// HTTP status is not repeated here because every variant's headline
+/// already carries it (Round 25, Minor 1). A parsed envelope is a
+/// different case and keeps its own message and attributes: those
+/// are the API's structured diagnostic, not raw body text. The
+/// status and content type are accepted so every error construction
+/// path takes the same inputs; neither shapes the message.
 fn non_envelope_message(
-    status: u16,
+    _status: u16,
     body: &str,
     _content_type: Option<&str>,
     read_cap: Option<usize>,
 ) -> String {
     if body.trim().is_empty() {
-        return format!("HTTP {status}");
+        return "no error body".to_owned();
     }
     match read_cap {
         // The read stopped at the cap, so the prefix length is not
         // the body size and the message must not present it as one
         // (Round 23): the true size is unknown once reading stops.
+        // The message opens with the fact rather than the HTTP
+        // status (Round 25, Minor 1): every variant's headline
+        // already carries the status, so a status here printed it
+        // twice in one rendering.
         Some(cap) => format!(
-            "HTTP {status} (error body read stopped at the {cap} byte cap, so the full size is unknown, not a Places error envelope)"
+            "error body read stopped at the {cap} byte cap, so the full size is unknown, not a Places error envelope"
         ),
         None => format!(
-            "HTTP {status} (error body of {} bytes, not a Places error envelope)",
+            "error body of {} bytes, not a Places error envelope",
             body.len()
         ),
     }
@@ -630,9 +698,41 @@ struct EnvelopeParts {
 
 /// Read the envelope fields of a response body, or `None` when the
 /// body carries no `error` object at all.
+///
+/// The whole document parse is tried first and its field by field
+/// posture is unchanged (R4-09). When the whole parse refuses the
+/// body, the envelope head fields are recovered tolerantly instead
+/// (Round 25, Major 1 and the red team depth finding): the parse is
+/// all or nothing, so a body truncated by the error read cap, or
+/// carrying a value nested past the parser depth limit anywhere
+/// inside it, lost the status and message and code its head carried
+/// complete, and classification fell back to the bare HTTP code. The
+/// tolerant scan reads only the head, so neither body size nor
+/// nesting anywhere in the body can defeat it. Details are not
+/// recovered by the scan; they degrade to empty while the status,
+/// message and class survive.
+///
+/// String values inside parsed details are capped at the same 500
+/// character discipline as the envelope message (Round 25, Minor
+/// 6). The message cap alone left the details beside it bounded
+/// only by the body cap, and on a success status envelope that cap
+/// is the 32 MiB success cap rather than the error read cap, so a
+/// hostile or broken endpoint could park a details payload of that
+/// size inside an exception callers routinely log or retain.
 fn parse_envelope(body: &str) -> Option<EnvelopeParts> {
-    let value: serde_json::Value = serde_json::from_str(body).ok()?;
+    let value: serde_json::Value = match serde_json::from_str(body) {
+        Ok(value) => value,
+        Err(_) => return parse_envelope_head(body),
+    };
     let error = value.get("error")?.as_object()?;
+    let mut details = error
+        .get("details")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
+    for detail in &mut details {
+        cap_detail_strings(detail);
+    }
     Some(EnvelopeParts {
         status: error
             .get("status")
@@ -643,12 +743,279 @@ fn parse_envelope(body: &str) -> Option<EnvelopeParts> {
             .and_then(|v| v.as_str())
             .map(str::to_owned),
         code: error.get("code").and_then(serde_json::Value::as_i64),
-        details: error
-            .get("details")
-            .and_then(|v| v.as_array())
-            .cloned()
-            .unwrap_or_default(),
+        details,
     })
+}
+
+/// Truncate every string value inside one parsed detail at 500
+/// characters, the envelope message discipline. The walk is
+/// iterative, over the values of objects and the items of arrays;
+/// object keys are names rather than values and keep their length.
+fn cap_detail_strings(value: &mut serde_json::Value) {
+    let mut stack: Vec<&mut serde_json::Value> = vec![value];
+    while let Some(node) = stack.pop() {
+        match node {
+            serde_json::Value::String(text) => {
+                if text.chars().count() > 500 {
+                    *text = text.chars().take(500).collect();
+                }
+            }
+            serde_json::Value::Array(items) => stack.extend(items.iter_mut()),
+            serde_json::Value::Object(map) => stack.extend(map.values_mut()),
+            _ => {}
+        }
+    }
+}
+
+/// Recover the envelope head fields from a body the whole document
+/// parse refused. The scan walks the top level object to the
+/// `error` key, then reads that object's scalar fields, skipping
+/// every other value with an iterative depth walk that no nesting
+/// can exhaust. A field whose value is not complete in the text is
+/// read as absent, matching the field by field posture of the
+/// whole parse, and a failure further into the error object never
+/// discards head fields already read: the head is the
+/// classification.
+fn parse_envelope_head(body: &str) -> Option<EnvelopeParts> {
+    let mut scan = HeadScan::new(body);
+    scan.skip_ws();
+    if !scan.eat(b'{') {
+        return None;
+    }
+    loop {
+        scan.skip_ws();
+        if scan.at_end() || scan.eat(b'}') {
+            return None;
+        }
+        let key = scan.string()?;
+        scan.skip_ws();
+        if !scan.eat(b':') {
+            return None;
+        }
+        if key == "error" {
+            return scan.error_object();
+        }
+        if !scan.skip_value() {
+            return None;
+        }
+        scan.skip_ws();
+        if scan.eat(b',') {
+            continue;
+        }
+        return None;
+    }
+}
+
+/// A byte cursor over a response body for the tolerant head scan.
+/// Only token boundaries are found by hand; string tokens are
+/// decoded by serde_json itself, so escapes and unicode read
+/// exactly as the whole parse would read them.
+struct HeadScan<'a> {
+    bytes: &'a [u8],
+    pos: usize,
+}
+
+impl<'a> HeadScan<'a> {
+    fn new(body: &'a str) -> Self {
+        HeadScan {
+            bytes: body.as_bytes(),
+            pos: 0,
+        }
+    }
+
+    fn at_end(&self) -> bool {
+        self.pos >= self.bytes.len()
+    }
+
+    fn peek(&self) -> Option<u8> {
+        self.bytes.get(self.pos).copied()
+    }
+
+    fn skip_ws(&mut self) {
+        while matches!(self.peek(), Some(b' ' | b'\t' | b'\n' | b'\r')) {
+            self.pos += 1;
+        }
+    }
+
+    fn eat(&mut self, byte: u8) -> bool {
+        if self.peek() == Some(byte) {
+            self.pos += 1;
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Read one JSON string at the cursor and decode it, or `None`
+    /// when the text at the cursor is not a complete decodable
+    /// string.
+    fn string(&mut self) -> Option<String> {
+        self.skip_ws();
+        if self.peek() != Some(b'"') {
+            return None;
+        }
+        let start = self.pos;
+        self.pos += 1;
+        loop {
+            match self.peek()? {
+                b'\\' => self.pos += 2,
+                b'"' => {
+                    self.pos += 1;
+                    let token = std::str::from_utf8(&self.bytes[start..self.pos]).ok()?;
+                    return serde_json::from_str(token).ok();
+                }
+                _ => self.pos += 1,
+            }
+        }
+    }
+
+    /// Skip the string token at the cursor without decoding it.
+    /// Returns false when the token is not complete in the text.
+    fn skip_string_raw(&mut self) -> bool {
+        // The cursor is on the opening quote.
+        self.pos += 1;
+        loop {
+            match self.peek() {
+                None => return false,
+                Some(b'\\') => self.pos += 2,
+                Some(b'"') => {
+                    self.pos += 1;
+                    return true;
+                }
+                Some(_) => self.pos += 1,
+            }
+        }
+    }
+
+    /// Skip one JSON value at the cursor, however deeply nested.
+    /// The depth walk is an explicit counter rather than recursion,
+    /// so no nesting depth in the skipped value can exhaust it.
+    /// Returns false when the value is not complete in the text
+    /// (the read was capped) or is malformed.
+    fn skip_value(&mut self) -> bool {
+        self.skip_ws();
+        match self.peek() {
+            Some(b'"') => self.skip_string_raw(),
+            Some(b'{' | b'[') => {
+                let mut depth = 0usize;
+                loop {
+                    match self.peek() {
+                        None => return false,
+                        Some(b'"') => {
+                            if !self.skip_string_raw() {
+                                return false;
+                            }
+                        }
+                        Some(b'{' | b'[') => {
+                            depth += 1;
+                            self.pos += 1;
+                        }
+                        Some(b'}' | b']') => {
+                            depth -= 1;
+                            self.pos += 1;
+                            if depth == 0 {
+                                return true;
+                            }
+                        }
+                        Some(_) => self.pos += 1,
+                    }
+                }
+            }
+            Some(_) => {
+                // A number or a true, false or null literal: the
+                // token runs to the next structural character or
+                // whitespace, neither of which its alphabet holds.
+                while matches!(
+                    self.peek(),
+                    Some(b'0'..=b'9' | b'-' | b'+' | b'.' | b'e' | b'E' | b'a'..=b'z')
+                ) {
+                    self.pos += 1;
+                }
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// Read the error object's scalar head fields. The cursor is
+    /// just past the colon after the `error` key. An `error` value
+    /// that is not an object is no envelope, the same verdict the
+    /// whole parse gives. Once the object opens, whatever head
+    /// fields were fully read are the result, even when the rest
+    /// of the object is truncated or unreadable.
+    fn error_object(&mut self) -> Option<EnvelopeParts> {
+        self.skip_ws();
+        if !self.eat(b'{') {
+            return None;
+        }
+        let mut parts = EnvelopeParts {
+            status: None,
+            message: None,
+            code: None,
+            details: Vec::new(),
+        };
+        loop {
+            self.skip_ws();
+            if self.at_end() || self.eat(b'}') {
+                return Some(parts);
+            }
+            let Some(key) = self.string() else {
+                return Some(parts);
+            };
+            self.skip_ws();
+            if !self.eat(b':') {
+                return Some(parts);
+            }
+            self.skip_ws();
+            match key.as_str() {
+                "status" | "message" => {
+                    let slot = if key == "status" {
+                        &mut parts.status
+                    } else {
+                        &mut parts.message
+                    };
+                    if self.peek() == Some(b'"') {
+                        match self.string() {
+                            Some(value) => *slot = Some(value),
+                            None => return Some(parts),
+                        }
+                    } else if !self.skip_value() {
+                        return Some(parts);
+                    }
+                }
+                "code" => match self.peek() {
+                    Some(b'0'..=b'9' | b'-') => {
+                        let start = self.pos;
+                        while matches!(
+                            self.peek(),
+                            Some(b'0'..=b'9' | b'-' | b'+' | b'.' | b'e' | b'E')
+                        ) {
+                            self.pos += 1;
+                        }
+                        let token = std::str::from_utf8(&self.bytes[start..self.pos]).unwrap_or("");
+                        parts.code = serde_json::from_str::<serde_json::Value>(token)
+                            .ok()
+                            .and_then(|v| v.as_i64());
+                    }
+                    _ => {
+                        if !self.skip_value() {
+                            return Some(parts);
+                        }
+                    }
+                },
+                _ => {
+                    if !self.skip_value() {
+                        return Some(parts);
+                    }
+                }
+            }
+            self.skip_ws();
+            if self.eat(b',') {
+                continue;
+            }
+            return Some(parts);
+        }
+    }
 }
 
 #[cfg(test)]
@@ -992,5 +1359,189 @@ mod tests {
         assert!(source.to_string().contains("boom"));
         let err = Error::network_detail("plain".to_owned());
         assert!(StdError::source(&err).is_none());
+    }
+
+    #[test]
+    fn over_cap_envelope_still_classifies_by_its_status() {
+        // Round 25, Major 1: the envelope fields sit complete at
+        // the head of an over cap body, ahead of the detail bulk
+        // that overflows the read cap. The capped prefix parse
+        // cannot read the document whole, so the tolerant head
+        // scan recovers the status, code and message, and the
+        // classification follows the envelope rather than falling
+        // back to the bare HTTP code.
+        let body = format!(
+            r#"{{"error": {{"code": 429, "message": "big quota", "status": "RESOURCE_EXHAUSTED", "details": [{{"@type": "type.googleapis.com/google.rpc.DebugInfo", "detail": "{}"}}]}}}}"#,
+            "z".repeat(300_000)
+        );
+        let prefix = &body[..256 * 1024];
+        let err = Error::from_capped_error_body(400, prefix, None, 256 * 1024);
+        assert_eq!(err.kind(), "rate_limit");
+        assert_eq!(err.google_status(), Some("RESOURCE_EXHAUSTED"));
+        assert_eq!(err.error_code(), Some(429));
+        assert!(err.to_string().contains("big quota"), "{err}");
+        // The details sit past the truncation and degrade to
+        // empty; the class and message survive without them.
+        assert!(err.details().is_empty());
+        // The mirror shape: an invalid argument envelope on a
+        // rate limit HTTP code classifies by its status too.
+        let body = format!(
+            r#"{{"error": {{"code": 400, "message": "big invalid", "status": "INVALID_ARGUMENT", "details": [{{"@type": "type.googleapis.com/google.rpc.DebugInfo", "detail": "{}"}}]}}}}"#,
+            "z".repeat(300_000)
+        );
+        let prefix = &body[..256 * 1024];
+        let err = Error::from_capped_error_body(429, prefix, None, 256 * 1024);
+        assert_eq!(err.kind(), "invalid_request");
+        assert_eq!(err.google_status(), Some("INVALID_ARGUMENT"));
+    }
+
+    #[test]
+    fn deeply_nested_value_still_classifies_by_its_status() {
+        // Round 25, red team Major: a value nested past the JSON
+        // parser depth limit anywhere in the body defeated the
+        // whole document parse in full, on a body of about a
+        // kilobyte. The tolerant head scan skips values with an
+        // iterative walk, so the nesting depth cannot defeat it,
+        // whether the deep value sits inside a detail or in an
+        // unknown key beside the head fields.
+        let mut deep = serde_json::json!("x");
+        for _ in 0..200 {
+            deep = serde_json::json!([deep]);
+        }
+        let body = serde_json::json!({
+            "error": {
+                "code": 429,
+                "message": "nested quota",
+                "status": "RESOURCE_EXHAUSTED",
+                "details": [{"@type": "type.googleapis.com/google.rpc.DebugInfo", "detail": deep}],
+            }
+        })
+        .to_string();
+        assert!(serde_json::from_str::<serde_json::Value>(&body).is_err());
+        let err = Error::from_response(400, &body);
+        assert_eq!(err.kind(), "rate_limit");
+        assert_eq!(err.google_status(), Some("RESOURCE_EXHAUSTED"));
+        assert!(err.to_string().contains("nested quota"), "{err}");
+        assert!(err.details().is_empty());
+        // The same depth in an unknown key inside the error
+        // object, after the head fields.
+        let mut deep = serde_json::json!("x");
+        for _ in 0..200 {
+            deep = serde_json::json!([deep]);
+        }
+        let body = serde_json::json!({
+            "error": {
+                "code": 404,
+                "message": "nested sibling",
+                "status": "NOT_FOUND",
+                "junk": deep,
+            }
+        })
+        .to_string();
+        let err = Error::from_response(400, &body);
+        assert_eq!(err.kind(), "not_found");
+        assert_eq!(err.google_status(), Some("NOT_FOUND"));
+    }
+
+    #[test]
+    fn out_of_range_classifies_by_status_on_any_pairing() {
+        // Round 25, Major 3: OUT_OF_RANGE had no status driven
+        // mapping and reached its class only through the canonical
+        // HTTP 400 pairing. The status arm now carries it, so the
+        // class is the invalid request class on neutral and server
+        // side pairings alike.
+        let body = r#"{"error": {"code": 418, "message": "too far", "status": "OUT_OF_RANGE"}}"#;
+        let err = Error::from_response(418, body);
+        assert_eq!(err.kind(), "invalid_request");
+        assert_eq!(err.google_status(), Some("OUT_OF_RANGE"));
+        let body = r#"{"error": {"code": 500, "message": "too far", "status": "OUT_OF_RANGE"}}"#;
+        let err = Error::from_response(500, body);
+        assert_eq!(err.kind(), "invalid_request");
+        assert_eq!(err.google_status(), Some("OUT_OF_RANGE"));
+    }
+
+    #[test]
+    fn api_headline_has_no_gap_and_no_duplicate_status() {
+        // Round 25, Minor 1: a non envelope body left the Google
+        // status empty, and the headline rendered an empty gap
+        // where the status would sit plus a second copy of the
+        // HTTP status at the start of the inner message.
+        let err = Error::from_response(500, "plain text failure");
+        let text = err.to_string();
+        assert!(text.starts_with("places API error (HTTP 500): "), "{text}");
+        assert_eq!(text.matches("HTTP 500").count(), 1, "{text}");
+        // An envelope status still renders in the headline.
+        let body = r#"{"error": {"code": 503, "message": "down", "status": "UNAVAILABLE"}}"#;
+        let err = Error::from_response(503, body);
+        assert!(
+            err.to_string()
+                .starts_with("places API error (HTTP 503 UNAVAILABLE): down"),
+            "{err}"
+        );
+        // An empty body doubles nothing either.
+        let err = Error::from_response(404, "");
+        let text = err.to_string();
+        assert_eq!(text.matches("HTTP 404").count(), 1, "{text}");
+    }
+
+    #[test]
+    fn config_message_is_the_specific_detail_alone() {
+        // Round 25, Minor 8: the fixed prefix repeated the
+        // classification the type already carries into every
+        // message built from this variant.
+        let err = Error::config("radius must be positive".to_owned());
+        assert_eq!(err.to_string(), "radius must be positive");
+    }
+
+    #[test]
+    fn timeout_network_errors_are_retryable() {
+        // Round 25, Minor 11: a timeout is the classic case where
+        // a caller side retry can plausibly succeed, which is the
+        // documented meaning of the flag.
+        let err = Error::Network {
+            detail: "timeout: operation timed out".to_owned(),
+            source: None,
+        };
+        assert!(err.retryable());
+        let err = Error::network_body_read_timeout();
+        assert_eq!(err.kind(), "network");
+        assert!(err.to_string().contains("timeout"), "{err}");
+        assert!(err.retryable());
+        // A permanent transport refusal stays conservative.
+        let err = Error::Network {
+            detail: "connect: connection refused".to_owned(),
+            source: None,
+        };
+        assert!(!err.retryable());
+    }
+
+    #[test]
+    fn detail_strings_are_capped_at_the_message_discipline() {
+        // Round 25, Minor 6: a details entry of 100000 characters
+        // was carried whole into the exception on a success status
+        // envelope while the message beside it stayed capped.
+        let body = serde_json::json!({
+            "error": {
+                "code": 403,
+                "message": "denied",
+                "status": "PERMISSION_DENIED",
+                "details": [{
+                    "@type": "type.googleapis.com/google.rpc.DebugInfo",
+                    "detail": "y".repeat(100_000),
+                    "nested": {"list": ["z".repeat(600)]},
+                }],
+            }
+        })
+        .to_string();
+        let err = Error::from_response(200, &body);
+        assert_eq!(err.kind(), "auth");
+        let detail = &err.details()[0];
+        assert_eq!(detail["detail"].as_str().map(str::len), Some(500));
+        assert_eq!(
+            detail["nested"]["list"][0].as_str().map(str::len),
+            Some(500)
+        );
+        // Short strings pass through untouched.
+        assert_eq!(detail["@type"], "type.googleapis.com/google.rpc.DebugInfo");
     }
 }
