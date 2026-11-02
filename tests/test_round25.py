@@ -24,6 +24,7 @@ import socket
 import threading
 import traceback
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 
 import pytest
 
@@ -421,7 +422,13 @@ def test_translated_traceback_shows_one_exception(client):
     assert exc.__suppress_context__ is True
     rendered = "".join(traceback.format_exception(exc))
     assert rendered.count("Traceback (most recent call last)") == 1
-    assert "_core" not in rendered
+    # The needle names the native module as it renders, so the
+    # assertion discriminates: the pre repair traceback carried
+    # the native exception as the cause and printed its class
+    # as _placekit.PlacesError. A demo preserved
+    # in the round dossier (probes-landing, the traceback needle
+    # demo) shows the needle biting on that pre repair form.
+    assert "_placekit" not in rendered
     # Every attribute survives the unchained raise.
     assert exc.google_status == "RESOURCE_EXHAUSTED"
     assert exc.error_code == 429
@@ -565,3 +572,274 @@ def test_in_flight_cancellation_keeps_client_and_runtime_healthy(api_key):
             assert result.places and result.places[0].id == "abc"
     finally:
         server.shutdown()
+
+
+# --- Landing repair pins (red team BREACH follow up)
+#
+# A timeout anywhere in a call surfaces as the timeout network
+# error, on every body read path rather than only the error
+# body read. The head scan resolves duplicate keys the way the
+# whole document parse resolves them. The scan fallback wording
+# says when the message could not be read in full.
+
+
+def _drip_details_handler(body: bytes):
+    """Serve one success body in eight chunks, one every 0.35
+    seconds, so a 1.0 second client deadline fires mid body."""
+
+    def drip(conn):
+        _read_request(conn)
+        conn.sendall(
+            b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
+            + f"Content-Length: {len(body)}\r\n\r\n".encode()
+        )
+        step = max(1, len(body) // 8)
+        for i in range(0, len(body), step):
+            conn.sendall(body[i : i + step])
+            threading.Event().wait(0.35)
+
+    return drip
+
+
+def _details_body() -> bytes:
+    return (Path(__file__).parent / "fixtures" / "place_details.json").read_bytes()
+
+
+def test_timeout_while_success_body_streams_is_a_timeout(api_key):
+    # The red team Major: a success body still streaming when
+    # the deadline fired surfaced as a DecodeError reporting a
+    # body read failure, with retryable False and no timeout
+    # token anywhere. It is the timeout network error now, the
+    # same class the error body read produces.
+    with _SocketServer(_drip_details_handler(_details_body())) as base_url:
+        slow = Client(api_key, base_url=base_url, timeout=1.0)
+        with pytest.raises(NetworkError) as excinfo:
+            slow.place_details("abc")
+    exc = excinfo.value
+    assert "timeout" in str(exc)
+    assert exc.retryable is True
+
+
+def test_timeout_while_success_body_streams_is_a_timeout_async(api_key):
+    # The async client shares the core read path and the class.
+    with _SocketServer(_drip_details_handler(_details_body())) as base_url:
+
+        async def run():
+            client = AsyncClient(api_key, base_url=base_url, timeout=1.0)
+            with pytest.raises(NetworkError) as excinfo:
+                await client.place_details("abc")
+            return excinfo.value
+
+        exc = asyncio.run(run())
+    assert "timeout" in str(exc)
+    assert exc.retryable is True
+
+
+def test_timeout_while_photo_uri_body_streams_is_a_timeout(api_key):
+    # The photo URI form reads a JSON success body through the
+    # same capped read; its drip takes the same timeout class.
+    photo_json = (
+        b'{"name": "places/abc/photos/def", '
+        b'"photoUri": "http://127.0.0.1/img"}'
+    )
+
+    def drip(conn):
+        _read_request(conn)
+        conn.sendall(
+            b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
+            + f"Content-Length: {len(photo_json)}\r\n\r\n".encode()
+        )
+        step = 6
+        for i in range(0, len(photo_json), step):
+            conn.sendall(photo_json[i : i + step])
+            threading.Event().wait(0.3)
+
+    with _SocketServer(drip) as base_url:
+        slow = Client(api_key, base_url=base_url, timeout=1.0)
+        with pytest.raises(NetworkError) as excinfo:
+            slow.place_photo(
+                "places/abc/photos/def",
+                max_width_px=100,
+                skip_http_redirect=True,
+            )
+    exc = excinfo.value
+    assert "timeout" in str(exc)
+    assert exc.retryable is True
+
+
+def _read_head(conn) -> bytes:
+    data = b""
+    while b"\r\n\r\n" not in data:
+        chunk = conn.recv(4096)
+        if not chunk:
+            return data
+        data += chunk
+    return data
+
+
+def test_timeout_while_photo_image_body_streams_is_a_timeout(api_key):
+    # The photo bytes form: the media request redirects to an
+    # image path whose body then drips past the deadline. The
+    # timeout fires inside the capped body read after the
+    # redirect completes, and it is the timeout network error.
+    def flow(conn):
+        head = _read_head(conn)
+        first_line = head.split(b"\r\n")[0]
+        if b"/media" in first_line:
+            host = b"127.0.0.1"
+            for line in head.split(b"\r\n"):
+                if line.lower().startswith(b"host:"):
+                    host = line.split(b":", 1)[1].strip()
+            conn.sendall(
+                b"HTTP/1.1 302 Found\r\n"
+                + b"Location: http://" + host + b"/img\r\n"
+                + b"Content-Length: 0\r\n\r\n"
+            )
+            return
+        conn.sendall(
+            b"HTTP/1.1 200 OK\r\nContent-Type: image/png\r\n"
+            b"Content-Length: 100000\r\n\r\n"
+        )
+        for _ in range(50):
+            conn.sendall(b"\x89PNG")
+            threading.Event().wait(0.1)
+
+    with _SocketServer(flow) as base_url:
+        slow = Client(api_key, base_url=base_url, timeout=1.0)
+        with pytest.raises(NetworkError) as excinfo:
+            slow.place_photo("places/abc/photos/def", max_width_px=100)
+    exc = excinfo.value
+    assert "timeout" in str(exc)
+    assert exc.retryable is True
+
+
+def test_malformed_complete_success_body_stays_a_decode_error(
+    client, raw_response
+):
+    # The timeout carve out is narrow: a complete body that
+    # simply does not decode keeps the decode class and its
+    # conservative retryable reading.
+    raw_response(200, "this is not json", "text/plain")
+    with pytest.raises(DecodeError) as excinfo:
+        client.text_search("pizza")
+    assert excinfo.value.retryable is False
+
+
+def test_timeout_past_the_error_read_cap_is_a_timeout(api_key):
+    # The red team Minor: the body filled the 262144 byte error
+    # read cap exactly and then stalled, and the past cap probe
+    # read the resulting stream failure as proof of capping, so
+    # the timeout token was lost. The timeout is distinguished
+    # now and surfaces whole.
+    junk = b"x" * 262144
+
+    def fill_then_stall(conn):
+        _read_request(conn)
+        conn.sendall(
+            b"HTTP/1.1 500 Internal Server Error\r\n"
+            b"Content-Type: text/plain\r\n"
+            b"Content-Length: 9999999\r\n\r\n" + junk
+        )
+        threading.Event().wait(5)
+
+    with _SocketServer(fill_then_stall) as base_url:
+        slow = Client(api_key, base_url=base_url, timeout=1.0)
+        with pytest.raises(NetworkError) as excinfo:
+            slow.text_search("pizza")
+    exc = excinfo.value
+    assert "timeout" in str(exc)
+    assert exc.retryable is True
+
+
+def test_completed_over_cap_error_body_still_reports_the_cap(
+    client, raw_response
+):
+    # The pair of the past cap timeout pin: a body that overflows
+    # the cap and completes is genuinely capped, and its message
+    # keeps the capped wording (the Round 23 discipline).
+    raw_response(500, b"x" * 300_000, "text/plain")
+    with pytest.raises(ApiError) as excinfo:
+        client.text_search("pizza")
+    assert "stopped at the 262144 byte cap" in str(excinfo.value)
+
+
+# --- The head scan and duplicate keys
+
+
+def _deep_fragment() -> str:
+    return json.dumps(_nested(150))
+
+
+def test_head_scan_takes_the_last_of_two_error_objects(client, raw_response):
+    # The whole document parse resolves a duplicated key last
+    # wins; the scan resolved a duplicated error key first
+    # wins. With the parse defeated by the deep sibling, the
+    # scan now walks past the first error object and the later
+    # one classifies the call.
+    body = (
+        '{"error": {"code": 400, "message": "first", '
+        '"status": "INVALID_ARGUMENT"}, '
+        '"error": {"code": 429, "message": "second", '
+        '"status": "RESOURCE_EXHAUSTED"}, '
+        f'"junk": {_deep_fragment()}}}'
+    )
+    raw_response(400, body)
+    with pytest.raises(RateLimitError) as excinfo:
+        client.text_search("pizza")
+    assert excinfo.value.google_status == "RESOURCE_EXHAUSTED"
+    assert "second" in str(excinfo.value)
+
+
+def test_head_scan_skips_a_non_object_error_value(client, raw_response):
+    # A first error key holding a string silenced the scan
+    # outright, even with a real envelope under a second key.
+    # The scan skips the non object value and keeps walking.
+    body = (
+        '{"error": "not an object", '
+        '"error": {"code": 404, "message": "gone", '
+        '"status": "NOT_FOUND"}, '
+        f'"junk": {_deep_fragment()}}}'
+    )
+    raw_response(400, body)
+    with pytest.raises(NotFoundError) as excinfo:
+        client.text_search("pizza")
+    assert excinfo.value.google_status == "NOT_FOUND"
+
+
+def test_head_scan_repeated_status_key_takes_the_last_value(
+    client, raw_response
+):
+    # A repeated status key whose later value is a number reads
+    # as no status in the whole parse, which then classifies by
+    # the numeric code. The scan kept the earlier string. Both
+    # paths now agree.
+    body = (
+        '{"error": {"code": 400, "message": "mixed", '
+        '"status": "RESOURCE_EXHAUSTED", "status": 42, '
+        f'"junk": {_deep_fragment()}}}}}'
+    )
+    raw_response(400, body)
+    with pytest.raises(InvalidRequestError) as excinfo:
+        client.text_search("pizza")
+    assert excinfo.value.google_status is None
+    assert excinfo.value.error_code == 400
+
+
+def test_scan_recovered_envelope_with_a_cut_message_says_so(
+    client, raw_response
+):
+    # The message runs far past the error read cap, so the
+    # capped read cuts it mid string and the scan recovers the
+    # status and code without it. The fallback text says the
+    # message could not be read in full instead of claiming
+    # the envelope carried none.
+    body = (
+        '{"error": {"code": 429, "status": "RESOURCE_EXHAUSTED", '
+        '"message": "' + "x" * 400_000 + '", "details": []}}'
+    )
+    raw_response(400, body)
+    with pytest.raises(RateLimitError) as excinfo:
+        client.text_search("pizza")
+    message = str(excinfo.value)
+    assert "could not be read in full" in message
+    assert "carried no message" not in message
