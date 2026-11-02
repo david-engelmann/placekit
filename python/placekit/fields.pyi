@@ -1,6 +1,8 @@
 from dataclasses import dataclass
 from typing import Iterable, Tuple, Union
 
+MAX_MATERIALIZED_ITEMS: int
+
 TEXT_SEARCH_FIELDS: Tuple[str, ...]
 NEARBY_SEARCH_FIELDS: Tuple[str, ...]
 PLACE_DETAILS_FIELDS: Tuple[str, ...]

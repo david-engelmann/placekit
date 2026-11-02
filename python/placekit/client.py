@@ -17,7 +17,8 @@ from typing import Any, Callable, Iterable, Optional
 from . import _placekit
 from ._placekit import PlacesError as _CorePlacesError
 from .exceptions import ConfigError, DecodeError, raise_translated
-from .fields import FieldsLike, normalize_fields
+from .fields import MAX_MATERIALIZED_ITEMS, FieldsLike, normalize_fields
+from .types import COLLECTION_CITIES, COLLECTION_REGIONS
 from .models import (
     AutocompleteResult,
     LatLng,
@@ -36,7 +37,9 @@ def _drop_none(body: dict[str, Any]) -> dict[str, Any]:
 
 
 def _string_list(
-    name: str, value: Optional[Iterable[str]]
+    name: str,
+    value: Optional[Iterable[str]],
+    max_items: Optional[int] = None,
 ) -> Optional[list[str]]:
     """Materialize an iterable-of-strings parameter exactly once.
 
@@ -48,6 +51,15 @@ def _string_list(
     generator, which is indistinguishable from an empty one: the
     filter is omitted rather than sent as an empty list, and the
     behavior is the same in every slot (RT5-L2).
+
+    Materialisation is bounded (R20-F01 and F02). ``max_items`` is
+    the slot's documented maximum where the API states one; every
+    other slot materialises under the universal ceiling
+    ``MAX_MATERIALIZED_ITEMS``. An iterable that runs past its bound
+    is refused with a ConfigError instead of being consumed until
+    memory runs out, and anything the iterable raises while being
+    read surfaces as a ConfigError with the original exception
+    chained (R20-F10).
     """
     if value is None:
         return None
@@ -56,18 +68,73 @@ def _string_list(
             f"{name} must be an iterable of strings, not a single "
             f"string: {value!r}"
         )
+    limit = MAX_MATERIALIZED_ITEMS if max_items is None else max_items
     try:
-        items = list(value)
+        iterator = iter(value)
     except TypeError as exc:
         raise ConfigError(
             f"{name} must be an iterable of strings, got {value!r}"
         ) from exc
+    except Exception as exc:
+        raise ConfigError(
+            f"{name} could not be read as an iterable: {exc!r}"
+        ) from exc
+    items: list[str] = []
+    while True:
+        try:
+            item = next(iterator)
+        except StopIteration:
+            break
+        except Exception as exc:
+            raise ConfigError(
+                f"{name} raised while being read: {exc!r}"
+            ) from exc
+        items.append(item)
+        if len(items) > limit:
+            if max_items is None:
+                raise ConfigError(
+                    f"{name} materialised past the ceiling of "
+                    f"{limit} items; refusing to consume an "
+                    "unbounded iterable"
+                )
+            raise ConfigError(
+                f"{name} takes at most {limit} items, got more"
+            )
     for item in items:
         if not isinstance(item, str):
             raise ConfigError(
                 f"{name} items must be strings, got {item!r}"
             )
     return items or None
+
+
+def _validate_code_string(
+    name: str, value: Optional[str]
+) -> Optional[str]:
+    """Validate a short code string bound for the wire.
+
+    Language and region codes and their kin (the session token, the
+    resolved place id, the photo name) must be strings, and they
+    must not carry control characters or unpaired surrogates. Both
+    are refused here, at the Python layer, with a ConfigError, so a
+    value that cannot be a code in any reading no longer reaches
+    the wire percent encoded inside a query or a JSON body, and a
+    string that cannot be encoded as UTF-8 no longer escapes the
+    native conversion as a bare UnicodeEncodeError (R20-F07, F08
+    and F09).
+    """
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise ConfigError(f"{name} must be a string, got {value!r}")
+    for char in value:
+        code = ord(char)
+        if code < 0x20 or 0x7F <= code <= 0x9F or 0xD800 <= code <= 0xDFFF:
+            raise ConfigError(
+                f"{name} must not contain control characters or "
+                f"unpaired surrogates, got {value!r}"
+            )
+    return value
 
 
 def _validate_bool(name: str, value: Optional[bool]) -> Optional[bool]:
@@ -181,14 +248,57 @@ _DICT_LIST_FIELDS = frozenset(
 _MAX_DICT_DEPTH = 128
 
 
-def _validate_dict_body(name: str, value: Any, depth: int = 0) -> None:
+def _mapping_copy(name: str, value: Mapping) -> dict[str, Any]:
+    """Copy one caller mapping under the materialisation ceiling.
+
+    The copy is built item by item instead of through ``dict(...)``
+    so a mapping whose item stream never ends is refused after the
+    ceiling instead of being consumed forever, and anything the
+    mapping raises while being read surfaces as a ConfigError with
+    the original exception chained (R20-F01 and F11).
+    """
+    try:
+        iterator = iter(value.items())
+    except Exception as exc:
+        raise ConfigError(
+            f"{name} could not be read as a mapping: {exc!r}"
+        ) from exc
+    result: dict[str, Any] = {}
+    while True:
+        try:
+            key, item = next(iterator)
+        except StopIteration:
+            break
+        except Exception as exc:
+            raise ConfigError(
+                f"{name} raised while being read: {exc!r}"
+            ) from exc
+        result[key] = item
+        if len(result) > MAX_MATERIALIZED_ITEMS:
+            raise ConfigError(
+                f"{name} materialised past the ceiling of "
+                f"{MAX_MATERIALIZED_ITEMS} entries; refusing to "
+                "consume an unbounded mapping"
+            )
+    return result
+
+
+def _validate_dict_body(
+    name: str, value: Any, depth: int = 0, budget: Optional[list] = None
+) -> None:
     """Recursively guard one free-form dict body parameter.
 
     Only the documented list-typed fields are checked, but they are
     checked at any nesting depth, so a bare string can never be
     iterated anywhere in body building. Everything else in these
     dicts is free-form by design and passes through untouched.
+
+    The walk carries a node budget under the universal ceiling, so
+    a structure whose nested mappings or sequences never end is
+    refused instead of being walked forever (R20-F01).
     """
+    if budget is None:
+        budget = [MAX_MATERIALIZED_ITEMS]
     if depth > _MAX_DICT_DEPTH:
         raise ConfigError(
             f"{name} is nested deeper than {_MAX_DICT_DEPTH} levels; "
@@ -196,15 +306,29 @@ def _validate_dict_body(name: str, value: Any, depth: int = 0) -> None:
         )
     if isinstance(value, Mapping):
         for key, item in value.items():
+            budget[0] -= 1
+            if budget[0] < 0:
+                raise ConfigError(
+                    f"{name} carries more than "
+                    f"{MAX_MATERIALIZED_ITEMS} values; refusing to "
+                    "walk an unbounded structure"
+                )
             if key in _DICT_LIST_FIELDS and isinstance(item, (str, bytes)):
                 raise ConfigError(
                     f"{name} field {key!r} must be a list of strings, "
                     f"not a single string: {item!r}"
                 )
-            _validate_dict_body(name, item, depth + 1)
+            _validate_dict_body(name, item, depth + 1, budget)
     elif isinstance(value, (list, tuple)):
         for item in value:
-            _validate_dict_body(name, item, depth + 1)
+            budget[0] -= 1
+            if budget[0] < 0:
+                raise ConfigError(
+                    f"{name} carries more than "
+                    f"{MAX_MATERIALIZED_ITEMS} values; refusing to "
+                    "walk an unbounded structure"
+                )
+            _validate_dict_body(name, item, depth + 1, budget)
 
 
 def _location_body(
@@ -229,17 +353,17 @@ def _location_body(
         raise ConfigError(
             f"location bias or restriction must be a dict, got {value!r}"
         )
-    result = dict(value)
+    result = _mapping_copy(name, value)
     circle = result.get("circle")
     if isinstance(circle, dict) and "center" in circle:
-        circle = dict(circle)
+        circle = _mapping_copy(name, circle)
         center = circle["center"]
         if isinstance(center, (LatLng, tuple, list, Mapping)):
             circle["center"] = _validate_lat_lng(center, "circle center")
         result["circle"] = circle
     rectangle = result.get("rectangle")
     if isinstance(rectangle, dict):
-        rectangle = dict(rectangle)
+        rectangle = _mapping_copy(name, rectangle)
         for corner in ("low", "high"):
             point = rectangle.get(corner)
             if isinstance(point, (LatLng, tuple, list, Mapping)):
@@ -258,7 +382,7 @@ def _routing_body(value: Optional[dict[str, Any]]) -> Optional[dict[str, Any]]:
         return None
     if not isinstance(value, Mapping):
         raise ConfigError(f"routing_parameters must be a dict, got {value!r}")
-    result = dict(value)
+    result = _mapping_copy("routing_parameters", value)
     origin = result.get("origin")
     if isinstance(origin, (LatLng, tuple, list, Mapping)):
         result["origin"] = _validate_lat_lng(origin, "routing origin")
@@ -272,7 +396,7 @@ def _mapping_body(name: str, value: Optional[dict[str, Any]]) -> Optional[dict[s
         return None
     if not isinstance(value, Mapping):
         raise ConfigError(f"{name} must be a dict, got {value!r}")
-    result = dict(value)
+    result = _mapping_copy(name, value)
     _validate_dict_body(name, result)
     return result
 
@@ -401,6 +525,25 @@ class _Base:
         if exc.context is None:
             return ConfigError(str(exc), context=context)
         return exc
+
+    @staticmethod
+    def _invalid_arguments(context: str, exc: Exception) -> ConfigError:
+        """Wrap a failure a caller supplied object raised while its
+        arguments were being validated or materialised.
+
+        Hostile or merely broken caller objects (an int subclass
+        whose comparison raises, a string subclass whose formatting
+        raises, a mapping whose item access raises) used to escape
+        the argument phase as bare builtin exceptions. Local misuse
+        has one documented type, so the failure surfaces as a
+        ConfigError with the original exception chained (R20-F11,
+        F16 and F17).
+        """
+        return ConfigError(
+            f"an argument for {context} raised while it was being "
+            f"validated: {exc!r}",
+            context=context,
+        )
 
     @staticmethod
     def _check_no_running_loop(context: str) -> None:
@@ -672,8 +815,8 @@ class _Base:
             {
                 "textQuery": query,
                 "pageToken": page_token,
-                "languageCode": language,
-                "regionCode": region,
+                "languageCode": _validate_code_string("language", language),
+                "regionCode": _validate_code_string("region", region),
                 "rankPreference": rank_preference,
                 "openNow": _validate_bool("open_now", open_now),
                 "priceLevels": _string_list("price_levels", price_levels),
@@ -726,19 +869,27 @@ class _Base:
         return _drop_none(
             {
                 "locationRestriction": _circle_body(location, radius_m),
-                "includedTypes": _string_list("included_types", included_types),
-                "excludedTypes": _string_list("excluded_types", excluded_types),
+                "includedTypes": _string_list(
+                    "included_types", included_types, max_items=50
+                ),
+                "excludedTypes": _string_list(
+                    "excluded_types", excluded_types, max_items=50
+                ),
                 "includedPrimaryTypes": _string_list(
-                    "included_primary_types", included_primary_types
+                    "included_primary_types",
+                    included_primary_types,
+                    max_items=50,
                 ),
                 "excludedPrimaryTypes": _string_list(
-                    "excluded_primary_types", excluded_primary_types
+                    "excluded_primary_types",
+                    excluded_primary_types,
+                    max_items=50,
                 ),
                 "maxResultCount": _Base._validate_int_range(
                     "max_results", max_results, 1, 20
                 ),
-                "languageCode": language,
-                "regionCode": region,
+                "languageCode": _validate_code_string("language", language),
+                "regionCode": _validate_code_string("region", region),
                 "rankPreference": rank_preference,
                 "routingParameters": _routing_body(routing_parameters),
                 "includeFutureOpeningBusinesses": _validate_bool(
@@ -765,11 +916,32 @@ class _Base:
         include_pure_service_area_businesses: Optional[bool] = None,
         include_future_opening_businesses: Optional[bool] = None,
     ) -> dict[str, Any]:
+        primary_types = _string_list(
+            "included_primary_types",
+            included_primary_types,
+            max_items=5,
+        )
+        if (
+            primary_types is not None
+            and len(primary_types) > 1
+            and any(
+                item in (COLLECTION_CITIES, COLLECTION_REGIONS)
+                for item in primary_types
+            )
+        ):
+            # The types module states the rule the wire enforces:
+            # a collection is not a type and may appear only as the
+            # sole primary type value, never mixed (R20-F02).
+            raise ConfigError(
+                "included_primary_types may carry a collection "
+                f"such as {COLLECTION_CITIES} or {COLLECTION_REGIONS} "
+                "only as its sole value"
+            )
         return _drop_none(
             {
                 "input": input_text,
-                "languageCode": language,
-                "regionCode": region,
+                "languageCode": _validate_code_string("language", language),
+                "regionCode": _validate_code_string("region", region),
                 "sessionToken": session_token,
                 "includedRegionCodes": _string_list(
                     "included_region_codes", included_region_codes
@@ -789,9 +961,7 @@ class _Base:
                 "inputOffset": _Base._validate_int_range(
                     "input_offset", input_offset, 0, 2**31 - 1
                 ),
-                "includedPrimaryTypes": _string_list(
-                    "included_primary_types", included_primary_types
-                ),
+                "includedPrimaryTypes": primary_types,
                 "includePureServiceAreaBusinesses": _validate_bool(
                     "include_pure_service_area_businesses",
                     include_pure_service_area_businesses,
@@ -892,6 +1062,8 @@ class Client(_Base):
             fields_list = normalize_fields(fields)
         except ConfigError as exc:
             raise self._with_context(exc, "text_search") from exc
+        except Exception as exc:
+            raise self._invalid_arguments("text_search", exc) from exc
         try:
             data = inner.text_search(body, fields_list)
         except _CorePlacesError as exc:
@@ -918,8 +1090,10 @@ class Client(_Base):
         """Search for places around ``location`` within ``radius_m`` meters.
 
         ``rank_preference`` is ``"DISTANCE"`` or ``"POPULARITY"``.
-        The primary type filters take up to 50 place types each, and a
-        type listed in both is an error at the API.
+        The type filters take up to 50 place types each, and a type
+        listed in both an included and an excluded filter is an
+        error at the API. The stated limits are enforced locally;
+        a longer list raises ``ConfigError`` before any request.
         """
         inner = self._ensure_open("nearby_search")
         self._check_no_running_loop("nearby_search")
@@ -941,6 +1115,8 @@ class Client(_Base):
             fields_list = normalize_fields(fields)
         except ConfigError as exc:
             raise self._with_context(exc, "nearby_search") from exc
+        except Exception as exc:
+            raise self._invalid_arguments("nearby_search", exc) from exc
         try:
             data = inner.nearby_search(body, fields_list)
         except _CorePlacesError as exc:
@@ -978,13 +1154,23 @@ class Client(_Base):
         self._check_no_running_loop("place_details")
         try:
             resolved_id = self._resolve_place_id(place_id)
+            resolved_id = _validate_code_string("place_id", resolved_id)
+            context = f"place_details place_id={resolved_id}"
         except ConfigError as exc:
             raise self._with_context(exc, "place_details") from exc
-        context = f"place_details place_id={resolved_id}"
+        except Exception as exc:
+            raise self._invalid_arguments("place_details", exc) from exc
         try:
+            language = _validate_code_string("language", language)
+            region = _validate_code_string("region", region)
+            session_token = _validate_code_string(
+                "session_token", session_token
+            )
             fields_list = normalize_fields(fields)
         except ConfigError as exc:
             raise self._with_context(exc, context) from exc
+        except Exception as exc:
+            raise self._invalid_arguments(context, exc) from exc
         try:
             data = inner.place_details(
                 resolved_id,
@@ -1021,7 +1207,10 @@ class Client(_Base):
         tuple) to get ``distance_meters`` on predictions; without an
         origin the API returns no distances. ``included_primary_types``
         takes up to 5 place types, or the single collection ``(cities)``
-        or ``(regions)``. A ``fields`` mask is optional on this endpoint.
+        or ``(regions)`` standing alone. The stated limit is enforced
+        locally; a longer list, or a collection mixed with other
+        values, raises ``ConfigError`` before any request. A ``fields``
+        mask is optional on this endpoint.
         """
         inner = self._ensure_open("autocomplete")
         self._check_no_running_loop("autocomplete")
@@ -1047,6 +1236,8 @@ class Client(_Base):
             fields_list = normalize_fields(fields)
         except ConfigError as exc:
             raise self._with_context(exc, "autocomplete") from exc
+        except Exception as exc:
+            raise self._invalid_arguments("autocomplete", exc) from exc
         try:
             data = inner.autocomplete(body, fields_list)
         except _CorePlacesError as exc:
@@ -1092,12 +1283,15 @@ class Client(_Base):
             name, width, height = self._resolve_photo_args(
                 photo_name, max_width_px, max_height_px
             )
+            name = _validate_code_string("photo_name", name)
+            context = f"place_photo name={name}"
+            self._validate_photo_args(
+                name, width, height, skip_http_redirect, context
+            )
         except ConfigError as exc:
             raise self._with_context(exc, "place_photo") from exc
-        context = f"place_photo name={name}"
-        self._validate_photo_args(
-            name, width, height, skip_http_redirect, context
-        )
+        except Exception as exc:
+            raise self._invalid_arguments("place_photo", exc) from exc
         try:
             tagged = inner.place_photo(
                 name, width, height, skip_http_redirect
@@ -1190,6 +1384,8 @@ class AsyncClient(_Base):
             fields_list = normalize_fields(fields)
         except ConfigError as exc:
             raise self._with_context(exc, "text_search") from exc
+        except Exception as exc:
+            raise self._invalid_arguments("text_search", exc) from exc
         try:
             data = await inner.text_search_async(body, fields_list)
         except _CorePlacesError as exc:
@@ -1233,6 +1429,8 @@ class AsyncClient(_Base):
             fields_list = normalize_fields(fields)
         except ConfigError as exc:
             raise self._with_context(exc, "nearby_search") from exc
+        except Exception as exc:
+            raise self._invalid_arguments("nearby_search", exc) from exc
         try:
             data = await inner.nearby_search_async(body, fields_list)
         except _CorePlacesError as exc:
@@ -1269,13 +1467,23 @@ class AsyncClient(_Base):
         inner = self._ensure_open("place_details")
         try:
             resolved_id = self._resolve_place_id(place_id)
+            resolved_id = _validate_code_string("place_id", resolved_id)
+            context = f"place_details place_id={resolved_id}"
         except ConfigError as exc:
             raise self._with_context(exc, "place_details") from exc
-        context = f"place_details place_id={resolved_id}"
+        except Exception as exc:
+            raise self._invalid_arguments("place_details", exc) from exc
         try:
+            language = _validate_code_string("language", language)
+            region = _validate_code_string("region", region)
+            session_token = _validate_code_string(
+                "session_token", session_token
+            )
             fields_list = normalize_fields(fields)
         except ConfigError as exc:
             raise self._with_context(exc, context) from exc
+        except Exception as exc:
+            raise self._invalid_arguments(context, exc) from exc
         try:
             data = await inner.place_details_async(
                 resolved_id,
@@ -1330,6 +1538,8 @@ class AsyncClient(_Base):
             fields_list = normalize_fields(fields)
         except ConfigError as exc:
             raise self._with_context(exc, "autocomplete") from exc
+        except Exception as exc:
+            raise self._invalid_arguments("autocomplete", exc) from exc
         try:
             data = await inner.autocomplete_async(
                 body, fields_list
@@ -1371,12 +1581,15 @@ class AsyncClient(_Base):
             name, width, height = self._resolve_photo_args(
                 photo_name, max_width_px, max_height_px
             )
+            name = _validate_code_string("photo_name", name)
+            context = f"place_photo name={name}"
+            self._validate_photo_args(
+                name, width, height, skip_http_redirect, context
+            )
         except ConfigError as exc:
             raise self._with_context(exc, "place_photo") from exc
-        context = f"place_photo name={name}"
-        self._validate_photo_args(
-            name, width, height, skip_http_redirect, context
-        )
+        except Exception as exc:
+            raise self._invalid_arguments("place_photo", exc) from exc
         try:
             tagged = await inner.place_photo_async(
                 name, width, height, skip_http_redirect

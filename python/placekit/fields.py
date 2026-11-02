@@ -29,6 +29,15 @@ from typing import Iterable, Tuple, Union
 
 from .exceptions import ConfigError
 
+#: The universal ceiling on caller iterables the client materialises
+#: (field masks here, list and mapping parameters in the client).
+#: Slots whose API documentation states a smaller maximum enforce
+#: that maximum instead; this ceiling is the bound for every other
+#: slot, so an endless or absurd iterable is refused with a
+#: ConfigError after this many items instead of being consumed
+#: until memory runs out (R20-F01 and F02).
+MAX_MATERIALIZED_ITEMS = 1000
+
 #: Default paths requested by text_search when no fields are given.
 TEXT_SEARCH_FIELDS: Tuple[str, ...] = (
     "places.id",
@@ -185,6 +194,12 @@ class FieldMask:
         A single string is not an iterable of paths for this purpose;
         it is rejected rather than shredded into one-character paths.
         Sets are sorted first so the header order is deterministic.
+
+        The iterable is materialised under the universal ceiling
+        (``MAX_MATERIALIZED_ITEMS``), and anything it raises while
+        being read surfaces as a ConfigError with the original
+        exception chained, so a hostile or endless iterable fails
+        the way every other local misuse fails (R20-F01 and F10).
         """
         if isinstance(paths, (str, bytes)):
             raise ConfigError(
@@ -193,7 +208,35 @@ class FieldMask:
             )
         if isinstance(paths, (set, frozenset)):
             paths = sorted(paths)
-        return cls(*paths)
+        try:
+            iterator = iter(paths)
+        except TypeError as exc:
+            raise ConfigError(
+                "FieldMask.of expects an iterable of field paths, "
+                f"got {paths!r}"
+            ) from exc
+        except Exception as exc:
+            raise ConfigError(
+                f"field paths could not be read as an iterable: {exc!r}"
+            ) from exc
+        items: list[str] = []
+        while True:
+            try:
+                item = next(iterator)
+            except StopIteration:
+                break
+            except Exception as exc:
+                raise ConfigError(
+                    f"field paths raised while being read: {exc!r}"
+                ) from exc
+            items.append(item)
+            if len(items) > MAX_MATERIALIZED_ITEMS:
+                raise ConfigError(
+                    "field paths materialised past the ceiling of "
+                    f"{MAX_MATERIALIZED_ITEMS} items; refusing to "
+                    "consume an unbounded iterable"
+                )
+        return cls(*items)
 
     @classmethod
     def text_search(cls) -> "FieldMask":
