@@ -17,16 +17,38 @@
 //! opposite: they are validated in the core before anything is sent.
 //!
 //! One consequence of the leniency posture is worth stating plainly.
-//! Typed values default what the server omitted (a location carrying
-//! only a latitude reads a longitude of 0.0), and the typed dict these
-//! models reserialize into for the Python layer carries that default,
-//! exactly as it always has. The `raw` view is a different
-//! construction since Round 16. The core returns the response body
-//! beside the typed value, and the Python layer builds `raw` from the
-//! body itself, so raw claims exactly what the server said and
-//! nothing it did not. The two views can therefore disagree on a
-//! partial object, deliberately. Raw is the wire record. The typed
-//! value is the lenient reading of it.
+//! Internal typed reads default what the server omitted (a location
+//! carrying only a latitude reads a longitude of 0.0 through the
+//! typed accessor), but the typed dict these models reserialize into
+//! for the Python layer carries presence, not defaults. An absent
+//! field stays absent in the dict, an explicit null stays null and a
+//! sent value stays itself, so the Python layer applies its own
+//! contract to what the wire actually sent (Round 23; before this
+//! round the coordinate positions reserialized the 0.0 default, so a
+//! partial location handed Python a coordinate the wire never sent).
+//! The `raw` view is a separate construction since Round 16. The
+//! core returns the response body beside the typed value, and the
+//! Python layer builds `raw` from the body itself, so raw claims
+//! exactly what the server said and nothing it did not. Raw is the
+//! wire record. The typed dict is the presence carrying reading of
+//! it, and the typed accessors are the lenient reading of that.
+//!
+//! Representation conventions, so a reader of one layer is not
+//! misled about the other. Response positions where absence, an
+//! explicit null and a sent value read differently in Python carry
+//! the presence wrappers defined below (`WireString`, `WireFloat`,
+//! `WireList`); every other response field is a plain `Option`.
+//! Python integers are unbounded, so a count or dimension the core
+//! holds in a bounded integer type (u32, u64, i32) is the same wire
+//! value in a narrower carrier, and the lenient decoders below
+//! refuse what the carrier cannot hold rather than correcting it.
+//! Fields the core does not type ride in the flattened `extra` map
+//! of their struct or of its nearest typed ancestor and reach
+//! Python unchanged. Where the wire nests a value, the core keeps
+//! the wire nesting: an autocomplete prediction's display split
+//! stays a `StructuredFormat` object here, even though Python
+//! flattens `main_text` and `secondary_text` onto the prediction
+//! itself.
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
@@ -38,9 +60,9 @@ use serde_json::{Map, Value};
 /// A latitude/longitude pair.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct LatLng {
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "wire_float_absent")]
     pub latitude: WireFloat,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "wire_float_absent")]
     pub longitude: WireFloat,
     /// Unknown fields inside a decoded coordinate object, preserved like
     /// on the other response types.
@@ -73,8 +95,9 @@ pub struct LocalizedText {
 
 /// Decode a request circle center, requiring both coordinates.
 ///
-/// Response leniency defaults a missing latitude or longitude to 0.0,
-/// which is the right posture for values the API sent. A request body
+/// Response leniency reads a missing latitude or longitude as 0.0
+/// through the typed accessor, which is the right posture for values
+/// the API sent. A request body
 /// is caller supplied, though, and the same defaults silently aimed a
 /// circle whose center was absent, or missing one coordinate, at
 /// latitude 0.0 and longitude 0.0. Circle is request geometry only,
@@ -121,9 +144,9 @@ pub struct LocationRestriction {
 /// corners. Used by location bias and restriction values.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Viewport {
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "latlng_absent")]
     pub low: LatLng,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "latlng_absent")]
     pub high: LatLng,
     #[serde(flatten)]
     pub extra: Map<String, Value>,
@@ -456,36 +479,71 @@ fn wire_string_absent(value: &WireString) -> bool {
     value.0.is_none()
 }
 
-/// A response coordinate with its wire presence state. Absence
-/// decodes to the typed default the leniency posture promises, so
-/// the wrapper only needs to carry one extra state of its own, the
-/// explicit null, which the reserialized dict must emit as null
-/// while every internal read keeps the default.
+/// Skip guard for a [`WireFloat`] field. Only an absent coordinate
+/// is omitted from the reserialized dict. An explicit null stays as
+/// null and a sent value stays as itself.
+fn wire_float_absent(value: &WireFloat) -> bool {
+    value.is_absent()
+}
+
+/// Skip guard for a [`Viewport`] corner. A corner the wire did not
+/// carry at all decodes to a [`LatLng`] whose coordinates are both
+/// absent and whose extra map is empty, and that shape is omitted
+/// from the reserialized dict so the dict never claims a corner the
+/// wire never sent (Round 23). A corner the wire did carry keeps
+/// whatever it carried: present coordinates serialize as themselves,
+/// and a corner carrying only unknown fields keeps those fields, so
+/// the Python layer sees the corner and refuses it on its own
+/// contract for the missing coordinates.
+fn latlng_absent(value: &LatLng) -> bool {
+    value.latitude.is_absent() && value.longitude.is_absent() && value.extra.is_empty()
+}
+
+/// A response coordinate with its wire presence state, on the same
+/// two option shape as [`WireString`]. The outer option is the
+/// carried state (absent or carried) and the inner option is the
+/// null state (null or a sent number). The wrapper carries all three
+/// states because the reserialized dict must tell them apart: an
+/// absent coordinate is omitted, an explicit null is emitted as null
+/// and a sent value is emitted as itself. Before Round 23 a single
+/// option carried only the null state and the field default was a
+/// present 0.0, so an absent coordinate reserialized as a fabricated
+/// 0.0 the wire never sent. Internal reads keep the leniency
+/// reading: an absent or null coordinate reads as 0.0 through
+/// [`WireFloat::value`].
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub struct WireFloat(Option<f64>);
+pub struct WireFloat(Option<Option<f64>>);
 
 impl WireFloat {
-    /// The typed coordinate. An explicit null reads as the absence
-    /// default, exactly as a missing coordinate does.
+    /// The typed coordinate. An absent coordinate and an explicit
+    /// null both read as the absence default, 0.0.
     pub fn value(&self) -> f64 {
-        self.0.unwrap_or(0.0)
+        match self.0 {
+            Some(Some(value)) => value,
+            _ => 0.0,
+        }
     }
 
     /// True when the wire carried an explicit null.
     pub fn is_null(&self) -> bool {
+        matches!(self.0, Some(None))
+    }
+
+    /// True when the wire carried no value at all for this field.
+    pub fn is_absent(&self) -> bool {
         self.0.is_none()
     }
 }
 
 impl Default for WireFloat {
     fn default() -> Self {
-        WireFloat(Some(0.0))
+        WireFloat(None)
     }
 }
 
 impl From<f64> for WireFloat {
     fn from(value: f64) -> Self {
-        WireFloat(Some(value))
+        WireFloat(Some(Some(value)))
     }
 }
 
@@ -501,8 +559,12 @@ impl serde::Serialize for WireFloat {
         S: serde::Serializer,
     {
         match self.0 {
-            Some(value) => serializer.serialize_f64(value),
-            None => serializer.serialize_none(),
+            Some(Some(value)) => serializer.serialize_f64(value),
+            // An explicit null serializes as null. The absent state
+            // lands here only when a value is serialized without its
+            // field skip guard, and null is the honest rendering of a
+            // carried nothing in that case.
+            _ => serializer.serialize_none(),
         }
     }
 }
@@ -525,42 +587,42 @@ impl<'de> serde::Deserialize<'de> for WireFloat {
             where
                 E: serde::de::Error,
             {
-                Ok(WireFloat(None))
+                Ok(WireFloat(Some(None)))
             }
 
             fn visit_unit<E>(self) -> Result<WireFloat, E>
             where
                 E: serde::de::Error,
             {
-                Ok(WireFloat(None))
+                Ok(WireFloat(Some(None)))
             }
 
             fn visit_some<D>(self, deserializer: D) -> Result<WireFloat, D::Error>
             where
                 D: serde::Deserializer<'de>,
             {
-                Ok(WireFloat(Some(f64::deserialize(deserializer)?)))
+                Ok(WireFloat(Some(Some(f64::deserialize(deserializer)?))))
             }
 
             fn visit_f64<E>(self, value: f64) -> Result<WireFloat, E>
             where
                 E: serde::de::Error,
             {
-                Ok(WireFloat(Some(value)))
+                Ok(WireFloat(Some(Some(value))))
             }
 
             fn visit_i64<E>(self, value: i64) -> Result<WireFloat, E>
             where
                 E: serde::de::Error,
             {
-                Ok(WireFloat(Some(value as f64)))
+                Ok(WireFloat(Some(Some(value as f64))))
             }
 
             fn visit_u64<E>(self, value: u64) -> Result<WireFloat, E>
             where
                 E: serde::de::Error,
             {
-                Ok(WireFloat(Some(value as f64)))
+                Ok(WireFloat(Some(Some(value as f64))))
             }
         }
 
@@ -1327,7 +1389,8 @@ mod tests {
         // R4-01: one partial nested object must not fail the whole
         // response. A location carrying only a latitude, a viewport
         // carrying only one corner of one point, and a circle carrying
-        // only a center all decode with the missing pieces defaulted.
+        // only a center all decode with the missing pieces defaulted
+        // for internal reads.
         let resp: SearchResponse =
             serde_json::from_str(r#"{"places":[{"id":"ChIJx","location":{"latitude":-33.86}}]}"#)
                 .unwrap();
@@ -1348,6 +1411,94 @@ mod tests {
             value,
             serde_json::json!({"latitude": -33.86, "longitude": 151.2})
         );
+        // The reserialized dict carries presence, not the internal
+        // defaults (Round 23): the absent longitude is omitted rather
+        // than emitted as the 0.0 the internal read reports, and the
+        // absent viewport corner is omitted rather than emitted as a
+        // fabricated corner at 0.0, 0.0.
+        let value = serde_json::to_value(&resp).unwrap();
+        assert_eq!(
+            value["places"][0]["location"],
+            serde_json::json!({"latitude": -33.86})
+        );
+        let value = serde_json::to_value(&place).unwrap();
+        assert_eq!(
+            value["viewport"],
+            serde_json::json!({"low": {"latitude": 1.0}})
+        );
+    }
+
+    #[test]
+    fn absent_coordinates_stay_absent_in_the_typed_dict() {
+        // Round 23: the typed dict must never carry a value the wire
+        // did not send. Absence, an explicit null and a sent value
+        // are three different states in the dict for a coordinate,
+        // exactly as they already were for strings and lists.
+        let point: LatLng = serde_json::from_str(r#"{"latitude":51.5}"#).unwrap();
+        assert!(point.longitude.is_absent());
+        assert!(!point.longitude.is_null());
+        assert_eq!(
+            serde_json::to_value(&point).unwrap(),
+            serde_json::json!({"latitude": 51.5})
+        );
+        // An empty location object reserializes as an empty object,
+        // not as a place at the zero coordinate point.
+        let point: LatLng = serde_json::from_str(r#"{}"#).unwrap();
+        assert_eq!(serde_json::to_value(&point).unwrap(), serde_json::json!({}));
+        // An explicit null stays a null in the dict, distinct from
+        // absence, while its internal read is still the default.
+        let point: LatLng =
+            serde_json::from_str(r#"{"latitude":null,"longitude":2.0}"#).unwrap();
+        assert!(point.latitude.is_null());
+        assert!(!point.latitude.is_absent());
+        assert_eq!(point.latitude, 0.0);
+        assert_eq!(
+            serde_json::to_value(&point).unwrap(),
+            serde_json::json!({"latitude": null, "longitude": 2.0})
+        );
+        // A sent 0.0 is a value, not an absence: it survives
+        // reserialization exactly.
+        let point: LatLng =
+            serde_json::from_str(r#"{"latitude":0.0,"longitude":0.0}"#).unwrap();
+        assert!(!point.latitude.is_absent());
+        assert_eq!(
+            serde_json::to_value(&point).unwrap(),
+            serde_json::json!({"latitude": 0.0, "longitude": 0.0})
+        );
+    }
+
+    #[test]
+    fn absent_viewport_corners_stay_absent_in_the_typed_dict() {
+        // Round 23: a viewport missing a corner must not hand the
+        // Python layer a fabricated corner. The absent corner is
+        // omitted from the dict, and the corner that was sent keeps
+        // exactly what it carried.
+        let place: Place = serde_json::from_str(
+            r#"{"id":"ChIJx","viewport":{"high":{"latitude":1.0,"longitude":2.0}}}"#,
+        )
+        .unwrap();
+        let value = serde_json::to_value(&place).unwrap();
+        assert_eq!(
+            value["viewport"],
+            serde_json::json!({"high": {"latitude": 1.0, "longitude": 2.0}})
+        );
+        // A corner carrying only unknown fields is still a carried
+        // corner: the dict keeps the fields it carried (and no
+        // fabricated coordinates), so the Python layer sees the
+        // corner and refuses it on its own contract.
+        let place: Place = serde_json::from_str(
+            r#"{"id":"ChIJx","viewport":{"low":{"futureCornerField":7},"high":{"latitude":1.0,"longitude":2.0}}}"#,
+        )
+        .unwrap();
+        let value = serde_json::to_value(&place).unwrap();
+        assert_eq!(
+            value["viewport"]["low"],
+            serde_json::json!({"futureCornerField": 7})
+        );
+        // An empty location object on a place reserializes empty.
+        let place: Place = serde_json::from_str(r#"{"id":"ChIJx","location":{}}"#).unwrap();
+        let value = serde_json::to_value(&place).unwrap();
+        assert_eq!(value["location"], serde_json::json!({}));
     }
 
     #[test]
@@ -1694,8 +1845,13 @@ mod tests {
     fn presence_aware_coordinate_forwards_an_explicit_null() {
         // Round 16, class 3. A null coordinate decodes with the
         // typed default internally and reserializes as the explicit
-        // null, while a missing coordinate keeps reserializing as
-        // the default, which is the leniency the typed layer owes.
+        // null. Round 16 also kept a missing coordinate reserializing
+        // as the default and called it the leniency the typed layer
+        // owes; Round 23 supersedes that half, because the dict is
+        // the Python layer's input and a fabricated 0.0 there hands
+        // Python a coordinate the wire never sent. A missing
+        // coordinate now reserializes as absence, and only the
+        // internal read keeps the default.
         let place: Place = serde_json::from_str(
             r#"{"id":"ChIJx","location":{"latitude":null,"longitude":151.2}}"#,
         )
@@ -1711,10 +1867,12 @@ mod tests {
 
         let place: Place =
             serde_json::from_str(r#"{"id":"ChIJx","location":{"latitude":-33.86}}"#).unwrap();
+        let location = place.location.as_ref().unwrap();
+        assert_eq!(location.longitude.value(), 0.0);
         let value = serde_json::to_value(&place).unwrap();
         assert_eq!(
             value["location"],
-            serde_json::json!({"latitude": -33.86, "longitude": 0.0})
+            serde_json::json!({"latitude": -33.86})
         );
     }
 

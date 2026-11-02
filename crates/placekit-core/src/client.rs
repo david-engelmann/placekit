@@ -1087,25 +1087,40 @@ fn validate_lat_lng(point: &LatLng, label: &str) -> Result<(), Error> {
     // A coordinate the wire carried as an explicit null reads as
     // the typed default internally (Round 16), but on a request it
     // is still the non-finite shape this validation exists to
-    // reject, since it would serialize back out as JSON null.
+    // reject, since it would serialize back out as JSON null. A
+    // coordinate that is absent altogether (a state the wrapper
+    // carries separately since Round 23) is refused on the same
+    // ground: its internal reading is 0.0, and sending the request
+    // would aim it at that coordinate without a word.
     let latitude = point.latitude.value();
-    if point.latitude.is_null() || !latitude.is_finite() || !(-90.0..=90.0).contains(&latitude) {
+    if point.latitude.is_null()
+        || point.latitude.is_absent()
+        || !latitude.is_finite()
+        || !(-90.0..=90.0).contains(&latitude)
+    {
         return Err(Error::config(format!(
             "{label} latitude must be finite and within -90 to 90, got {}",
             if point.latitude.is_null() {
                 "null".to_owned()
+            } else if point.latitude.is_absent() {
+                "a missing value".to_owned()
             } else {
                 latitude.to_string()
             }
         )));
     }
     let longitude = point.longitude.value();
-    if point.longitude.is_null() || !longitude.is_finite() || !(-180.0..=180.0).contains(&longitude)
+    if point.longitude.is_null()
+        || point.longitude.is_absent()
+        || !longitude.is_finite()
+        || !(-180.0..=180.0).contains(&longitude)
     {
         return Err(Error::config(format!(
             "{label} longitude must be finite and within -180 to 180, got {}",
             if point.longitude.is_null() {
                 "null".to_owned()
+            } else if point.longitude.is_absent() {
+                "a missing value".to_owned()
             } else {
                 longitude.to_string()
             }
