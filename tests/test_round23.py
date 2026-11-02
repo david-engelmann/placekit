@@ -116,3 +116,45 @@ def test_zero_coordinates_are_values_not_absence(client, raw_response):
     place = client.place_details("ChIJx")
     assert place.location.latitude == 0.0
     assert place.location.longitude == 0.0
+
+
+def test_wrongly_typed_field_refusal_names_its_path(client, raw_response):
+    # Round 23 diagnosability for the M2 gate: one misshapen element
+    # in one result refuses the whole call, and the refusal names
+    # the field path with its element index instead of leaving the
+    # caller to guess which documented field changed type.
+    body = json.dumps(
+        {
+            "places": [
+                {"id": "ChIJ1", "rating": 4.5},
+                {"id": "ChIJ2", "rating": "high"},
+            ]
+        }
+    ).encode()
+    raw_response(200, body)
+    with pytest.raises(DecodeError) as excinfo:
+        client.text_search("cafes")
+    assert "places[1].rating" in excinfo.value.message
+    assert excinfo.value.status_code == 200
+
+
+def test_wrongly_typed_scalar_refusal_names_its_path(client, raw_response):
+    body = json.dumps({"places": [{"id": "ChIJ1", "priceLevel": 3}]}).encode()
+    raw_response(200, body)
+    with pytest.raises(DecodeError) as excinfo:
+        client.text_search("cafes")
+    assert "places[0].priceLevel" in excinfo.value.message
+
+
+def test_wrongly_typed_field_refusal_names_its_path_async(
+    api_key, base_url, raw_response
+):
+    async def run():
+        client = AsyncClient(api_key, base_url=base_url)
+        body = json.dumps({"places": [{"id": "ChIJ1", "types": {"cafe": True}}]}).encode()
+        raw_response(200, body)
+        with pytest.raises(DecodeError) as excinfo:
+            await client.text_search("cafes")
+        assert "places[0].types" in excinfo.value.message
+
+    asyncio.run(run())

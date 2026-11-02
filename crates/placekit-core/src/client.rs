@@ -411,11 +411,7 @@ impl Client {
             {
                 return Err(err);
             }
-            let media: PhotoMediaJson = serde_json::from_str(&body).map_err(|e| Error::Decode {
-                detail: e.to_string(),
-                status: Some(status.as_u16()),
-                source: Some(Box::new(e)),
-            })?;
+            let media: PhotoMediaJson = decode_typed(&body, status.as_u16())?;
             // The same identity guard Place Details carries (R4-06):
             // a success body with neither a name nor a URI is the
             // wrong shape entirely, not a photo result pointing at an
@@ -657,14 +653,37 @@ impl Client {
         {
             return Err(err);
         }
-        serde_json::from_str::<T>(&body)
-            .map(|value| (value, body, status.as_u16()))
-            .map_err(|e| Error::Decode {
-                detail: e.to_string(),
-                status: Some(status.as_u16()),
-                source: Some(Box::new(e)),
-            })
+        decode_typed::<T>(&body, status.as_u16()).map(|value| (value, body, status.as_u16()))
     }
+}
+
+/// Decode a typed response value from a success body, naming the
+/// field path of a decode failure in the error detail (Round 23).
+/// The bare serde message names the expected type and a line and
+/// column, but not which documented field carried the wrong type,
+/// so a core refusal (audit finding M2) was the one decode failure a
+/// caller could not locate from the message; the Python layer's own
+/// refusals name the payload key they failed on. The path runs from
+/// the response root in wire names (`places[1].rating`), including
+/// the element index for a list member, and a failure at the root
+/// itself keeps the bare serde message. The HTTP status rides along
+/// exactly as it did through the plain decode.
+fn decode_typed<T: DeserializeOwned>(body: &str, status: u16) -> Result<T, Error> {
+    let mut deserializer = serde_json::Deserializer::from_str(body);
+    serde_path_to_error::deserialize(&mut deserializer).map_err(|e| {
+        let path = e.path().to_string();
+        let inner = e.into_inner();
+        let detail = if path == "." {
+            inner.to_string()
+        } else {
+            format!("{path}: {inner}")
+        };
+        Error::Decode {
+            detail,
+            status: Some(status),
+            source: Some(Box::new(inner)),
+        }
+    })
 }
 
 /// Outcome of reading a response body under a size cap.
@@ -2559,6 +2578,46 @@ mod tests {
             }
             PhotoMedia::Bytes(_) => panic!("expected the URI form"),
         }
+    }
+
+    #[test]
+    fn decode_errors_name_the_field_path() {
+        // Round 23 (audit finding M2): a wrongly typed documented
+        // field refuses the whole call, and the refusal now names
+        // the field path in wire names, including the element index
+        // for a list member, matching the payload key quality of the
+        // Python layer's own refusals.
+        let stub = Stub::start(|_| {
+            stub_json(
+                200,
+                r#"{"places":[{"id":"ChIJ1","rating":4.5},{"id":"ChIJ2","rating":"high"}]}"#,
+            )
+        });
+        let client = stub.client("k");
+        let req = TextSearchRequest {
+            text_query: "cafes".to_owned(),
+            ..Default::default()
+        };
+        let err = block_on(client.text_search(&req, None)).unwrap_err();
+        assert_eq!(err.kind(), "decode");
+        assert_eq!(err.status_code(), Some(200));
+        assert!(err.to_string().contains("places[1].rating"), "{err}");
+
+        // A wrongly typed scalar field names its own path.
+        let stub = Stub::start(|_| {
+            stub_json(200, r#"{"places":[{"id":"ChIJ1","priceLevel":3}]}"#)
+        });
+        let client = stub.client("k");
+        let err = block_on(client.text_search(&req, None)).unwrap_err();
+        assert!(err.to_string().contains("places[0].priceLevel"), "{err}");
+
+        // A failure at the response root keeps the bare serde
+        // message rather than a path prefix naming nothing.
+        let stub = Stub::start(|_| stub_json(200, r#"["not","an","object"]"#));
+        let client = stub.client("k");
+        let err = block_on(client.text_search(&req, None)).unwrap_err();
+        assert_eq!(err.kind(), "decode");
+        assert!(!err.to_string().contains(".: "), "{err}");
     }
 
     #[test]
