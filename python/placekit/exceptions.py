@@ -61,9 +61,20 @@ class PlacesError(Exception):
         #: errors and server side failures). The client never retries
         #: on its own; this only informs the caller's policy.
         self.retryable = retryable
-        #: Seconds from the response's ``Retry-After`` header, when the
-        #: failing response carried one in integer form.
-        self.retry_after = retry_after
+        #: Seconds from the response's ``Retry-After`` header, when
+        #: the failing response carried one. Both header forms are
+        #: read: delta seconds (a fraction is kept) and the HTTP
+        #: date form, converted to seconds from the moment the
+        #: response arrived. The value is always a float when set
+        #: (Round 24); an integer handed in by a caller is stored
+        #: as the equal float, so the declared type is the runtime
+        #: type. A negative or unparseable header reads as None.
+        self.retry_after = (
+            float(retry_after)
+            if isinstance(retry_after, (int, float))
+            and not isinstance(retry_after, bool)
+            else retry_after
+        )
         #: Which call failed, as an operation name plus its identifying
         #: argument where one exists (for example ``place_details
         #: place_id=...``), set by the client methods. Never a URL, so
@@ -181,3 +192,18 @@ def raise_translated(exc: BaseException, context: Optional[str] = None) -> NoRet
         retry_after=getattr(exc, "retry_after", None),
         context=context,
     ) from exc
+
+
+__all__ = [
+    "ApiError",
+    "AuthenticationError",
+    "ConfigError",
+    "DecodeError",
+    "InvalidRequestError",
+    "NetworkError",
+    "NotFoundError",
+    "PlacesError",
+    "QuotaError",
+    "RateLimitError",
+    "raise_translated",
+]
