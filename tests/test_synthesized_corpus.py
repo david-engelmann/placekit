@@ -85,9 +85,9 @@ def test_synthesized_p13_consumer_alert_decodes(client, raw_response):
     assert alert is not None
     assert alert.overview == "Example consumer alert overview for a fictional place."
     assert alert.language_code == "en"
-    # The nested detail blocks ride in raw, matching how the model
+    # The single details object rides in raw, matching how the model
     # treats that group.
-    assert alert.raw["details"][0]["title"] == "Example alert detail"
+    assert alert.raw["details"]["title"] == "Example alert detail"
 
 
 def test_synthesized_v6_single_point_viewport_decodes(client, raw_response):

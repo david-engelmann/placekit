@@ -450,8 +450,8 @@
           "origin": "synthesized",
           "basis": "documented consumerAlert group",
           "statement": "No recording of this shape exists. Every recorded details call that requested the consumer alert field returned a body without the key.",
-          "fixture_sha256": "74efa5f2ec7c05af4903491912afe2f5ac8b020d9c65bc790583597861234874",
-          "size_bytes": 771,
+          "fixture_sha256": "c93ebab910dda9642c51a4ad46b9a92887dbba999aab310e072e3ef36a9477f0",
+          "size_bytes": 769,
           "size_exception": null
         }
       ],
