@@ -37,12 +37,19 @@ import sys
 import textwrap
 from pathlib import Path
 
+import placekit
 from placekit import Client
 from placekit import address, models
 from placekit.client import _Base
 from placekit.models import Place
 
 ROOT = Path(__file__).resolve().parent.parent
+# The directory that holds the placekit package this process
+# imported. A develop build resolves it to the source tree python
+# folder and an installed wheel to site packages, and a subprocess
+# that must import the same placekit puts this directory first on
+# its path instead of assuming the source tree.
+PACKAGE_PARENT = Path(placekit.__file__).resolve().parent.parent
 RICHEST = (
     ROOT
     / "tests"
@@ -282,7 +289,7 @@ def test_forked_child_does_not_inherit_the_owned_window(tmp_path):
             "-c",
             script,
             str(outcome_path),
-            str(ROOT / "python"),
+            str(PACKAGE_PARENT),
         ],
         cwd=str(ROOT),
         capture_output=True,
