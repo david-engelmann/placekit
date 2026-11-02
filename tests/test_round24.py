@@ -382,8 +382,12 @@ def test_places_error_construction_coerces_retry_after_to_float():
     err = PlacesError("slow down", retry_after=7)
     assert err.retry_after == 7.0
     assert type(err.retry_after) is float
-    # A bool is not a count of seconds and passes through untouched.
-    assert PlacesError("x", retry_after=True).retry_after is True
+    # Round 25 supersedes the bool passthrough this test used to
+    # codify: a bool is not a count of seconds, and a non numeric
+    # value is not one either, so both read as None and the stored
+    # value is a float or None, never the caller's object.
+    assert PlacesError("x", retry_after=True).retry_after is None
+    assert PlacesError("x", retry_after="7").retry_after is None
 
 
 # ---------------------------------------------------------------------

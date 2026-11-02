@@ -69,11 +69,15 @@ class PlacesError(Exception):
         #: (Round 24); an integer handed in by a caller is stored
         #: as the equal float, so the declared type is the runtime
         #: type. A negative or unparseable header reads as None.
+        #: A bool or a non numeric value handed in by a caller is
+        #: not a count of seconds either, and also reads as None
+        #: (Round 25), so the stored value is a float or None,
+        #: never the caller's object passed through untouched.
         self.retry_after = (
             float(retry_after)
             if isinstance(retry_after, (int, float))
             and not isinstance(retry_after, bool)
-            else retry_after
+            else None
         )
         #: Which call failed, as an operation name plus its identifying
         #: argument where one exists (for example ``place_details
@@ -179,6 +183,12 @@ def raise_translated(exc: BaseException, context: Optional[str] = None) -> NoRet
     """
     kind = getattr(exc, "kind", "api")
     error_type = _KIND_TO_ERROR.get(kind, ApiError)
+    # The native exception is not chained (Round 25, Minor 2).
+    # Every attribute it carries was copied onto the Python
+    # exception above, so the chain added nothing but a second
+    # rendering of the same message under the private native class
+    # name in every traceback. ``from None`` keeps the traceback to
+    # the one exception a caller actually catches.
     raise error_type(
         str(exc),
         status_code=getattr(exc, "status_code", None),
@@ -191,7 +201,7 @@ def raise_translated(exc: BaseException, context: Optional[str] = None) -> NoRet
         retryable=getattr(exc, "retryable", False),
         retry_after=getattr(exc, "retry_after", None),
         context=context,
-    ) from exc
+    ) from None
 
 
 __all__ = [
