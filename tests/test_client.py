@@ -3749,15 +3749,14 @@ def test_zero_date_component_keeps_its_key_in_child_raw(
 def test_partial_location_refuses_instead_of_fabricating_a_longitude(
     client, raw_response
 ):
-    # Round 23 supersedes the Round 16 split this pin used to hold.
-    # A latitude alone on the wire used to decode with a typed
-    # longitude of 0.0 the wire never sent, while raw beside it
-    # carried no longitude. Absence now stays absent in the typed
-    # dict the core hands Python, so the body behaves like its
-    # explicit null counterpart and the call refuses with a
-    # DecodeError naming the missing key. Raw carries no fabricated
-    # longitude either way; its own construction is pinned by the
-    # corpus suites.
+    # Round 23 supersession. Before Round 23, a latitude alone on
+    # the wire decoded with a typed longitude of 0.0 the wire never
+    # sent, while raw beside it carried no longitude. This pin now
+    # holds the refusal with a DecodeError naming the missing key.
+    # Absence stays absent in the typed dict the core hands Python,
+    # so the body behaves like its explicit null counterpart. Raw
+    # carries no fabricated longitude either way, and its own
+    # construction is pinned by the corpus suites.
     def mutate(data):
         data["location"] = {"latitude": -33.866784}
 
@@ -3768,12 +3767,13 @@ def test_partial_location_refuses_instead_of_fabricating_a_longitude(
 
 
 def test_empty_viewport_reads_as_no_viewport(client, raw_response):
-    # The viewport case of the same fabrication family one level
-    # down. An empty viewport object on the wire used to hand each
-    # corner the zero pair the wire never sent, in both the typed
-    # attributes and the corner raws. It now behaves exactly like
-    # its null counterpart: the place reads as carrying no
-    # viewport, and the place level raw carries the empty object
+    # Round 23 supersession. Before Round 23, an empty viewport
+    # object on the wire handed each corner the zero pair the wire
+    # never sent, in both the typed attributes and the corner raws.
+    # This pin now holds the empty viewport reading as no viewport,
+    # exactly like its null counterpart. The viewport case of the
+    # same fabrication family sits one level down from the location
+    # case above, and the place level raw carries the empty object
     # the wire sent.
     _serve_details(raw_response, lambda data: data.update(viewport={}))
     place = client.place_details("ChIJrTLr-GyuEmsRBfy61i59si0")
@@ -3784,10 +3784,11 @@ def test_empty_viewport_reads_as_no_viewport(client, raw_response):
 def test_viewport_with_only_a_low_corner_refuses(
     client, raw_response
 ):
-    # A field mask can name one corner alone, so a partial
-    # viewport is a reachable wire shape, not a synthetic one. The
-    # missing corner used to arrive as a fabricated zero pair; the
-    # call now refuses naming the corner the wire did not send.
+    # Round 23 supersession. Before Round 23, the missing corner
+    # arrived as a fabricated zero pair. This pin now holds the
+    # refusal naming the corner the wire did not send. A field mask
+    # can name one corner alone, so a partial viewport is a
+    # reachable wire shape, not a synthetic one.
     def mutate(data):
         data["viewport"] = {"low": {"latitude": -33.868}}
 
@@ -3800,6 +3801,9 @@ def test_viewport_with_only_a_low_corner_refuses(
 def test_viewport_with_only_a_high_corner_refuses(
     client, raw_response
 ):
+    # Round 23 supersession. Before Round 23, the missing corner
+    # arrived as a fabricated zero pair. This pin now holds the
+    # refusal naming the corner the wire did not send.
     def mutate(data):
         data["viewport"] = {"high": {"longitude": 151.2084}}
 
