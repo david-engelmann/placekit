@@ -213,21 +213,31 @@ def _entry_guard(fn):
     runs under the same discipline, so an Exception a caller
     supplied value raises surfaces as a ConfigError with the
     original chained. A ConfigError raised deliberately
-    inside passes through unchanged, and a BaseException
-    passes through untouched, the standing posture everywhere
-    in the library (Round 24 repair, red team F1 and F2).
+    inside passes through with its wording unchanged, and a
+    BaseException passes through untouched, the standing
+    posture everywhere in the library (Round 24 repair, red
+    team F1 and F2).
+
+    The guard also sets the exception context to this helper's
+    public name when the error carries none yet (Round 25,
+    Minor 4), so an address failure names the helper that
+    raised it in the attribute callers log, the way a client
+    failure names its method.
     """
 
     @functools.wraps(fn)
     def guarded(*args, **kwargs):
         try:
             return fn(*args, **kwargs)
-        except ConfigError:
+        except ConfigError as exc:
+            if exc.context is None:
+                exc.context = fn.__name__
             raise
         except Exception as exc:
             raise ConfigError(
                 f"an argument for {fn.__name__} raised while it "
-                f"was being read: {exc!r}"
+                f"was being read: {exc!r}",
+                context=fn.__name__,
             ) from exc
 
     return guarded

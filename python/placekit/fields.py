@@ -259,16 +259,21 @@ class FieldMask:
 
     def __init__(self, *paths: str) -> None:
         if not paths:
-            raise ConfigError("FieldMask requires at least one field path")
+            raise ConfigError(
+                "FieldMask requires at least one field path",
+                context="FieldMask",
+            )
         if len(paths) > MAX_MATERIALIZED_ITEMS:
             raise ConfigError(
                 f"FieldMask takes at most {MAX_MATERIALIZED_ITEMS} "
-                f"field paths, got {len(paths)}"
+                f"field paths, got {len(paths)}",
+                context="FieldMask",
             )
         for path in paths:
             if not isinstance(path, str) or not _valid_path(path):
                 raise ConfigError(
-                    f"invalid field mask path: {_safe_repr(path)}"
+                    f"invalid field mask path: {_safe_repr(path)}",
+                    context="FieldMask",
                 )
         # A mask is a set of paths; duplicates are dropped keeping
         # first seen order so the header is stable for a given input.
@@ -303,12 +308,22 @@ class FieldMask:
         if isinstance(paths, (str, bytes)):
             raise ConfigError(
                 "FieldMask.of expects an iterable of field paths, "
-                f"not a single string: {_safe_repr(paths)}"
+                f"not a single string: {_safe_repr(paths)}",
+                context="FieldMask",
             )
         from_set = isinstance(paths, (set, frozenset))
-        items = _materialize_bounded(
-            "field paths", paths, MAX_MATERIALIZED_ITEMS
-        )
+        try:
+            items = _materialize_bounded(
+                "field paths", paths, MAX_MATERIALIZED_ITEMS
+            )
+        except ConfigError as exc:
+            # A mask construction failure carries the mask as its
+            # context (Round 25, Minor 4), set here rather than in
+            # the shared materialiser, whose other callers are
+            # client parameters the client annotates itself.
+            if exc.context is None:
+                exc.context = "FieldMask"
+            raise
         if from_set:
             items = sorted(items, key=_set_sort_key)
         return cls(*items)
@@ -352,7 +367,8 @@ def normalize_fields(fields: FieldsLike) -> list[str] | None:
     if isinstance(fields, (str, bytes)):
         raise ConfigError(
             "fields must be an iterable of field paths or a FieldMask, "
-            f"not a single string: {_safe_repr(fields)}"
+            f"not a single string: {_safe_repr(fields)}",
+            context="FieldMask",
         )
     return list(FieldMask.of(fields).paths)
 
