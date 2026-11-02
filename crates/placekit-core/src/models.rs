@@ -483,7 +483,7 @@ fn wire_string_absent(value: &WireString) -> bool {
 /// is omitted from the reserialized dict. An explicit null stays as
 /// null and a sent value stays as itself.
 fn wire_float_absent(value: &WireFloat) -> bool {
-    value.is_absent()
+    value.0.is_none()
 }
 
 /// Skip guard for a [`Viewport`] corner. A corner the wire did not
