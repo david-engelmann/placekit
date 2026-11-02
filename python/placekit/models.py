@@ -75,7 +75,7 @@ def _as_float(value: Any, model: str, key: str) -> float:
     if isinstance(value, bool):
         raise DecodeError(f"{model} payload key {key!r} is not a number: {value!r}")
     try:
-        return float(value)
+        result = float(value)
     except Exception as exc:
         # The catch is the whole Exception family, matching the
         # integer decoder beside it. A huge integer in a float
@@ -87,6 +87,23 @@ def _as_float(value: Any, model: str, key: str) -> float:
         raise DecodeError(
             f"{model} payload key {key!r} is not a number: {value!r}"
         ) from exc
+    if not math.isfinite(result):
+        # A payload float must be finite (Round 25, Major 2). An
+        # infinite or NaN value in a float position decoded
+        # unchecked, and the only finiteness guard was the LatLng
+        # construction check, whose ConfigError is a caller misuse
+        # type, so a malformed payload escaped the decoder
+        # contract as the wrong exception and a direct user's
+        # except DecodeError handler missed it. The refusal lives
+        # here, where every float slot decodes, so coordinates and
+        # ratings and distances alike honour the contract. Direct
+        # construction keeps its ConfigError: a LatLng built by
+        # hand with a non finite value is caller misuse, not a
+        # payload.
+        raise DecodeError(
+            f"{model} payload key {key!r} is not a finite number: {value!r}"
+        )
+    return result
 
 
 def _as_int(value: Any, model: str, key: str) -> int:
@@ -2401,6 +2418,12 @@ class PhotoMedia:
 
         An existing file at ``path`` is overwritten. The parent
         directory must already exist.
+
+        Filesystem failures raise the ``OSError`` family, by
+        design. Saving is a local file operation rather than an
+        API call, so it sits outside the ``PlacesError``
+        hierarchy, the way other local operations in Python keep
+        their own error families.
         """
         target = Path(path)
         target.write_bytes(self.content)
