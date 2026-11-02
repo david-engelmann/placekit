@@ -24,6 +24,7 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 
+use futures_util::FutureExt;
 use placekit_core::models::{AutocompleteRequest, NearbySearchRequest, TextSearchRequest};
 use placekit_core::{Client as CoreClient, Error as CoreError, FieldMask};
 use pyo3::create_exception;
@@ -46,22 +47,73 @@ create_exception!(
 /// a replacement and leaks the dead runtime instead of dropping it.
 static PROCESS_RUNTIME: Mutex<Option<(u32, Arc<tokio::runtime::Runtime>)>> = Mutex::new(None);
 
-fn shared_runtime() -> Arc<tokio::runtime::Runtime> {
+/// The text of a panic payload, for error messages that must name
+/// what panicked. Panics raised by Rust code carry a string payload;
+/// anything else is reported as carrying no message.
+fn panic_payload_text(payload: &(dyn std::any::Any + Send)) -> String {
+    if let Some(text) = payload.downcast_ref::<&str>() {
+        (*text).to_owned()
+    } else if let Some(text) = payload.downcast_ref::<String>() {
+        text.clone()
+    } else {
+        "a panic with no message payload".to_owned()
+    }
+}
+
+/// The typed error a runtime panic surfaces as (Round 23). A panic
+/// from the runtime machinery is a transport side failure with no
+/// HTTP response behind it, so it takes the network class, and its
+/// message names the panic payload the caller would otherwise never
+/// see.
+fn runtime_panic_error(payload: &(dyn std::any::Any + Send)) -> CoreError {
+    CoreError::Network {
+        detail: format!(
+            "the Tokio runtime panicked while running a call: {}",
+            panic_payload_text(payload)
+        ),
+        source: None,
+    }
+}
+
+fn shared_runtime() -> Result<Arc<tokio::runtime::Runtime>, CoreError> {
     let pid = std::process::id();
     let mut slot = PROCESS_RUNTIME
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     if let Some((built_pid, runtime)) = slot.as_ref() {
         if *built_pid == pid {
-            return Arc::clone(runtime);
+            return Ok(Arc::clone(runtime));
         }
     }
-    let runtime = Arc::new(
+    // The build is fallible twice over (Round 23): Builder::build
+    // reports an error when the operating system refuses part of the
+    // setup, and the worker launch inside the build can panic on a
+    // thread refusal, which the red team produced live. Both shapes
+    // land in the typed hierarchy here, where the build used to rest
+    // on an expect whose panic crossed the PyO3 boundary as a
+    // PanicException outside the hierarchy.
+    let runtime = match std::panic::catch_unwind(|| {
         tokio::runtime::Builder::new_multi_thread()
             .enable_all()
             .build()
-            .expect("unable to build the Tokio runtime"),
-    );
+    }) {
+        Ok(Ok(runtime)) => Arc::new(runtime),
+        Ok(Err(e)) => {
+            return Err(CoreError::Network {
+                detail: format!("could not build the Tokio runtime: {e}"),
+                source: Some(Box::new(e)),
+            });
+        }
+        Err(payload) => {
+            return Err(CoreError::Network {
+                detail: format!(
+                    "could not build the Tokio runtime: {}",
+                    panic_payload_text(&*payload)
+                ),
+                source: None,
+            });
+        }
+    };
     if let Some((_, dead)) = slot.replace((pid, Arc::clone(&runtime))) {
         // The replaced runtime belongs to the parent process of a
         // fork. Its threads do not exist in this process, so it is
@@ -69,7 +121,25 @@ fn shared_runtime() -> Arc<tokio::runtime::Runtime> {
         // that dead state for no benefit.
         std::mem::forget(dead);
     }
-    runtime
+    Ok(runtime)
+}
+
+/// Run a core future on the shared runtime for a sync method,
+/// keeping every failure inside the typed error hierarchy
+/// (Round 23). A build failure returns from [`shared_runtime`] as a
+/// typed error, and a panic raised while the runtime drives the
+/// future is caught and returned as a network class error naming
+/// the panic payload, where it used to cross the PyO3 boundary as a
+/// PanicException.
+fn block_on_guarded<F, T>(fut: F) -> Result<T, CoreError>
+where
+    F: Future<Output = Result<T, CoreError>>,
+{
+    let runtime = shared_runtime()?;
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| runtime.block_on(fut))) {
+        Ok(result) => result,
+        Err(payload) => Err(runtime_panic_error(&*payload)),
+    }
 }
 
 /// The runtime the generic `pyo3-async-runtimes` bridge spawns onto.
@@ -86,7 +156,17 @@ impl pyo3_async_runtimes::generic::Runtime for ForkAwareRuntime {
     where
         F: Future<Output = ()> + Send + 'static,
     {
-        shared_runtime().spawn(async move {
+        // Every async entry point resolves the runtime on a fallible
+        // path before the bridge reaches this call (see the async
+        // methods), so the resolution here finds the runtime cached
+        // for this process. The expect is the recorded residual of
+        // the Round 23 panic boundary: it can only fire if a fork
+        // lands between that resolution and this spawn while the
+        // operating system refuses the rebuild, and the bridge's
+        // spawn signature can neither return an error nor produce a
+        // handle without a runtime.
+        let runtime = shared_runtime().expect("Tokio runtime unavailable at spawn");
+        runtime.spawn(async move {
             fut.await;
         })
     }
@@ -108,6 +188,21 @@ impl pyo3_async_runtimes::generic::ContextExt for ForkAwareRuntime {
 
     fn get_task_locals() -> Option<pyo3_async_runtimes::TaskLocals> {
         None
+    }
+}
+
+/// Run a core future for an async method under a panic guard
+/// (Round 23). A panic raised while the future is polled is caught
+/// and returned as a network class error naming the panic payload,
+/// matching the sync side's [`block_on_guarded`], where it used to
+/// fail the spawned task and surface outside the typed hierarchy.
+async fn run_guarded<F, T>(fut: F) -> Result<T, CoreError>
+where
+    F: Future<Output = Result<T, CoreError>>,
+{
+    match std::panic::AssertUnwindSafe(fut).catch_unwind().await {
+        Ok(result) => result,
+        Err(payload) => Err(runtime_panic_error(&*payload)),
     }
 }
 
@@ -614,8 +709,7 @@ impl PyClient {
         let mask = mask_from(py, fields)?;
         let inner = self.handle(py)?;
         let result = py.allow_threads(|| {
-            shared_runtime()
-                .block_on(async move { inner.text_search(&request, mask.as_ref()).await })
+            block_on_guarded(async move { inner.text_search(&request, mask.as_ref()).await })
         });
         result_to_py(py, result)
     }
@@ -630,8 +724,14 @@ impl PyClient {
         let request: TextSearchRequest = body_to_request(&body)?;
         let mask = mask_from(py, fields)?;
         let inner = self.handle(py)?;
+        // Resolve the runtime on this fallible path first (Round
+        // 23): the bridge resolves it again at spawn and finds it
+        // cached for this process, so a build failure is reported
+        // here as a typed error instead of escaping from inside the
+        // spawn machinery, whose signature cannot return one.
+        shared_runtime().map_err(|e| to_pyerr(py, e))?;
         future_into_py_fork_aware(py, async move {
-            let result = inner.text_search(&request, mask.as_ref()).await;
+            let result = run_guarded(inner.text_search(&request, mask.as_ref())).await;
             Python::with_gil(|py| result_to_py(py, result))
         })
     }
@@ -649,8 +749,7 @@ impl PyClient {
         let mask = mask_from(py, fields)?;
         let inner = self.handle(py)?;
         let result = py.allow_threads(|| {
-            shared_runtime()
-                .block_on(async move { inner.nearby_search(&request, mask.as_ref()).await })
+            block_on_guarded(async move { inner.nearby_search(&request, mask.as_ref()).await })
         });
         result_to_py(py, result)
     }
@@ -665,8 +764,9 @@ impl PyClient {
         let request: NearbySearchRequest = body_to_request(&body)?;
         let mask = mask_from(py, fields)?;
         let inner = self.handle(py)?;
+        shared_runtime().map_err(|e| to_pyerr(py, e))?;
         future_into_py_fork_aware(py, async move {
-            let result = inner.nearby_search(&request, mask.as_ref()).await;
+            let result = run_guarded(inner.nearby_search(&request, mask.as_ref())).await;
             Python::with_gil(|py| result_to_py(py, result))
         })
     }
@@ -686,7 +786,7 @@ impl PyClient {
         let mask = mask_from(py, fields)?;
         let inner = self.handle(py)?;
         let result = py.allow_threads(|| {
-            shared_runtime().block_on(async move {
+            block_on_guarded(async move {
                 inner
                     .place_details(
                         &place_id,
@@ -713,16 +813,16 @@ impl PyClient {
     ) -> PyResult<Bound<'py, PyAny>> {
         let mask = mask_from(py, fields)?;
         let inner = self.handle(py)?;
+        shared_runtime().map_err(|e| to_pyerr(py, e))?;
         future_into_py_fork_aware(py, async move {
-            let result = inner
-                .place_details(
-                    &place_id,
-                    mask.as_ref(),
-                    language_code.as_deref(),
-                    region_code.as_deref(),
-                    session_token.as_deref(),
-                )
-                .await;
+            let result = run_guarded(inner.place_details(
+                &place_id,
+                mask.as_ref(),
+                language_code.as_deref(),
+                region_code.as_deref(),
+                session_token.as_deref(),
+            ))
+            .await;
             Python::with_gil(|py| result_to_py(py, result))
         })
     }
@@ -740,8 +840,7 @@ impl PyClient {
         let mask = mask_from(py, fields)?;
         let inner = self.handle(py)?;
         let result = py.allow_threads(|| {
-            shared_runtime()
-                .block_on(async move { inner.autocomplete(&request, mask.as_ref()).await })
+            block_on_guarded(async move { inner.autocomplete(&request, mask.as_ref()).await })
         });
         result_to_py(py, result)
     }
@@ -756,8 +855,9 @@ impl PyClient {
         let request: AutocompleteRequest = body_to_request(&body)?;
         let mask = mask_from(py, fields)?;
         let inner = self.handle(py)?;
+        shared_runtime().map_err(|e| to_pyerr(py, e))?;
         future_into_py_fork_aware(py, async move {
-            let result = inner.autocomplete(&request, mask.as_ref()).await;
+            let result = run_guarded(inner.autocomplete(&request, mask.as_ref())).await;
             Python::with_gil(|py| result_to_py(py, result))
         })
     }
@@ -775,7 +875,7 @@ impl PyClient {
     ) -> PyResult<PyObject> {
         let inner = self.handle(py)?;
         let result = py.allow_threads(|| {
-            shared_runtime().block_on(async move {
+            block_on_guarded(async move {
                 inner
                     .place_photo(&photo_name, max_width_px, max_height_px, skip_http_redirect)
                     .await
@@ -794,10 +894,15 @@ impl PyClient {
         skip_http_redirect: bool,
     ) -> PyResult<Bound<'py, PyAny>> {
         let inner = self.handle(py)?;
+        shared_runtime().map_err(|e| to_pyerr(py, e))?;
         future_into_py_fork_aware(py, async move {
-            let result = inner
-                .place_photo(&photo_name, max_width_px, max_height_px, skip_http_redirect)
-                .await;
+            let result = run_guarded(inner.place_photo(
+                &photo_name,
+                max_width_px,
+                max_height_px,
+                skip_http_redirect,
+            ))
+            .await;
             Python::with_gil(|py| photo_to_py(py, result))
         })
     }
