@@ -2027,10 +2027,17 @@ def test_from_api_strictness_policy():
 def test_from_api_numeric_coercion_is_uniform():
     # RC-18 (A11): distance_meters and opening point fields are typed
     # Optional[int] in the stubs; the decoders now produce ints.
+    # R20-F03 supersedes the truncation half of this pin: a fractional
+    # value in an integer position is refused with a DecodeError, not
+    # silently truncated, because the typed view must never contradict
+    # raw silently. Digit strings, which the wire itself sends for
+    # int64 fields, still coerce.
     from placekit.models import OpeningPoint, PlacePrediction
 
+    with pytest.raises(DecodeError):
+        PlacePrediction.from_api({"placeId": "A", "distanceMeters": 12.9})
     prediction = PlacePrediction.from_api(
-        {"placeId": "A", "distanceMeters": 12.9}
+        {"placeId": "A", "distanceMeters": 12.0}
     )
     assert prediction.distance_meters == 12
     assert isinstance(prediction.distance_meters, int)
@@ -3816,9 +3823,13 @@ def test_model_layer_non_string_name_never_becomes_an_id():
     # name that is not a string carries no id to derive. A numeric
     # name used to pass through a string coercion and hand back
     # its decimal form as the id, a value the wire never sent. A
-    # string name still derives its id exactly as before.
+    # string name still derives its id exactly as before. R20-F04
+    # strengthens the non-string half: name is a declared string
+    # slot, so a wrong typed value there now refuses the payload
+    # with a DecodeError instead of decoding to an empty id.
     assert Place.from_api({"name": "places/ChIJx"}).id == "ChIJx"
-    assert Place.from_api({"name": 123}).id == ""
+    with pytest.raises(DecodeError):
+        Place.from_api({"name": 123})
 
 
 # Branch A pins for classes 1 and 3. The core forwards the explicit
@@ -3870,16 +3881,19 @@ def test_branch_a_null_latitude_raises_the_python_decoder_error(
     assert "LatLng payload key 'latitude'" in excinfo.value.message
 
 
-def test_branch_a_null_object_list_raises_the_conversion_wrapper_error(
+def test_branch_a_null_object_list_raises_the_python_decoder_error(
     client, raw_response
 ):
-    # Object list positions name no model and no key today. Their
-    # origin marker is the generic conversion wrapper form.
+    # Object list positions used to name no model and no key, so
+    # their origin marker was the generic conversion wrapper form.
+    # R20-F05 gives them the same direct decoder error as the string
+    # list positions above; the Branch A refusal itself, a
+    # DecodeError with the HTTP status threaded across, is unchanged.
     _serve_details(raw_response, lambda data: data.update(photos=None))
     with pytest.raises(DecodeError) as excinfo:
         client.place_details("ChIJrTLr-GyuEmsRBfy61i59si0")
     assert excinfo.value.status_code == 200
-    assert "response failed model conversion" in excinfo.value.message
+    assert "Place payload key 'photos' is not a list" in excinfo.value.message
 
 
 def test_d3_2_scenario_async(api_key, base_url, raw_response):
