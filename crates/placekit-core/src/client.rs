@@ -450,7 +450,7 @@ impl Client {
         // serve anything at all (an HTML error page, a metadata
         // response) and have it handed back as a photo.
         match &content_type {
-            Some(ct) if ct.starts_with("image/") => {}
+            Some(ct) if declares_image(ct) => {}
             Some(ct) => {
                 return Err(Error::Decode {
                     detail: format!("photo endpoint returned a non-image content type: {ct}"),
@@ -1200,6 +1200,25 @@ fn encode_photo_name(photo_name: &str) -> String {
         .join("/")
 }
 
+/// Whether a declared content type claims an image at all, judged
+/// the same way the signature check behind this gate judges the
+/// same value (R20-RT1). The media type is the part before any
+/// parameters, trimmed and case folded, because media types are
+/// case insensitive. The gate previously tested the raw header
+/// text for a lowercase prefix while the signature check folded
+/// case, so a legal IMAGE/PNG carrying a genuine image was refused
+/// at the gate even though the check behind it would have accepted
+/// the same value.
+fn declares_image(content_type: &str) -> bool {
+    content_type
+        .split(';')
+        .next()
+        .unwrap_or("")
+        .trim()
+        .to_ascii_lowercase()
+        .starts_with("image/")
+}
+
 /// Check a downloaded photo body against the format its content type
 /// claims. The check is fail closed (R18-A4): only the formats with
 /// a fixed signature this client verifies (JPEG, PNG, GIF, WebP) may
@@ -1831,6 +1850,29 @@ mod tests {
                 "config",
                 "{hostile}"
             );
+        }
+    }
+
+    #[test]
+    fn photo_content_type_gate_judges_case_like_the_magic_check() {
+        // Differently cased spellings of an image type claim an
+        // image (R20-RT1), as do parameterized and padded spellings
+        // the signature check behind the gate already tolerates.
+        for claimed in [
+            "image/png",
+            "IMAGE/PNG",
+            "Image/Jpeg",
+            "IMAGE/JPEG",
+            "image/png; charset=binary",
+            "IMAGE/PNG; CHARSET=BINARY",
+            " image/webp ",
+        ] {
+            assert!(declares_image(claimed), "{claimed}");
+        }
+        // A refused type stays refused in any case spelling, and a
+        // value with no image prefix at all never claims an image.
+        for claimed in ["text/html", "TEXT/HTML", "application/json", "image", ""] {
+            assert!(!declares_image(claimed), "{claimed}");
         }
     }
 
