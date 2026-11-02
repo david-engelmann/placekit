@@ -8,8 +8,9 @@
 use crate::errors::Error;
 
 /// Upper bound on the number of paths in one mask (R4-11). The
-/// curated defaults hold at most 14; the bound exists so an unbounded
-/// caller supplied list cannot build an unbounded header.
+/// largest curated default, the Place Details default below, holds
+/// 72 paths; the bound exists so an unbounded caller supplied list
+/// cannot build an unbounded header.
 const MAX_MASK_PATHS: usize = 100;
 
 /// Upper bound on the joined `X-Goog-FieldMask` header value, in
@@ -26,7 +27,7 @@ impl FieldMask {
     ///
     /// The final rule set (R4-11), all enforced here, once: the list
     /// is non-empty and holds at most 100 paths; the joined header
-    /// value is at most 4096 characters; no path is duplicated (a mask
+    /// value is at most 4096 bytes; no path is duplicated (a mask
     /// is a set); every path is ASCII, contains no whitespace, comma or
     /// control character, and does not begin or end with whitespace;
     /// no dot separated segment of a path is empty; and no segment is
@@ -65,7 +66,7 @@ impl FieldMask {
         let mask = Self(paths);
         if mask.header_value().len() > MAX_MASK_HEADER_LEN {
             return Err(Error::config(format!(
-                "field mask header value exceeds {MAX_MASK_HEADER_LEN} characters"
+                "field mask header value exceeds {MAX_MASK_HEADER_LEN} bytes"
             )));
         }
         Ok(mask)

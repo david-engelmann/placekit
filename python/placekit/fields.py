@@ -3,7 +3,13 @@
 Every response field must be requested through the ``X-Goog-FieldMask``
 header, and billing follows the fields you ask for. Pass a ``FieldMask`` (or
 any iterable of path strings) as the ``fields`` argument of search and
-details calls. When ``fields`` is omitted, curated defaults are used.
+details and autocomplete calls. When ``fields`` is omitted, the search
+and details calls use curated defaults. Autocomplete has no curated
+default, so the API default field set governs an autocomplete call
+that passes no ``fields``. A mask is judged again when it is used in
+a call, whatever its size at construction. The core refuses a mask
+holding more than 100 paths, and a mask whose joined header value
+runs past 4096 bytes, at call time.
 
 Billing note: the curated defaults include fields from the Enterprise
 billing tier (among them rating, userRatingCount, priceLevel and, on
@@ -253,6 +259,13 @@ class FieldMask:
     same ceiling ``FieldMask.of`` enforces on the iterables it
     reads, so the two public doors into the type refuse the same
     absurd sizes (Round 24 repair).
+
+    Construction is not the operative bound. When a mask is used
+    in a call, the core refuses a mask holding more than 100 paths
+    and a mask whose joined header value runs past 4096 bytes, so
+    a mask of a few hundred short paths constructs without
+    complaint and then fails at call time with a ``ConfigError``
+    naming the bound it crossed.
     """
 
     paths: Tuple[str, ...]
@@ -302,6 +315,11 @@ class FieldMask:
         being read surfaces as a ConfigError with the original
         exception chained, so a hostile or endless iterable fails
         the way every other local misuse fails (R20-F01 and F10).
+
+        The mask this returns is still subject to the call time
+        bounds the class docstring names, at most 100 paths and a
+        4096 byte header, which the core enforces when the mask
+        is sent.
         """
         if isinstance(paths, FieldMask):
             return paths
