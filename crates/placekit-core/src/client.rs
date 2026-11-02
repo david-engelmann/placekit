@@ -561,7 +561,12 @@ impl Client {
     /// a decode error naming the cap; a failed read is a decode error
     /// that keeps the HTTP status as data (R4-10: the failure used to
     /// be classified Network, whose contract is that no response was
-    /// produced, and the status survived only as message prose).
+    /// produced, and the status survived only as message prose). The
+    /// one carve out is a timeout (Round 25 landing repair): a
+    /// deadline that fires while a success body is still streaming
+    /// is the caller's own timeout, not a body that failed to
+    /// decode, so it surfaces as the timeout network error the
+    /// error body read produces, on this path too.
     /// `label` names the body in the cap message: "response body" on
     /// the JSON paths, "photo body" on the photo bytes path, whose
     /// wording predates this shared helper.
@@ -581,14 +586,19 @@ impl Client {
                 status: Some(status.as_u16()),
                 source: None,
             }),
-            BodyRead::Failed(read_error) => Err(Error::Decode {
-                detail: format!(
-                    "HTTP {} received, body read failed: {read_error}",
-                    status.as_u16()
-                ),
-                status: Some(status.as_u16()),
-                source: None,
-            }),
+            BodyRead::Failed(read_error) => {
+                if read_error.is_timeout() {
+                    return Err(Error::network_body_read_timeout_labelled(label));
+                }
+                Err(Error::Decode {
+                    detail: format!(
+                        "HTTP {} received, body read failed: {read_error}",
+                        status.as_u16()
+                    ),
+                    status: Some(status.as_u16()),
+                    source: None,
+                })
+            }
         }
     }
 
@@ -696,11 +706,14 @@ fn decode_typed<T: DeserializeOwned>(body: &str, status: u16) -> Result<T, Error
     })
 }
 
-/// Outcome of reading a response body under a size cap.
+/// Outcome of reading a response body under a size cap. A failed
+/// read keeps the transport error itself rather than its text, so
+/// the caller can still tell a timeout from any other failure
+/// (Round 25 landing repair).
 enum BodyRead {
     Complete(Vec<u8>),
     TooLarge,
-    Failed(String),
+    Failed(reqwest::Error),
 }
 
 /// Read a body as a stream, aborting as soon as it grows past `cap`
@@ -717,7 +730,7 @@ async fn read_body_capped(response: reqwest::Response, cap: usize) -> BodyRead {
                 }
                 buf.extend_from_slice(&chunk);
             }
-            Err(e) => return BodyRead::Failed(e.to_string()),
+            Err(e) => return BodyRead::Failed(e),
         }
     }
     BodyRead::Complete(buf)
@@ -773,11 +786,23 @@ async fn read_error_body(
         // were the body size; the probe keeps the two apart. A read
         // failure past the cap does not change the classification:
         // the capped prefix is already in hand and the body had not
-        // ended, so it counts as capped.
+        // ended, so it counts as capped. The one exception is a
+        // timeout (Round 25 landing repair): a stream error past
+        // the cap must not be read as proof of capping when the
+        // caller's own deadline is what fired, or the timeout
+        // token is lost in exactly the corner this probe exists
+        // for.
         loop {
             match stream.next().await {
                 Some(Ok(chunk)) if chunk.is_empty() => continue,
-                Some(Ok(_)) | Some(Err(_)) => {
+                Some(Ok(_)) => {
+                    capped = true;
+                    break;
+                }
+                Some(Err(e)) => {
+                    if e.is_timeout() {
+                        return Error::network_body_read_timeout();
+                    }
                     capped = true;
                     break;
                 }

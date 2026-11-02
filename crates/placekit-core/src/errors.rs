@@ -424,8 +424,22 @@ impl Error {
                     parts.status.unwrap_or_default(),
                     parts
                         .message
-                        .map(|m| m.chars().take(500).collect())
-                        .unwrap_or_else(|| "the error envelope carried no message".to_owned()),
+                        .map(|m| m.chars().take(ENVELOPE_TEXT_CAP_CHARS).collect())
+                        .unwrap_or_else(|| {
+                            // A message missing from a completely read
+                            // envelope was genuinely not carried. A
+                            // message missing from a partly read one
+                            // (the tolerant head scan stopped before
+                            // the error object closed) may only have
+                            // been cut off by the read cap, and the
+                            // text must not claim the envelope carried
+                            // none (Round 25 landing repair).
+                            if parts.partial {
+                                "the error envelope message could not be read in full".to_owned()
+                            } else {
+                                "the error envelope carried no message".to_owned()
+                            }
+                        }),
                     parts.code,
                     parts.details,
                     class_status,
@@ -592,7 +606,7 @@ impl Error {
         }
     }
 
-    /// The error for an error response whose body read timed out
+    /// The error for a response body read that timed out
     /// (Round 25, red team Minor 1). The HTTP class fallback used
     /// to mask that timeout in full: no attribute and no message
     /// token recorded that the caller's own deadline fired, and
@@ -602,12 +616,22 @@ impl Error {
     /// class token. The detail is a fixed string with no source
     /// because this constructor also serves the photo path, whose
     /// request URL carries the API key and whose transport
-    /// failures are never formatted (R4-07).
-    pub(crate) fn network_body_read_timeout() -> Error {
+    /// failures are never formatted (R4-07). `label` names the
+    /// body as the reading path names it: the error body on the
+    /// error paths, the response or photo body on the success
+    /// paths, whose reads give the timeout the same treatment
+    /// (Round 25 landing repair).
+    pub(crate) fn network_body_read_timeout_labelled(label: &str) -> Error {
         Error::Network {
-            detail: "timeout: the error body read timed out".to_owned(),
+            detail: format!("timeout: the {label} read timed out"),
             source: None,
         }
+    }
+
+    /// [`Error::network_body_read_timeout_labelled`] for an error
+    /// response body, the original Round 25 shape.
+    pub(crate) fn network_body_read_timeout() -> Error {
+        Self::network_body_read_timeout_labelled("error body")
     }
 
     pub(crate) fn config(detail: impl Into<String>) -> Error {
@@ -694,7 +718,22 @@ struct EnvelopeParts {
     message: Option<String>,
     code: Option<i64>,
     details: Vec<serde_json::Value>,
+    /// True when these parts came from the tolerant head scan
+    /// and the scan stopped before the error object closed, so
+    /// a field read as absent may only be unread. Always false
+    /// for the whole document parse, whose absent fields are
+    /// genuinely absent.
+    partial: bool,
 }
+
+/// The character bound on server supplied text carried into an
+/// exception. The envelope message is truncated to it when the
+/// error is built, and every string inside the parsed details is
+/// truncated to it in the parse funnel (Round 25, Minor 6). The
+/// two caps are defined to be one bound, so they read from this
+/// one constant rather than from two literals that only imply
+/// the coupling (Round 25 landing repair).
+const ENVELOPE_TEXT_CAP_CHARS: usize = 500;
 
 /// Read the envelope fields of a response body, or `None` when the
 /// body carries no `error` object at all.
@@ -744,11 +783,13 @@ fn parse_envelope(body: &str) -> Option<EnvelopeParts> {
             .map(str::to_owned),
         code: error.get("code").and_then(serde_json::Value::as_i64),
         details,
+        partial: false,
     })
 }
 
-/// Truncate every string value inside one parsed detail at 500
-/// characters, the envelope message discipline. The walk is
+/// Truncate every string value inside one parsed detail at
+/// [`ENVELOPE_TEXT_CAP_CHARS`] characters, the envelope message
+/// discipline. The walk is
 /// iterative, over the values of objects and the items of arrays;
 /// object keys are names rather than values and keep their length.
 fn cap_detail_strings(value: &mut serde_json::Value) {
@@ -756,8 +797,8 @@ fn cap_detail_strings(value: &mut serde_json::Value) {
     while let Some(node) = stack.pop() {
         match node {
             serde_json::Value::String(text) => {
-                if text.chars().count() > 500 {
-                    *text = text.chars().take(500).collect();
+                if text.chars().count() > ENVELOPE_TEXT_CAP_CHARS {
+                    *text = text.chars().take(ENVELOPE_TEXT_CAP_CHARS).collect();
                 }
             }
             serde_json::Value::Array(items) => stack.extend(items.iter_mut()),
@@ -776,34 +817,58 @@ fn cap_detail_strings(value: &mut serde_json::Value) {
 /// whole parse, and a failure further into the error object never
 /// discards head fields already read: the head is the
 /// classification.
+///
+/// Duplicate keys resolve last wins, as the whole document parse
+/// resolves them (Round 25 landing repair). The walk does not
+/// stop at the first `error` key: a later error object replaces
+/// an earlier one, and an `error` value that is not an object is
+/// skipped like any other value rather than ending the scan. One
+/// limit stands where the data runs out: a later error object
+/// cut off before it yields a head field does not erase an
+/// earlier complete one, because the first readable value is
+/// the only data there is. A scan that recovers no head field
+/// at all reports no envelope, the same verdict the whole parse
+/// gives an error object with no usable field, so the caller
+/// takes the bare HTTP fallback and its wording.
 fn parse_envelope_head(body: &str) -> Option<EnvelopeParts> {
     let mut scan = HeadScan::new(body);
     scan.skip_ws();
     if !scan.eat(b'{') {
         return None;
     }
+    let mut found: Option<EnvelopeParts> = None;
     loop {
         scan.skip_ws();
         if scan.at_end() || scan.eat(b'}') {
-            return None;
+            break;
         }
-        let key = scan.string()?;
+        let Some(key) = scan.string() else {
+            break;
+        };
         scan.skip_ws();
         if !scan.eat(b':') {
-            return None;
+            break;
         }
-        if key == "error" {
-            return scan.error_object();
-        }
-        if !scan.skip_value() {
-            return None;
+        scan.skip_ws();
+        if key == "error" && scan.peek() == Some(b'{') {
+            let (parts, closed) = scan.error_object();
+            let usable = parts.status.is_some() || parts.message.is_some() || parts.code.is_some();
+            if closed || usable {
+                found = Some(parts);
+            }
+            if !closed {
+                break;
+            }
+        } else if !scan.skip_value() {
+            break;
         }
         scan.skip_ws();
         if scan.eat(b',') {
             continue;
         }
-        return None;
+        break;
     }
+    found.filter(|parts| parts.status.is_some() || parts.message.is_some() || parts.code.is_some())
 }
 
 /// A byte cursor over a response body for the tolerant head scan.
@@ -938,33 +1003,48 @@ impl<'a> HeadScan<'a> {
     }
 
     /// Read the error object's scalar head fields. The cursor is
-    /// just past the colon after the `error` key. An `error` value
-    /// that is not an object is no envelope, the same verdict the
-    /// whole parse gives. Once the object opens, whatever head
-    /// fields were fully read are the result, even when the rest
-    /// of the object is truncated or unreadable.
-    fn error_object(&mut self) -> Option<EnvelopeParts> {
+    /// on the opening brace of the error value; the caller has
+    /// already checked that shape, since an `error` value that
+    /// is not an object is skipped by the caller rather than
+    /// read here. Once the object opens, whatever head fields
+    /// were fully read are the result, even when the rest of
+    /// the object is truncated or unreadable. The returned flag
+    /// says whether the object closed cleanly, which the caller
+    /// needs twice over: only a cleanly closed object lets the
+    /// top level walk continue on to a later `error` key, and
+    /// a message missing from a partly read object was not
+    /// shown to be absent.
+    ///
+    /// Duplicate head keys resolve last wins inside the object
+    /// too, as the whole parse resolves them: a repeated field
+    /// whose later value is mistyped clears the field, matching
+    /// the whole parse reading the later value and skipping it
+    /// as mistyped.
+    fn error_object(&mut self) -> (EnvelopeParts, bool) {
         self.skip_ws();
-        if !self.eat(b'{') {
-            return None;
-        }
+        self.eat(b'{');
         let mut parts = EnvelopeParts {
             status: None,
             message: None,
             code: None,
             details: Vec::new(),
+            partial: true,
         };
         loop {
             self.skip_ws();
-            if self.at_end() || self.eat(b'}') {
-                return Some(parts);
+            if self.at_end() {
+                return (parts, false);
+            }
+            if self.eat(b'}') {
+                parts.partial = false;
+                return (parts, true);
             }
             let Some(key) = self.string() else {
-                return Some(parts);
+                return (parts, false);
             };
             self.skip_ws();
             if !self.eat(b':') {
-                return Some(parts);
+                return (parts, false);
             }
             self.skip_ws();
             match key.as_str() {
@@ -977,10 +1057,13 @@ impl<'a> HeadScan<'a> {
                     if self.peek() == Some(b'"') {
                         match self.string() {
                             Some(value) => *slot = Some(value),
-                            None => return Some(parts),
+                            None => return (parts, false),
                         }
-                    } else if !self.skip_value() {
-                        return Some(parts);
+                    } else {
+                        *slot = None;
+                        if !self.skip_value() {
+                            return (parts, false);
+                        }
                     }
                 }
                 "code" => match self.peek() {
@@ -998,14 +1081,15 @@ impl<'a> HeadScan<'a> {
                             .and_then(|v| v.as_i64());
                     }
                     _ => {
+                        parts.code = None;
                         if !self.skip_value() {
-                            return Some(parts);
+                            return (parts, false);
                         }
                     }
                 },
                 _ => {
                     if !self.skip_value() {
-                        return Some(parts);
+                        return (parts, false);
                     }
                 }
             }
@@ -1013,7 +1097,16 @@ impl<'a> HeadScan<'a> {
             if self.eat(b',') {
                 continue;
             }
-            return Some(parts);
+            // The object ends here when the next byte is its
+            // closing brace, which is consumed so the caller's
+            // walk resumes past the object; anything else is
+            // malformed, and the fields read so far stand
+            // either way.
+            let closed = self.eat(b'}');
+            if closed {
+                parts.partial = false;
+            }
+            return (parts, closed);
         }
     }
 }
@@ -1543,5 +1636,146 @@ mod tests {
         );
         // Short strings pass through untouched.
         assert_eq!(detail["@type"], "type.googleapis.com/google.rpc.DebugInfo");
+    }
+
+    /// A value nested past the parser depth limit, as raw JSON
+    /// text, for building bodies the whole parse refuses.
+    fn deep_fragment() -> String {
+        let mut text = String::from("\"x\"");
+        for _ in 0..200 {
+            text = format!("[{text}]");
+        }
+        text
+    }
+
+    #[test]
+    fn head_scan_takes_the_last_of_two_error_objects() {
+        // Round 25 landing repair: duplicate keys resolve last
+        // wins in the whole document parse, and the head scan
+        // resolved a duplicated error key first wins. With the
+        // whole parse defeated by a deeply nested sibling, the
+        // scan now walks past the first error object, and the
+        // later one classifies the call exactly as the whole
+        // parse classifies the same body without the sibling.
+        let body = |junk: &str| {
+            format!(
+                r#"{{"error": {{"code": 400, "message": "first", "status": "INVALID_ARGUMENT"}}, "error": {{"code": 429, "message": "second", "status": "RESOURCE_EXHAUSTED"}}, "junk": {junk}}}"#
+            )
+        };
+        let err = Error::from_response(400, &body(&deep_fragment()));
+        assert_eq!(err.kind(), "rate_limit");
+        assert_eq!(err.google_status(), Some("RESOURCE_EXHAUSTED"));
+        assert_eq!(err.error_code(), Some(429));
+        assert!(err.to_string().contains("second"), "{err}");
+        let control = Error::from_response(400, &body("0"));
+        assert_eq!(control.kind(), "rate_limit");
+        assert_eq!(control.google_status(), Some("RESOURCE_EXHAUSTED"));
+        assert!(control.to_string().contains("second"), "{control}");
+    }
+
+    #[test]
+    fn head_scan_skips_a_non_object_error_value() {
+        // Round 25 landing repair: an `error` value that is not
+        // an object silenced the scan outright, even when a real
+        // envelope sat under a second `error` key. The scan now
+        // skips the non object value and keeps walking.
+        let body = |junk: &str| {
+            format!(
+                r#"{{"error": "not an object", "error": {{"code": 404, "message": "gone", "status": "NOT_FOUND"}}, "junk": {junk}}}"#
+            )
+        };
+        let err = Error::from_response(400, &body(&deep_fragment()));
+        assert_eq!(err.kind(), "not_found");
+        assert_eq!(err.google_status(), Some("NOT_FOUND"));
+        let control = Error::from_response(400, &body("0"));
+        assert_eq!(control.kind(), "not_found");
+        assert_eq!(control.google_status(), Some("NOT_FOUND"));
+    }
+
+    #[test]
+    fn head_scan_repeated_status_key_takes_the_last_value() {
+        // Round 25 landing repair: a repeated status key whose
+        // later value is mistyped clears the field in the whole
+        // parse (the later value is read and skipped as mistyped,
+        // leaving no status), and the scan kept the earlier
+        // string. The scan now clears the field the same way, so
+        // both paths classify by the numeric code.
+        let body = |junk: &str| {
+            format!(
+                r#"{{"error": {{"code": 400, "message": "mixed", "status": "RESOURCE_EXHAUSTED", "status": 42, "junk": {junk}}}}}"#
+            )
+        };
+        let err = Error::from_response(400, &body(&deep_fragment()));
+        assert_eq!(err.kind(), "invalid_request");
+        assert_eq!(err.google_status(), None);
+        assert!(err.to_string().contains("mixed"), "{err}");
+        let control = Error::from_response(400, &body("0"));
+        assert_eq!(control.kind(), "invalid_request");
+        assert_eq!(control.google_status(), None);
+    }
+
+    #[test]
+    fn head_scan_cut_second_error_object_keeps_the_first() {
+        // The stated limit of the last wins alignment: a later
+        // error object cut off before it yields a head field
+        // does not erase an earlier complete one, because the
+        // first readable value is the only data there is.
+        let body =
+            r#"{"error": {"code": 404, "message": "gone", "status": "NOT_FOUND"}, "error": {"sta"#;
+        let err = Error::from_response(400, body);
+        assert_eq!(err.kind(), "not_found");
+        assert_eq!(err.google_status(), Some("NOT_FOUND"));
+        assert!(err.to_string().contains("gone"), "{err}");
+    }
+
+    #[test]
+    fn scan_recovered_envelope_with_a_cut_message_says_it_could_not_be_read_in_full() {
+        // Round 25 landing repair: the message runs far past the
+        // error read cap, so the capped read cuts it mid string.
+        // The scan recovers the status and code, and the fallback
+        // text says the message could not be read in full instead
+        // of claiming the envelope carried none.
+        let body = format!(
+            r#"{{"error": {{"code": 429, "status": "RESOURCE_EXHAUSTED", "message": "{}", "details": []}}}}"#,
+            "x".repeat(400_000)
+        );
+        let prefix = &body[..256 * 1024];
+        let err = Error::from_capped_error_body(400, prefix, None, 256 * 1024);
+        assert_eq!(err.kind(), "rate_limit");
+        assert_eq!(err.google_status(), Some("RESOURCE_EXHAUSTED"));
+        let text = err.to_string();
+        assert!(text.contains("could not be read in full"), "{text}");
+        assert!(!text.contains("carried no message"), "{text}");
+    }
+
+    #[test]
+    fn scan_recovered_envelope_without_a_message_keeps_the_genuine_wording() {
+        // The companion shape: the scan reads the error object
+        // to its close and the object genuinely carries no
+        // message, so the standing wording stands.
+        let body = format!(
+            r#"{{"error": {{"code": 503, "status": "UNAVAILABLE"}}, "junk": {}}}"#,
+            deep_fragment()
+        );
+        let err = Error::from_response(503, &body);
+        assert_eq!(err.kind(), "api");
+        assert!(err.to_string().contains("carried no message"), "{err}");
+    }
+
+    #[test]
+    fn head_scan_garbage_first_key_falls_back_to_the_non_envelope_wording() {
+        // Round 25 landing repair: an error object whose first
+        // key is not a string yields no scan fields at all. The
+        // honest wording is the non envelope one, not a claim
+        // that an envelope was read and carried no message.
+        let body = format!(
+            r#"{{"junk": {}, "error": {{123: "x", "status": "NOT_FOUND"}}}}"#,
+            deep_fragment()
+        );
+        let err = Error::from_response(500, &body);
+        assert_eq!(err.kind(), "api");
+        let text = err.to_string();
+        assert!(text.contains("not a Places error envelope"), "{text}");
+        assert!(!text.contains("carried no message"), "{text}");
     }
 }
