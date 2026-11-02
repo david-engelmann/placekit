@@ -750,6 +750,16 @@ async fn read_error_body(
                 buf.extend_from_slice(&chunk[..take]);
             }
             Some(Err(e)) => {
+                // A timeout that fires while the error body is
+                // still streaming is the caller's own deadline,
+                // not a corrupt or truncated body (Round 25, red
+                // team Minor 1): it surfaces as the timeout
+                // network error it is, so the timeout token and
+                // the retryable reading survive instead of a bare
+                // HTTP class with an unreadable body note.
+                if e.is_timeout() {
+                    return Error::network_body_read_timeout();
+                }
                 return Error::from_unreadable_body(status, &e.to_string(), content_type);
             }
             None => break,
