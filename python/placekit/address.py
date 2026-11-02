@@ -188,6 +188,27 @@ def _checked_components(
             "components must be a sequence of AddressComponent values "
             "and not None or a bare string or bytes"
         )
+    for component in components:
+        if not isinstance(component, AddressComponent):
+            raise ConfigError(
+                "components must hold AddressComponent values, "
+                f"got {component!r}"
+            )
+        if not isinstance(component.types, (list, tuple)):
+            # The element posture matches the sequence posture
+            # above. Construction refuses a bare string in the
+            # types field and nothing else, so a hand built
+            # component can still carry a types value that is not
+            # a list at all, an integer or None, and the membership
+            # test in the search then raised a bare TypeError. A
+            # null element inside the list is a different shape
+            # and stays untouched: the model layer settlement
+            # lands one as None at its wire index, and membership
+            # reads past it without error.
+            raise ConfigError(
+                "component types must be a list of strings, "
+                f"got {component.types!r}"
+            )
     return components
 
 

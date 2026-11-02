@@ -564,6 +564,32 @@ def test_bad_type_name_raises_config_error():
         address.component_long_text([], "")
 
 
+def test_malformed_component_elements_raise_config_error():
+    # The sequence check guarded the container and construction
+    # refused a bare string in the types field, but the space
+    # between those guards was open: a hand built component whose
+    # types value is not a list at all raised a bare TypeError
+    # from the membership test, and a plain mapping standing in
+    # the list raised a bare AttributeError when the search read
+    # its types attribute. Both now surface as the module's typed
+    # ConfigError at the same boundary as the sequence check.
+    from placekit.models import AddressComponent
+
+    with pytest.raises(ConfigError):
+        address.find_component([AddressComponent(types=123)], "route")
+    with pytest.raises(ConfigError):
+        address.find_component([AddressComponent(types=None)], "route")
+    with pytest.raises(ConfigError):
+        address.find_components([{"types": ["route"]}], "route")
+    with pytest.raises(ConfigError):
+        address.untyped_components([AddressComponent(types=None)])
+    # A well formed hand built component still searches normally.
+    good = AddressComponent(
+        long_text="Main Street", types=["route"]
+    )
+    assert address.find_component([good], "route") is good
+
+
 def test_package_attribute_access():
     assert placekit.address is address
     assert "address" in placekit.__all__
