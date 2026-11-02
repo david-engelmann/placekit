@@ -2635,9 +2635,7 @@ mod tests {
         assert!(err.to_string().contains("places[1].rating"), "{err}");
 
         // A wrongly typed scalar field names its own path.
-        let stub = Stub::start(|_| {
-            stub_json(200, r#"{"places":[{"id":"ChIJ1","priceLevel":3}]}"#)
-        });
+        let stub = Stub::start(|_| stub_json(200, r#"{"places":[{"id":"ChIJ1","priceLevel":3}]}"#));
         let client = stub.client("k");
         let err = block_on(client.text_search(&req, None)).unwrap_err();
         assert!(err.to_string().contains("places[0].priceLevel"), "{err}");

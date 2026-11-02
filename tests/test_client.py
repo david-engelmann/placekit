@@ -3746,76 +3746,67 @@ def test_zero_date_component_keeps_its_key_in_child_raw(
     assert date.raw["year"] == 0
 
 
-def test_partial_location_raw_carries_no_fabricated_longitude(
+def test_partial_location_refuses_instead_of_fabricating_a_longitude(
     client, raw_response
 ):
-    # Both halves in one pin. The typed attribute keeps the core
-    # leniency default, because the typed path does not change. The
-    # raw location is the wire object, latitude alone, with no
-    # longitude key the wire never sent.
+    # Round 23 supersedes the Round 16 split this pin used to hold.
+    # A latitude alone on the wire used to decode with a typed
+    # longitude of 0.0 the wire never sent, while raw beside it
+    # carried no longitude. Absence now stays absent in the typed
+    # dict the core hands Python, so the body behaves like its
+    # explicit null counterpart and the call refuses with a
+    # DecodeError naming the missing key. Raw carries no fabricated
+    # longitude either way; its own construction is pinned by the
+    # corpus suites.
     def mutate(data):
         data["location"] = {"latitude": -33.866784}
 
     _serve_details(raw_response, mutate)
-    place = client.place_details("ChIJrTLr-GyuEmsRBfy61i59si0")
-    assert place.location is not None
-    assert place.location.latitude == pytest.approx(-33.866784)
-    assert place.location.longitude == 0.0
-    assert place.raw["location"] == {"latitude": -33.866784}
+    with pytest.raises(DecodeError) as excinfo:
+        client.place_details("ChIJrTLr-GyuEmsRBfy61i59si0")
+    assert "longitude" in excinfo.value.message
 
 
-def test_empty_viewport_raw_fabricates_no_corners(client, raw_response):
+def test_empty_viewport_reads_as_no_viewport(client, raw_response):
     # The viewport case of the same fabrication family one level
-    # down. The core viewport type holds both corners as non
-    # optional defaulted values, so the typed tree always carries
-    # both, and an empty viewport object on the wire used to hand
-    # each corner a raw holding the zero pair the wire never sent.
-    # The typed attributes keep the core leniency defaults. Only
-    # the corner raws stop inventing the pair.
+    # down. An empty viewport object on the wire used to hand each
+    # corner the zero pair the wire never sent, in both the typed
+    # attributes and the corner raws. It now behaves exactly like
+    # its null counterpart: the place reads as carrying no
+    # viewport, and the place level raw carries the empty object
+    # the wire sent.
     _serve_details(raw_response, lambda data: data.update(viewport={}))
     place = client.place_details("ChIJrTLr-GyuEmsRBfy61i59si0")
-    assert place.viewport is not None
+    assert place.viewport is None
     assert place.raw["viewport"] == {}
-    assert place.viewport.low.latitude == 0.0
-    assert place.viewport.low.longitude == 0.0
-    assert place.viewport.high.latitude == 0.0
-    assert place.viewport.high.longitude == 0.0
-    assert place.viewport.low.raw == {}
-    assert place.viewport.high.raw == {}
 
 
-def test_viewport_with_only_a_low_corner_fabricates_no_high_corner(
+def test_viewport_with_only_a_low_corner_refuses(
     client, raw_response
 ):
     # A field mask can name one corner alone, so a partial
-    # viewport is a reachable wire shape, not a synthetic one.
+    # viewport is a reachable wire shape, not a synthetic one. The
+    # missing corner used to arrive as a fabricated zero pair; the
+    # call now refuses naming the corner the wire did not send.
     def mutate(data):
         data["viewport"] = {"low": {"latitude": -33.868}}
 
     _serve_details(raw_response, mutate)
-    place = client.place_details("ChIJrTLr-GyuEmsRBfy61i59si0")
-    assert place.viewport is not None
-    assert place.viewport.low.raw == {"latitude": -33.868}
-    assert place.viewport.low.longitude == 0.0
-    assert place.viewport.high.raw == {}
-    assert place.viewport.high.latitude == 0.0
-    assert place.viewport.high.longitude == 0.0
+    with pytest.raises(DecodeError) as excinfo:
+        client.place_details("ChIJrTLr-GyuEmsRBfy61i59si0")
+    assert "high" in excinfo.value.message
 
 
-def test_viewport_with_only_a_high_corner_fabricates_no_low_corner(
+def test_viewport_with_only_a_high_corner_refuses(
     client, raw_response
 ):
     def mutate(data):
         data["viewport"] = {"high": {"longitude": 151.2084}}
 
     _serve_details(raw_response, mutate)
-    place = client.place_details("ChIJrTLr-GyuEmsRBfy61i59si0")
-    assert place.viewport is not None
-    assert place.viewport.high.raw == {"longitude": 151.2084}
-    assert place.viewport.high.latitude == 0.0
-    assert place.viewport.low.raw == {}
-    assert place.viewport.low.latitude == 0.0
-    assert place.viewport.low.longitude == 0.0
+    with pytest.raises(DecodeError) as excinfo:
+        client.place_details("ChIJrTLr-GyuEmsRBfy61i59si0")
+    assert "low" in excinfo.value.message
 
 
 def test_model_layer_non_string_name_never_becomes_an_id():

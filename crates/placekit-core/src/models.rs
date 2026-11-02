@@ -511,7 +511,7 @@ fn latlng_absent(value: &LatLng) -> bool {
 /// 0.0 the wire never sent. Internal reads keep the leniency
 /// reading: an absent or null coordinate reads as 0.0 through
 /// [`WireFloat::value`].
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct WireFloat(Option<Option<f64>>);
 
 impl WireFloat {
@@ -532,12 +532,6 @@ impl WireFloat {
     /// True when the wire carried no value at all for this field.
     pub fn is_absent(&self) -> bool {
         self.0.is_none()
-    }
-}
-
-impl Default for WireFloat {
-    fn default() -> Self {
-        WireFloat(None)
     }
 }
 
@@ -1447,8 +1441,7 @@ mod tests {
         assert_eq!(serde_json::to_value(&point).unwrap(), serde_json::json!({}));
         // An explicit null stays a null in the dict, distinct from
         // absence, while its internal read is still the default.
-        let point: LatLng =
-            serde_json::from_str(r#"{"latitude":null,"longitude":2.0}"#).unwrap();
+        let point: LatLng = serde_json::from_str(r#"{"latitude":null,"longitude":2.0}"#).unwrap();
         assert!(point.latitude.is_null());
         assert!(!point.latitude.is_absent());
         assert_eq!(point.latitude, 0.0);
@@ -1458,8 +1451,7 @@ mod tests {
         );
         // A sent 0.0 is a value, not an absence: it survives
         // reserialization exactly.
-        let point: LatLng =
-            serde_json::from_str(r#"{"latitude":0.0,"longitude":0.0}"#).unwrap();
+        let point: LatLng = serde_json::from_str(r#"{"latitude":0.0,"longitude":0.0}"#).unwrap();
         assert!(!point.latitude.is_absent());
         assert_eq!(
             serde_json::to_value(&point).unwrap(),
@@ -1870,10 +1862,7 @@ mod tests {
         let location = place.location.as_ref().unwrap();
         assert_eq!(location.longitude.value(), 0.0);
         let value = serde_json::to_value(&place).unwrap();
-        assert_eq!(
-            value["location"],
-            serde_json::json!({"latitude": -33.86})
-        );
+        assert_eq!(value["location"], serde_json::json!({"latitude": -33.86}));
     }
 
     #[test]
