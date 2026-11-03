@@ -904,6 +904,17 @@ fn cap_detail_strings(value: &mut serde_json::Value) {
 /// at all reports no envelope, the same verdict the whole parse
 /// gives an error object with no usable field, so the caller
 /// takes the bare HTTP fallback and its wording.
+///
+/// When the walk finds nothing and did not complete, one
+/// recovery pass runs ([`HeadScan::recover_envelope`]): a
+/// sibling container that never closes by the depth count
+/// swallows the error key into its own skip, and the walk
+/// above never sees it as a key at all (Round 31, Decoder
+/// Minor F3). A walk that walked the whole object and found
+/// nothing is authoritative, and no pass runs behind it: its
+/// verdicts include the last wins clearing a later non object
+/// value performs, and a recovery that re-read the body
+/// behind the walk would resurrect what the walk cleared.
 fn parse_envelope_head(body: &str) -> Option<EnvelopeParts> {
     let mut scan = HeadScan::new(body);
     scan.skip_ws();
@@ -911,9 +922,16 @@ fn parse_envelope_head(body: &str) -> Option<EnvelopeParts> {
         return None;
     }
     let mut found: Option<EnvelopeParts> = None;
+    // Whether the walk accounted for the whole top level
+    // object, reaching its closing brace or the end of the
+    // text at a key boundary. A walk defeated mid body (a
+    // value it could not skip, a key it could not read, an
+    // error object that never closed) leaves this false.
+    let mut completed = false;
     loop {
         scan.skip_ws();
         if scan.at_end() || scan.eat(b'}') {
+            completed = true;
             break;
         }
         let Some(key) = scan.string() else {
@@ -952,9 +970,19 @@ fn parse_envelope_head(body: &str) -> Option<EnvelopeParts> {
         if scan.eat(b',') {
             continue;
         }
+        // The object ends here when the next byte is its
+        // closing brace; anything else leaves the walk
+        // defeated mid body.
+        completed = scan.eat(b'}');
         break;
     }
-    found.filter(|parts| parts.status.is_some() || parts.message.is_some() || parts.code.is_some())
+    let found = found
+        .filter(|parts| parts.status.is_some() || parts.message.is_some() || parts.code.is_some());
+    if found.is_some() || completed {
+        return found;
+    }
+    let mut recovery = HeadScan::new(body);
+    recovery.recover_envelope()
 }
 
 /// The container nesting limit the JSON parser enforces. Its
@@ -1657,6 +1685,107 @@ impl<'a> HeadScan<'a> {
             }
             return (parts, closed);
         }
+    }
+
+    /// One recovery pass over a body whose top level walk found
+    /// no usable envelope (Round 31, Decoder Minor F3). The
+    /// walk skips a sibling value by counting bracket depth, so
+    /// a sibling container that never closes by that count is
+    /// never finished and the walk consumes the rest of the
+    /// body as part of that value, the error key included. This
+    /// pass reads the body again as a flat token stream: it
+    /// tracks container depth, skips every string as a unit (so
+    /// error text inside a string is never a candidate), and
+    /// reads the object behind every `error` key it meets at
+    /// depth one or two, keeping the last one that yields a
+    /// head field. Depth one is a top level key. Depth two is
+    /// where the swallowed key sits, inside the one sibling
+    /// whose count went wrong. A key deeper than that is
+    /// nested content, and the standing rule that an error
+    /// object nested inside a result is not an envelope holds
+    /// there.
+    ///
+    /// Termination and cost: the pass moves forward only. Every
+    /// iteration consumes a whole string token, reads one
+    /// candidate object in the same forward motion, or advances
+    /// one byte, so it ends and it crosses each byte a constant
+    /// number of times. It runs at most once per body, only
+    /// when the primary walk found nothing and did not complete
+    /// its pass over the top level object, and no position is
+    /// rescanned beyond it, so the scan's total work on a body
+    /// stays linear in the body's size.
+    ///
+    /// The stated limits of the pass are two. A miscount that
+    /// happens to resync onto a later comma lets the primary
+    /// walk complete over a swallowed key, and no pass runs
+    /// behind a completed walk, so that arrangement stays
+    /// unrecovered by design. And the pass cannot tell a
+    /// swallowed top level key from an error object nested one
+    /// level inside a closed sibling when the walk was defeated
+    /// later in the same body, because both present as an
+    /// `error` key at depth two on a body the whole parse
+    /// refused outright. It adopts the nested object too. The
+    /// decoy shapes the earlier rounds held are untouched,
+    /// because there a real top level envelope stands behind
+    /// the decoy and the primary walk finds it, so this pass
+    /// never runs.
+    fn recover_envelope(&mut self) -> Option<EnvelopeParts> {
+        self.pos = 0;
+        let mut depth = 0usize;
+        let mut found: Option<EnvelopeParts> = None;
+        loop {
+            match self.peek() {
+                None => break,
+                Some(b'"') => {
+                    let start = self.pos;
+                    if !self.skip_string_raw() {
+                        // An unterminated string swallows the
+                        // rest of the body in this pass too, and
+                        // no key can be read out of it, the same
+                        // verdict both engines give it.
+                        break;
+                    }
+                    if depth <= 2 {
+                        let is_error = std::str::from_utf8(&self.bytes[start..self.pos])
+                            .ok()
+                            .and_then(|text| serde_json::from_str::<String>(text).ok())
+                            .as_deref()
+                            == Some("error");
+                        if is_error {
+                            let after_string = self.pos;
+                            self.skip_ws();
+                            if self.eat(b':') {
+                                self.skip_ws();
+                                if self.peek() == Some(b'{') {
+                                    let (parts, closed) = self.error_object();
+                                    if parts.status.is_some()
+                                        || parts.message.is_some()
+                                        || parts.code.is_some()
+                                    {
+                                        found = Some(parts);
+                                    }
+                                    if !closed && self.at_end() {
+                                        break;
+                                    }
+                                    continue;
+                                }
+                            }
+                            self.pos = after_string;
+                        }
+                    }
+                }
+                Some(b'{' | b'[') => {
+                    depth += 1;
+                    self.pos += 1;
+                }
+                Some(b'}' | b']') => {
+                    depth = depth.saturating_sub(1);
+                    self.pos += 1;
+                }
+                Some(_) => self.pos += 1,
+            }
+        }
+        found
     }
 }
 
@@ -2664,6 +2793,70 @@ mod tests {
         assert_eq!(err.kind(), "not_found");
         assert_eq!(err.google_status(), Some("NOT_FOUND"));
         assert_eq!(err.error_code(), Some(404));
+    }
+
+    #[test]
+    fn recovery_pass_finds_the_envelope_an_unclosed_sibling_swallowed() {
+        // Round 31, Decoder Minor F3: the scan skips a sibling
+        // value by counting bracket depth, so a sibling array
+        // that never closes by that count consumes the rest of
+        // the body as part of its own value, the error key
+        // included, and the walk reports no envelope. The
+        // recovery pass reads the body as a flat token stream
+        // and finds the error key inside the unclosed sibling.
+        let body = r#"{"junk": [, "error": {"code": 429, "message": "Quota exceeded", "status": "RESOURCE_EXHAUSTED"}}"#;
+        let err = Error::from_response(400, body);
+        assert_eq!(err.kind(), "rate_limit");
+        assert_eq!(err.google_status(), Some("RESOURCE_EXHAUSTED"));
+        assert_eq!(err.error_code(), Some(429));
+        assert!(err.to_string().contains("Quota exceeded"), "{err}");
+        // The same shape with the sibling running to the end of
+        // the text outright, one closing brace fewer.
+        let body = r#"{"junk": [, "error": {"code": 429, "message": "Quota exceeded", "status": "RESOURCE_EXHAUSTED"}"#;
+        let err = Error::from_response(400, body);
+        assert_eq!(err.kind(), "rate_limit");
+        assert_eq!(err.google_status(), Some("RESOURCE_EXHAUSTED"));
+    }
+
+    #[test]
+    fn recovery_pass_leaves_nested_envelopes_and_decoys_alone() {
+        // The depth bound of the recovery pass: an error object
+        // nested inside a result value sits at depth three, and
+        // the standing rule that a nested error object is not an
+        // envelope holds even when the body is unparseable for
+        // an unrelated deep sibling.
+        let body = format!(
+            r#"{{"places": [{{"error": {{"code": 429, "message": "nested", "status": "RESOURCE_EXHAUSTED"}}}}], "junk": {}}}"#,
+            deep_fragment()
+        );
+        let err = Error::from_response(400, &body);
+        assert_eq!(err.kind(), "invalid_request");
+        assert_eq!(err.google_status(), None);
+        assert!(Error::from_success_body(200, &body, None).is_none());
+        // And the decoy family the earlier rounds held is
+        // untouched: a decoy inside a closed junk object with
+        // the real envelope behind it classifies by the real
+        // one through the primary walk, so the pass never runs.
+        let body = format!(
+            r#"{{"junk": {{"error": {{"code": 404, "message": "decoy", "status": "NOT_FOUND"}}}}, "error": {{"code": 429, "message": "real", "status": "RESOURCE_EXHAUSTED"}}, "junk2": {}}}"#,
+            deep_fragment()
+        );
+        let err = Error::from_response(400, &body);
+        assert_eq!(err.kind(), "rate_limit");
+        assert!(err.to_string().contains("real"), "{err}");
+        // A mismatched closer in the junk sibling is skipped by
+        // the same counting, and the envelope behind it
+        // classifies through the walk as before.
+        let body = r#"{"junk": [}, "error": {"code": 429, "message": "Quota exceeded", "status": "RESOURCE_EXHAUSTED"}}"#;
+        let err = Error::from_response(400, body);
+        assert_eq!(err.kind(), "rate_limit");
+        // An unterminated string as the first error value
+        // swallows what stands behind it in this pass too,
+        // matching both engines.
+        let body = format!(r#"{{"error": "abc {}"#, "[".repeat(200));
+        let err = Error::from_response(400, &body);
+        assert_eq!(err.kind(), "invalid_request");
+        assert_eq!(err.google_status(), None);
     }
 
     #[test]
