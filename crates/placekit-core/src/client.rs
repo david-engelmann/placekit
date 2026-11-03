@@ -30,16 +30,6 @@ pub const DEFAULT_MAX_RESPONSE_BYTES: usize = 32 * 1024 * 1024;
 /// the error message, which is itself capped, so they stop early.
 const ERROR_BODY_CAP: usize = 256 * 1024;
 
-/// The size past which [`decode_typed`] refuses a body whose
-/// nesting trips the parser recursion limit from the structural
-/// walk instead of from the parse (Round 29, Finding 1). The
-/// bound is the shared parse preflight bound from the errors
-/// module: at or below it the parse attempt's worst failure
-/// unwind stays bounded by the frame count times the size, tens
-/// of milliseconds at this bound in the develop build, so small
-/// bodies keep the parse's own word for every failure.
-const DECODE_FAST_REFUSAL_MIN_BYTES: usize = crate::errors::PARSE_PREFLIGHT_MIN_BYTES;
-
 const API_KEY_HEADER: &str = "x-goog-api-key";
 const FIELD_MASK_HEADER: &str = "x-goog-fieldmask";
 const USER_AGENT: &str = concat!("placekit/", env!("CARGO_PKG_VERSION"), " (rust core)");
@@ -707,14 +697,19 @@ impl Client {
 /// own per byte rate. Running the parse anyway bought nothing but
 /// its failure unwind, which the round measured at roughly the
 /// open frame count times the bytes before the failure point. The
-/// refusal carries no source error, since no parse ran.
+/// refusal carries no source error, since no parse ran. The
+/// preflight is gated (see `preflight_trip` in the errors
+/// module): past the shared size bound the walk runs only when
+/// the body's bracket census reaches the depth limit, so a large
+/// body of few brackets parses exactly as it did before the
+/// preflight existed.
 fn decode_typed<T: DeserializeOwned>(body: &str, status: u16) -> Result<T, Error> {
     let root_is_object = body
         .bytes()
         .find(|byte| !matches!(byte, b' ' | b'\t' | b'\n' | b'\r'))
         == Some(b'{');
-    if body.len() > DECODE_FAST_REFUSAL_MIN_BYTES && root_is_object {
-        if let Some(trip) = crate::errors::recursion_trip(body) {
+    if root_is_object {
+        if let Some(trip) = crate::errors::preflight_trip(body) {
             let inner = trip.message(body);
             let detail = if trip.path.is_empty() {
                 inner
@@ -1486,6 +1481,7 @@ fn validate_photo_params(
 mod tests {
     use super::*;
     use crate::models::LatLng;
+    use crate::test_support::nested_arrays;
 
     fn test_client() -> Client {
         Client::builder("test-key")
@@ -2741,19 +2737,6 @@ mod tests {
         assert!(!err.to_string().contains(".: "), "{err}");
     }
 
-    /// Nested arrays of the given depth around a scalar leaf.
-    fn nested_arrays(depth: usize) -> String {
-        let mut body = String::new();
-        for _ in 0..depth {
-            body.push('[');
-        }
-        body.push('1');
-        for _ in 0..depth {
-            body.push(']');
-        }
-        body
-    }
-
     /// The decode detail the parse itself produces for a refusing
     /// body, computed the way `decode_typed` computed it before
     /// the Round 29 fast refusal. The refusal must match this
@@ -2805,7 +2788,7 @@ mod tests {
             ),
         ];
         for body in &bodies {
-            assert!(body.len() > DECODE_FAST_REFUSAL_MIN_BYTES);
+            assert!(body.len() > crate::errors::PARSE_PREFLIGHT_MIN_BYTES);
             let err = decode_typed::<SearchResponse>(body, 200).expect_err("the body refuses");
             assert_eq!(err.kind(), "decode");
             assert_eq!(err.status_code(), Some(200));
@@ -2814,6 +2797,30 @@ mod tests {
             };
             assert_eq!(detail, &slow_decode_detail(body));
         }
+    }
+
+    #[test]
+    fn large_low_bracket_body_keeps_the_parse_word() {
+        // Round 29 landing repair: past the size bound, a body
+        // whose bracket census stays below the depth limit skips
+        // the preflight walk entirely and the parse reports its
+        // own failures, exactly as it did before the preflight
+        // existed. The refusal detail is the slow path's, computed
+        // here from the parser, and no recursion text appears: the
+        // body cannot trip, whatever its size.
+        let pad = "y".repeat(300_000);
+        let body = format!(
+            "{{\"places\": [{{\"id\": \"abc\", \"rating\": \"high\", \"big\": \"{pad}\"}}]}}"
+        );
+        assert!(body.len() > crate::errors::PARSE_PREFLIGHT_MIN_BYTES);
+        let err = decode_typed::<SearchResponse>(&body, 200).expect_err("the body refuses");
+        assert_eq!(err.kind(), "decode");
+        assert_eq!(err.status_code(), Some(200));
+        let Error::Decode { detail, .. } = &err else {
+            panic!("expected a decode error, got {err:?}");
+        };
+        assert_eq!(detail, &slow_decode_detail(&body));
+        assert!(!detail.contains("recursion"), "{detail}");
     }
 
     #[test]

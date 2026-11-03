@@ -818,8 +818,13 @@ const ENVELOPE_TEXT_CAP_CHARS: usize = 500;
 /// outcome is unchanged. At or below the bound the attempt's
 /// worst unwind stays in the tens of milliseconds and the parse
 /// keeps its own word, so ordinary bodies pay no walk at all.
+/// Past the bound the walk itself runs only when the body's
+/// bracket census reaches the limit (see [`preflight_trip`]): a
+/// large body of few brackets, a long string or a flat list,
+/// cannot nest to the limit, so its parse runs exactly as it did
+/// before the preflight existed and pays no walk either.
 fn parse_envelope(body: &str) -> Option<EnvelopeParts> {
-    if body.len() > PARSE_PREFLIGHT_MIN_BYTES && recursion_trip(body).is_some() {
+    if preflight_trip(body).is_some() {
         return parse_envelope_head(body);
     }
     let value: serde_json::Value = match serde_json::from_str(body) {
@@ -944,15 +949,48 @@ fn parse_envelope_head(body: &str) -> Option<EnvelopeParts> {
 /// export it.
 const RECURSION_DEPTH_LIMIT: usize = 128;
 
-/// The size past which a body's nesting is walked before its
+/// The size past which a body's nesting may be walked before its
 /// parse is attempted, in [`parse_envelope`] here and in the
 /// client's typed decode refusal. The value sits at the error
 /// read cap's scale, the largest body this crate reads only to
 /// refuse it: at or below it a doomed parse's failure unwind is
 /// bounded by the frame count times the size, and past it the
 /// structural walk is cheaper than the unwind it replaces by
-/// orders of magnitude.
+/// orders of magnitude. Past the size the bracket census in
+/// [`preflight_trip`] decides whether the walk runs at all.
 pub(crate) const PARSE_PREFLIGHT_MIN_BYTES: usize = 256 * 1024;
+
+/// The count of opening bracket bytes in a body. The parser
+/// counts its nesting in containers, every container opens with
+/// a bracket byte, and bracket bytes inside strings are content
+/// the census counts anyway, so the count can only overstate the
+/// nesting a parse can reach, never understate it. A census
+/// below [`RECURSION_DEPTH_LIMIT`] is therefore proof that the
+/// nesting cannot trip the parser limit.
+fn opening_bracket_count(body: &str) -> usize {
+    body.bytes()
+        .filter(|byte| matches!(byte, b'{' | b'['))
+        .count()
+}
+
+/// The parse preflight shared by both parse sites: the point
+/// where a body's nesting trips the parser recursion limit,
+/// when the body is large enough for a doomed parse's unwind to
+/// cost more than the walk and its bracket census leaves a trip
+/// possible at all. In every other case the parse runs exactly
+/// as it did before the preflight existed, so a body's size or
+/// its flatness alone never changes which engine judges it
+/// (Round 29 landing repair: the first form walked every large
+/// body, and large successful responses paid the walk on top of
+/// their parses).
+pub(crate) fn preflight_trip(body: &str) -> Option<RecursionTrip> {
+    if body.len() <= PARSE_PREFLIGHT_MIN_BYTES
+        || opening_bracket_count(body) < RECURSION_DEPTH_LIMIT
+    {
+        return None;
+    }
+    recursion_trip(body)
+}
 
 /// The point where a body's bracket nesting reaches
 /// [`RECURSION_DEPTH_LIMIT`], when it does: the byte offset of
@@ -1538,6 +1576,7 @@ impl<'a> HeadScan<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::nested_arrays;
 
     #[test]
     fn maps_invalid_argument() {
@@ -1900,19 +1939,6 @@ mod tests {
         .is_some());
     }
 
-    /// Nested arrays of the given depth around a scalar leaf.
-    fn nested_arrays(depth: usize) -> String {
-        let mut body = String::new();
-        for _ in 0..depth {
-            body.push('[');
-        }
-        body.push('1');
-        for _ in 0..depth {
-            body.push(']');
-        }
-        body
-    }
-
     #[test]
     fn recursion_trip_reports_the_parser_limit_point() {
         // Shallow and unreadable bodies never trip.
@@ -2023,6 +2049,53 @@ mod tests {
             let body = format!("{prefix}{}}}", nested_arrays(200));
             assert!(recursion_trip(&body).is_some(), "{prefix}");
         }
+    }
+
+    #[test]
+    fn preflight_gates_the_walk_on_size_and_bracket_census() {
+        // The census counts every opening bracket byte, string
+        // content included, and ignores closers: it is the ceiling
+        // on the nesting a parse can reach, stated exactly.
+        assert_eq!(opening_bracket_count(""), 0);
+        assert_eq!(opening_bracket_count("{}[]"), 2);
+        assert_eq!(opening_bracket_count("]]}}"), 0);
+        assert_eq!(opening_bracket_count(r#"{"s": "[[["}"#), 4);
+        assert_eq!(opening_bracket_count(&nested_arrays(200)), 200);
+
+        let pad = "y".repeat(PARSE_PREFLIGHT_MIN_BYTES);
+        // Past the size bound with a census below the depth
+        // limit, the gate stays shut however long the body runs:
+        // a flat body cannot nest to the limit, so no walk runs
+        // and the parse judges the body as it always did.
+        let flat = format!(
+            "{{\"sibling\": \"{pad}\", \"deep\": {}}}",
+            nested_arrays(100)
+        );
+        assert!(flat.len() > PARSE_PREFLIGHT_MIN_BYTES);
+        assert!(opening_bracket_count(&flat) < RECURSION_DEPTH_LIMIT);
+        assert!(preflight_trip(&flat).is_none());
+        // A census past the limit made only of brackets inside a
+        // string still opens the gate: the census overstates by
+        // design, the walk runs and clears the body on its own
+        // reading, and the verdict is the walk's, not the census's.
+        let in_string = format!("{{\"sibling\": \"{}{pad}\"}}", "[".repeat(200));
+        assert!(opening_bracket_count(&in_string) >= RECURSION_DEPTH_LIMIT);
+        assert!(preflight_trip(&in_string).is_none());
+        // A bracket dense body past the bound still trips through
+        // the walk, with the walk's own trip point and path.
+        let deep = format!(
+            "{{\"sibling\": \"{pad}\", \"deep\": {}}}",
+            nested_arrays(200)
+        );
+        let via_gate = preflight_trip(&deep).expect("the dense body trips");
+        let direct = recursion_trip(&deep).expect("the walk trips");
+        assert_eq!(via_gate.offset, direct.offset);
+        assert_eq!(via_gate.path, direct.path);
+        // At or below the size bound the gate stays shut even at
+        // tripping depth: small bodies keep the parse's own word.
+        let small = format!("{{\"deep\": {}}}", nested_arrays(200));
+        assert!(small.len() <= PARSE_PREFLIGHT_MIN_BYTES);
+        assert!(preflight_trip(&small).is_none());
     }
 
     #[test]

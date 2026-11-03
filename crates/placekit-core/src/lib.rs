@@ -14,3 +14,22 @@ pub mod models;
 pub use client::{Client, ClientBuilder, DEFAULT_BASE_URL};
 pub use errors::Error;
 pub use mask::FieldMask;
+
+/// Builders shared by the crate's test modules, so a shape two
+/// batteries depend on is written once and cannot drift between
+/// them.
+#[cfg(test)]
+pub(crate) mod test_support {
+    /// Nested arrays of the given depth around a scalar leaf.
+    pub(crate) fn nested_arrays(depth: usize) -> String {
+        let mut body = String::new();
+        for _ in 0..depth {
+            body.push('[');
+        }
+        body.push('1');
+        for _ in 0..depth {
+            body.push(']');
+        }
+        body
+    }
+}
