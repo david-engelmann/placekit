@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import json
 import math
+import weakref
 from collections.abc import Mapping
 from typing import Any, Callable, Iterable, Optional
 
@@ -1332,6 +1333,110 @@ class Client(_Base):
         self.close()
 
 
+# -- Async call completion -------------------------------------------------
+#
+# The native async methods start a call on the process runtime and
+# return a handle to it. The handle completes into Rust state only.
+# Awaiting a call therefore goes through the pump below, which polls
+# the handles pending on the running loop from the loop thread and
+# delivers each finished result to the future awaiting it. Every
+# Python object for a call is built and collected on Python threads,
+# and no runtime worker thread ever touches one (Round 30).
+
+#: Poll delays in seconds while calls are pending on a loop. The
+#: chain starts immediate and settles at the final four millisecond
+#: step, so a fast call is collected within a millisecond or two and
+#: a slow wire call costs only cheap flag checks while it runs.
+_PUMP_DELAYS = (0.0, 0.0005, 0.001, 0.002, 0.004)
+
+
+class _LoopPump:
+    """The native calls pending on one event loop.
+
+    A timer chain armed only while calls are pending polls their
+    handles and completes the futures awaiting them. A future that
+    settles any other way, above all by cancellation, drops its
+    entry here, and a cancellation also aborts the native call so
+    the wire request dies with the task that owned it.
+    """
+
+    __slots__ = ("loop", "pending", "timer", "step")
+
+    def __init__(self, loop: asyncio.AbstractEventLoop) -> None:
+        self.loop = loop
+        self.pending: dict[object, tuple[Any, asyncio.Future[Any]]] = {}
+        self.timer: Optional[asyncio.TimerHandle] = None
+        self.step = 0
+
+    def add(self, handle: Any, future: asyncio.Future[Any]) -> None:
+        token = object()
+        self.pending[token] = (handle, future)
+
+        def settled(done: asyncio.Future[Any], _token: object = token) -> None:
+            self.pending.pop(_token, None)
+            if done.cancelled():
+                handle.abort()
+
+        future.add_done_callback(settled)
+        self._kick()
+
+    def _kick(self) -> None:
+        if self.timer is None and self.pending and not self.loop.is_closed():
+            self.timer = self.loop.call_soon(self._poll)
+
+    def _poll(self) -> None:
+        self.timer = None
+        if not self.pending:
+            self.step = 0
+            return
+        delivered = False
+        for token, (handle, future) in list(self.pending.items()):
+            if future.done():
+                self.pending.pop(token, None)
+                continue
+            if not handle.is_done():
+                continue
+            self.pending.pop(token, None)
+            delivered = True
+            try:
+                value = handle.take_result()
+            except BaseException as exc:
+                future.set_exception(exc)
+            else:
+                future.set_result(value)
+        if delivered:
+            self.step = 0
+        if self.pending and not self.loop.is_closed():
+            delay = _PUMP_DELAYS[min(self.step, len(_PUMP_DELAYS) - 1)]
+            self.step += 1
+            self.timer = self.loop.call_later(delay, self._poll)
+
+
+_PUMPS: weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, _LoopPump] = (
+    weakref.WeakKeyDictionary()
+)
+
+
+def _pump_for(loop: asyncio.AbstractEventLoop) -> _LoopPump:
+    pump = _PUMPS.get(loop)
+    if pump is None:
+        pump = _LoopPump(loop)
+        _PUMPS[loop] = pump
+    return pump
+
+
+async def _await_native(handle: Any) -> Any:
+    """Await one native call handle and return its result tuple.
+
+    The stored error of a failed call raises here as the native
+    PlacesError, so callers translate it exactly as before.
+    """
+    loop = asyncio.get_running_loop()
+    future: asyncio.Future[Any] = loop.create_future()
+    _pump_for(loop).add(handle, future)
+    return await future
+
+
 class AsyncClient(_Base):
     """Async client for the Places API (New), with Client's method set.
 
@@ -1426,7 +1531,7 @@ class AsyncClient(_Base):
         except Exception as exc:
             raise self._invalid_arguments("text_search", exc) from exc
         try:
-            data = await inner.text_search_async(body, fields_list)
+            data = await _await_native(inner.text_search_async(body, fields_list))
         except _CorePlacesError as exc:
             raise_translated(exc, "text_search")
         return self._convert_body(TextSearchResult.from_api, data, "text_search")
@@ -1482,7 +1587,7 @@ class AsyncClient(_Base):
         except Exception as exc:
             raise self._invalid_arguments("nearby_search", exc) from exc
         try:
-            data = await inner.nearby_search_async(body, fields_list)
+            data = await _await_native(inner.nearby_search_async(body, fields_list))
         except _CorePlacesError as exc:
             raise_translated(exc, "nearby_search")
         return self._convert_body(NearbySearchResult.from_api, data, "nearby_search")
@@ -1535,12 +1640,14 @@ class AsyncClient(_Base):
         except Exception as exc:
             raise self._invalid_arguments(context, exc) from exc
         try:
-            data = await inner.place_details_async(
-                resolved_id,
-                fields_list,
-                language,
-                region,
-                session_token,
+            data = await _await_native(
+                inner.place_details_async(
+                    resolved_id,
+                    fields_list,
+                    language,
+                    region,
+                    session_token,
+                )
             )
         except _CorePlacesError as exc:
             raise_translated(exc, context)
@@ -1604,9 +1711,7 @@ class AsyncClient(_Base):
         except Exception as exc:
             raise self._invalid_arguments("autocomplete", exc) from exc
         try:
-            data = await inner.autocomplete_async(
-                body, fields_list
-            )
+            data = await _await_native(inner.autocomplete_async(body, fields_list))
         except _CorePlacesError as exc:
             raise_translated(exc, "autocomplete")
         return self._convert_body(AutocompleteResult.from_api, data, "autocomplete")
@@ -1654,8 +1759,8 @@ class AsyncClient(_Base):
         except Exception as exc:
             raise self._invalid_arguments("place_photo", exc) from exc
         try:
-            tagged = await inner.place_photo_async(
-                name, width, height, skip_http_redirect
+            tagged = await _await_native(
+                inner.place_photo_async(name, width, height, skip_http_redirect)
             )
         except _CorePlacesError as exc:
             raise_translated(exc, context)
