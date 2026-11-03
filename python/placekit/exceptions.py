@@ -42,9 +42,14 @@ class PlacesError(Exception):
         #: list is copied, so later mutation of the caller's list cannot
         #: rewrite a raised exception.
         self.details = list(details) if details is not None else []
-        #: Field violations from a BadRequest detail, as dicts with
-        #: ``field`` (the wire name, for example ``textQuery``) and
-        #: ``description`` keys.
+        #: Field violations from a BadRequest detail. A well
+        #: formed entry, one whose ``field`` and ``description``
+        #: members are both strings, reads as a dict with ``field``
+        #: (the wire name, for example ``textQuery``) and
+        #: ``description`` keys. Every other entry reads exactly as
+        #: the wire carried it, so the view never invents a value
+        #: and its length always equals the number of entries in
+        #: the wire array.
         self.field_violations = (
             list(field_violations) if field_violations is not None else []
         )

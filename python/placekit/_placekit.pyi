@@ -31,7 +31,7 @@ class PlacesError(Exception):
     google_status: Optional[str]
     error_code: Optional[int]
     details: list[Any]
-    field_violations: list[dict[str, Any]]
+    field_violations: list[Any]
     quota_violations: list[dict[str, Any]]
     status_mismatch: bool
     retryable: bool

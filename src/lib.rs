@@ -382,21 +382,13 @@ fn to_pyerr(py: Python<'_>, err: CoreError) -> PyErr {
             }
         }
     }
-    let violations: Vec<(String, String)> = err.field_violations();
-    match value_to_py(
-        py,
-        &serde_json::Value::Array(
-            violations
-                .iter()
-                .map(|(field, description)| {
-                    serde_json::json!({"field": field, "description": description})
-                })
-                .collect(),
-        ),
-    )
-    .map_err(|e| e.to_string())
+    match value_to_py(py, &serde_json::Value::Array(err.field_violations()))
+        .map_err(|e| e.to_string())
     {
-        Ok(value) => record_failure(&mut first_failure, instance.setattr("field_violations", value)),
+        Ok(value) => record_failure(
+            &mut first_failure,
+            instance.setattr("field_violations", value),
+        ),
         Err(e) => {
             if first_failure.is_none() {
                 first_failure = Some(e);

@@ -288,10 +288,15 @@ impl Error {
         }
     }
 
-    /// Field violations from a `google.rpc.BadRequest` detail, as
-    /// (field, description) pairs. Field names are the wire (JSON) names,
-    /// for example `textQuery`.
-    pub fn field_violations(&self) -> Vec<(String, String)> {
+    /// Field violations from a `google.rpc.BadRequest` detail. A
+    /// well formed entry, an object whose `field` and `description`
+    /// members are both strings, projects to an object of exactly
+    /// those two members, with the wire (JSON) field name, for
+    /// example `textQuery`. Every other entry passes through
+    /// verbatim as its wire value, so the view fabricates nothing
+    /// and its length always equals the wire array length (Round
+    /// 35, ruling on Round 25 Minor 9).
+    pub fn field_violations(&self) -> Vec<serde_json::Value> {
         let mut out = Vec::new();
         for detail in self.details() {
             let type_url = detail.get("@type").and_then(|v| v.as_str());
@@ -300,17 +305,17 @@ impl Error {
             }
             if let Some(violations) = detail.get("fieldViolations").and_then(|v| v.as_array()) {
                 for violation in violations {
-                    let field = violation
+                    let pair = violation
                         .get("field")
                         .and_then(|v| v.as_str())
-                        .unwrap_or_default()
-                        .to_owned();
-                    let description = violation
-                        .get("description")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or_default()
-                        .to_owned();
-                    out.push((field, description));
+                        .zip(violation.get("description").and_then(|v| v.as_str()));
+                    match pair {
+                        Some((field, description)) => out.push(serde_json::json!({
+                            "field": field,
+                            "description": description,
+                        })),
+                        None => out.push(violation.clone()),
+                    }
                 }
             }
         }
@@ -1890,12 +1895,31 @@ mod tests {
         assert_eq!(err.details().len(), 1);
         assert_eq!(
             err.field_violations(),
-            vec![(
-                "textQuery".to_owned(),
-                "Request contains an invalid argument.".to_owned()
-            )]
+            vec![serde_json::json!({
+                "field": "textQuery",
+                "description": "Request contains an invalid argument.",
+            })]
         );
         assert!(err.quota_violations().is_empty());
+    }
+
+    #[test]
+    fn field_violations_pass_malformed_entries_verbatim() {
+        // Round 35 ruling on Round 25 Minor 9: only a well formed
+        // entry projects; every other entry is its wire value, so
+        // the view length equals the wire array length and nothing
+        // is fabricated.
+        let body = r#"{"error": {"code": 400, "message": "Bad", "status": "INVALID_ARGUMENT", "details": [{"@type": "type.googleapis.com/google.rpc.BadRequest", "fieldViolations": [{"field": "a", "description": "b"}, "oops", {"field": 9, "description": "nine"}, null]}]}}"#;
+        let err = Error::from_response(400, body);
+        assert_eq!(
+            err.field_violations(),
+            vec![
+                serde_json::json!({"field": "a", "description": "b"}),
+                serde_json::json!("oops"),
+                serde_json::json!({"field": 9, "description": "nine"}),
+                serde_json::Value::Null,
+            ]
+        );
     }
 
     #[test]
