@@ -595,6 +595,7 @@ dependencies = [
 name = "placekit-core"
 version = "0.1.0"
 dependencies = [
+ "flate2",
  "futures-util",
  "httpdate",
  "reqwest",

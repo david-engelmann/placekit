@@ -254,3 +254,129 @@ def test_fabricated_mask_string_paths_state_is_config_error():
         normalize_fields(_fabricated_mask("places.id"))
 
 
+# --- Decoder Minor F4: gzip token spellings
+
+
+def _envelope(status_text: str, code: int, message: str) -> str:
+    return json.dumps(
+        {"error": {"code": code, "message": message, "status": status_text}}
+    )
+
+
+QUOTA_BODY = _envelope("RESOURCE_EXHAUSTED", 429, QUOTA_MESSAGE)
+
+
+@pytest.mark.parametrize(
+    "spelling",
+    ["GZip", "GZIP", "gzip, identity", "identity, gzip"],
+)
+def test_gzip_spelling_variants_classify_the_envelope(
+    client, raw_response, spelling
+):
+    raw_response(
+        400,
+        gzip.compress(QUOTA_BODY.encode()),
+        headers={"Content-Encoding": spelling},
+    )
+    with pytest.raises(RateLimitError) as caught:
+        client.text_search("pizza")
+    assert caught.value.google_status == "RESOURCE_EXHAUSTED"
+
+
+def test_gzip_spelling_variants_classify_async(api_key, base_url, raw_response):
+    raw_response(
+        400,
+        gzip.compress(QUOTA_BODY.encode()),
+        headers={"Content-Encoding": "GZip"},
+    )
+
+    async def run():
+        async with AsyncClient(api_key, base_url=base_url) as aclient:
+            with pytest.raises(RateLimitError):
+                await aclient.text_search("pizza")
+
+    asyncio.run(run())
+
+
+def test_gzip_exact_lowercase_unchanged(client, raw_response):
+    raw_response(
+        400,
+        gzip.compress(QUOTA_BODY.encode()),
+        headers={"Content-Encoding": "gzip"},
+    )
+    with pytest.raises(RateLimitError):
+        client.text_search("pizza")
+
+
+def test_gzip_variant_on_success_status_envelope(client, raw_response):
+    raw_response(
+        200,
+        gzip.compress(QUOTA_BODY.encode()),
+        headers={"Content-Encoding": "GZIP"},
+    )
+    with pytest.raises(RateLimitError):
+        client.text_search("pizza")
+
+
+def test_gzip_variant_on_a_success_body_decodes(client, raw_response):
+    body = json.dumps({"places": []})
+    raw_response(
+        200,
+        gzip.compress(body.encode()),
+        headers={"Content-Encoding": "gzip, identity"},
+    )
+    result = client.text_search("pizza")
+    assert result.places == []
+
+
+def test_gzip_variant_on_the_photo_form_decodes(client, raw_response):
+    body = json.dumps(
+        {
+            "name": "places/x/photos/y",
+            "photoUri": "http://127.0.0.1/photo-uri",
+        }
+    )
+    raw_response(
+        200,
+        gzip.compress(body.encode()),
+        headers={"Content-Encoding": "GZip"},
+    )
+    result = client.place_photo("places/x/photos/y", skip_http_redirect=True)
+    assert result.name == "places/x/photos/y"
+    assert result.photo_uri == "http://127.0.0.1/photo-uri"
+
+
+def test_twice_compressed_declared_once_keeps_its_behaviour(
+    client, raw_response
+):
+    twice = gzip.compress(gzip.compress(QUOTA_BODY.encode()))
+    raw_response(400, twice, headers={"Content-Encoding": "gzip"})
+    with pytest.raises(InvalidRequestError) as caught:
+        client.text_search("pizza")
+    assert caught.value.google_status is None
+
+
+def test_gzip_variant_twice_compressed_decodes_one_layer(
+    client, raw_response
+):
+    # The core side pass runs once: a twice compressed body
+    # under a variant spelling still ends compressed, so the
+    # envelope stays unseen, the same end state the transport
+    # path gives it.
+    twice = gzip.compress(gzip.compress(QUOTA_BODY.encode()))
+    raw_response(400, twice, headers={"Content-Encoding": "GZip"})
+    with pytest.raises(InvalidRequestError) as caught:
+        client.text_search("pizza")
+    assert caught.value.google_status is None
+
+
+def test_other_codings_keep_their_behaviour(client, raw_response):
+    raw_response(
+        400,
+        QUOTA_BODY.encode(),
+        headers={"Content-Encoding": "deflate"},
+    )
+    with pytest.raises(RateLimitError):
+        client.text_search("pizza")
+
+

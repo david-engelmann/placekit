@@ -576,8 +576,40 @@ impl Client {
         status: reqwest::StatusCode,
         label: &str,
     ) -> Result<Vec<u8>, Error> {
+        let headers = response.headers().clone();
         match read_body_capped(response, self.max_response_bytes).await {
-            BodyRead::Complete(bytes) => Ok(bytes),
+            BodyRead::Complete(bytes) => {
+                // A gzip body the transport did not decode (its
+                // Content-Encoding matching honours only the
+                // exact lowercase token) is decoded here, once,
+                // under the same cap (Round 31, Decoder Minor
+                // F4; see `gunzip_capped` for the guard).
+                if bytes.starts_with(&GZIP_MAGIC)
+                    && content_encoding_names_gzip(&headers)
+                    && !transport_decoded_gzip(&headers)
+                {
+                    match gunzip_capped(&bytes, self.max_response_bytes) {
+                        Gunzip::Done(out) => Ok(out),
+                        Gunzip::OverCap(_) => Err(Error::Decode {
+                            detail: format!(
+                                "{label} exceeded the maximum of {} bytes",
+                                self.max_response_bytes
+                            ),
+                            status: Some(status.as_u16()),
+                            source: None,
+                        }),
+                        Gunzip::Failed { error, .. } => Err(Error::Decode {
+                            detail: format!(
+                                "{label} carried a gzip body that failed to decompress: {error}"
+                            ),
+                            status: Some(status.as_u16()),
+                            source: None,
+                        }),
+                    }
+                } else {
+                    Ok(bytes)
+                }
+            }
             BodyRead::TooLarge => Err(Error::Decode {
                 detail: format!(
                     "{label} exceeded the maximum of {} bytes",
@@ -786,6 +818,7 @@ async fn read_error_body(
     content_type: Option<&str>,
 ) -> Error {
     use futures_util::StreamExt;
+    let headers = response.headers().clone();
     let mut stream = response.bytes_stream();
     let mut buf = Vec::new();
     let mut capped = false;
@@ -846,11 +879,121 @@ async fn read_error_body(
             }
         }
     }
+    // A gzip body the transport did not decode is decoded
+    // here before the envelope is read (Round 31, Decoder
+    // Minor F4; see `gunzip_capped` for the guard). The cap
+    // judges the decompressed form, as it does on the
+    // transport decoded path: a form that runs past it is
+    // read as capped, and a stream that fails after yielding
+    // a prefix is read as the capped prefix it produced. A
+    // stream that fails before yielding anything leaves the
+    // raw bytes to the bare HTTP fallback, the same class the
+    // transport gives a corrupted stream on this path.
+    let gunzipped = if buf.starts_with(&GZIP_MAGIC)
+        && content_encoding_names_gzip(&headers)
+        && !transport_decoded_gzip(&headers)
+    {
+        match gunzip_capped(&buf, ERROR_BODY_CAP) {
+            Gunzip::Done(out) => Some((out, capped)),
+            Gunzip::OverCap(out) => Some((out, true)),
+            Gunzip::Failed { partial, .. } if !partial.is_empty() => Some((partial, true)),
+            Gunzip::Failed { .. } => None,
+        }
+    } else {
+        None
+    };
+    let (buf, capped) = match gunzipped {
+        Some(pair) => pair,
+        None => (buf, capped),
+    };
     let text = String::from_utf8_lossy(&buf);
     if capped {
         Error::from_capped_error_body(status, &text, content_type, ERROR_BODY_CAP)
     } else {
         Error::from_response_detailed(status, &text, content_type)
+    }
+}
+
+/// The first two bytes of a gzip stream.
+const GZIP_MAGIC: [u8; 2] = [0x1f, 0x8b];
+
+/// Whether any `Content-Encoding` header value names gzip
+/// among its comma separated tokens, case insensitively.
+/// Content coding tokens are case insensitive and the header
+/// is a list, so `GZip` and `gzip, identity` and
+/// `identity, gzip` all name the one encoding this client
+/// decodes (Round 31, Decoder Minor F4).
+fn content_encoding_names_gzip(headers: &HeaderMap) -> bool {
+    headers
+        .get_all(reqwest::header::CONTENT_ENCODING)
+        .iter()
+        .any(|value| {
+            value.to_str().map_or(false, |text| {
+                text.split(',')
+                    .any(|token| token.trim().eq_ignore_ascii_case("gzip"))
+            })
+        })
+}
+
+/// Whether the transport already decoded this response's gzip
+/// body. The transport's own matching claims the body only
+/// when a `Content-Encoding` value is exactly the lowercase
+/// token, the whole value with nothing beside it: the case
+/// variant spellings and the list forms all reach this layer
+/// still compressed, which is the gap the core side decoding
+/// fills. A body the transport claimed is never decoded a
+/// second time here. That matters for a twice compressed body
+/// declared once: the transport peels its one layer, the
+/// remaining layer still carries the gzip magic, and its
+/// standing behaviour (the inner body is not an envelope this
+/// client reads) is kept because the exact token says the
+/// transport already did its pass.
+fn transport_decoded_gzip(headers: &HeaderMap) -> bool {
+    headers
+        .get_all(reqwest::header::CONTENT_ENCODING)
+        .iter()
+        .any(|value| value.to_str().map_or(false, |text| text.trim() == "gzip"))
+}
+
+/// The outcome of one capped gzip decompression pass.
+enum Gunzip {
+    /// The stream decoded whole.
+    Done(Vec<u8>),
+    /// The decompressed form ran past the cap; the bytes are
+    /// its prefix at the cap.
+    OverCap(Vec<u8>),
+    /// The stream failed. Output produced before the failure
+    /// rides along, because a stream cut short by a read cap
+    /// yields its prefix before it reports the cut.
+    Failed { partial: Vec<u8>, error: String },
+}
+
+/// Decompress one gzip body under an output cap. Exactly one
+/// pass is ever made: a body that decodes to a further gzip
+/// stream keeps it, which is what twice compressed bodies
+/// declared once meet on this path as on the transport path.
+fn gunzip_capped(bytes: &[u8], cap: usize) -> Gunzip {
+    use std::io::Read;
+    let mut decoder = flate2::read::GzDecoder::new(bytes);
+    let mut out = Vec::new();
+    let mut chunk = [0u8; 16 * 1024];
+    loop {
+        match decoder.read(&mut chunk) {
+            Ok(0) => return Gunzip::Done(out),
+            Ok(read) => {
+                out.extend_from_slice(&chunk[..read]);
+                if out.len() > cap {
+                    out.truncate(cap);
+                    return Gunzip::OverCap(out);
+                }
+            }
+            Err(error) => {
+                return Gunzip::Failed {
+                    partial: out,
+                    error: error.to_string(),
+                };
+            }
+        }
     }
 }
 
@@ -1668,8 +1811,7 @@ mod tests {
     }
 
     #[test]
-    fn retry_after_parses_delta_seconds_and_http_dates() {
-        // R4-25: both header forms are read; a past date is zero.
+    fn retry_after_parses_delta_seconds_and_http_dates() {        // R4-25: both header forms are read; a past date is zero.
         // Round 24: the value is float seconds end to end, fractional
         // deltas keep their fraction, and a negative delta is unread.
         let now = httpdate::parse_http_date("Sun, 06 Nov 1994 08:49:37 GMT").unwrap();
@@ -1686,6 +1828,90 @@ mod tests {
             Some(0.0)
         );
         assert_eq!(parse_retry_after("whenever", now), None);
+    }
+
+    fn encoding_headers(value: &str) -> HeaderMap {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            reqwest::header::CONTENT_ENCODING,
+            HeaderValue::from_str(value).unwrap(),
+        );
+        headers
+    }
+
+    fn gzipped(data: &[u8]) -> Vec<u8> {
+        use std::io::Write;
+        let mut encoder =
+            flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+        encoder.write_all(data).unwrap();
+        encoder.finish().unwrap()
+    }
+
+    #[test]
+    fn gzip_header_matching_names_tokens_case_insensitively() {
+        // Round 31, Decoder Minor F4: content coding tokens are
+        // case insensitive and the header is a list. The naming
+        // check takes both, while the transport's own claim on
+        // the body stays the exact lowercase token alone, which
+        // is what keeps a body it already decoded from being
+        // decoded a second time.
+        for value in ["gzip", "GZip", "GZIP", "gzip, identity", "identity, gzip"] {
+            let headers = encoding_headers(value);
+            assert!(content_encoding_names_gzip(&headers), "{value}");
+        }
+        for value in ["identity", "xgzip", "gzip2", "deflate"] {
+            let headers = encoding_headers(value);
+            assert!(!content_encoding_names_gzip(&headers), "{value}");
+        }
+        assert!(transport_decoded_gzip(&encoding_headers("gzip")));
+        for value in ["GZip", "GZIP", "gzip, identity", "identity, gzip"] {
+            assert!(
+                !transport_decoded_gzip(&encoding_headers(value)),
+                "{value}"
+            );
+        }
+    }
+
+    #[test]
+    fn gunzip_capped_decodes_once_and_bounds_its_output() {
+        // One pass only: a twice compressed body decodes to its
+        // inner compressed form and keeps it.
+        let plain = br#"{"error": {"code": 429}}"#;
+        let once = gzipped(plain);
+        match gunzip_capped(&once, 1024) {
+            Gunzip::Done(out) => assert_eq!(out, plain),
+            _ => panic!("a once compressed body must decode whole"),
+        }
+        let twice = gzipped(&once);
+        match gunzip_capped(&twice, 1024) {
+            Gunzip::Done(out) => assert_eq!(out, once),
+            _ => panic!("one pass over a twice compressed body keeps the inner form"),
+        }
+        // The cap judges the decompressed form.
+        let big = vec![b'x'; 5000];
+        let packed = gzipped(&big);
+        match gunzip_capped(&packed, 1000) {
+            Gunzip::OverCap(out) => assert_eq!(out.len(), 1000),
+            _ => panic!("an over cap decompression must report its prefix"),
+        }
+        // A stream that is not gzip fails with no output.
+        match gunzip_capped(b"not a gzip stream", 1024) {
+            Gunzip::Failed { partial, .. } => assert!(partial.is_empty()),
+            _ => panic!("a non gzip body must fail"),
+        }
+        // A stream cut short yields the prefix it produced
+        // before it reports the cut.
+        let body = vec![b'y'; 100_000];
+        let packed = gzipped(&body);
+        let cut = &packed[..packed.len() / 2];
+        match gunzip_capped(cut, 1_000_000) {
+            Gunzip::Failed { partial, .. } => {
+                assert!(!partial.is_empty());
+                assert!(body.starts_with(&partial));
+                assert!(partial.len() < body.len());
+            }
+            _ => panic!("a cut stream must fail with its prefix attached"),
+        }
     }
 
     #[test]
