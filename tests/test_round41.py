@@ -407,6 +407,44 @@ def test_corrupt_gzip_on_a_complete_read_reports_unreadable(
     assert "262144" not in str(exc)
 
 
+def _first_byte_corrupt_gzip_body() -> bytes:
+    # A small envelope flipped at the first deflate byte, so the
+    # stream fails before yielding anything and its partial is
+    # empty. The raw read is complete, far under the cap.
+    body = json.dumps(
+        {
+            "error": {
+                "code": 400,
+                "message": "r41 probe",
+                "status": "INVALID_ARGUMENT",
+                "details": [],
+            }
+        }
+    ).encode()
+    packed = bytearray(gzip.compress(body, mtime=0))
+    packed[10] ^= 0xFF
+    return bytes(packed)
+
+
+def test_corrupt_gzip_failing_before_any_output_reports_unreadable(
+    client, raw_response
+):
+    body = _first_byte_corrupt_gzip_body()
+    exc = _raised(
+        client,
+        raw_response,
+        body,
+        headers={"Content-Encoding": "GZip"},
+    )
+    assert "unreadable" in str(exc)
+    assert "stopped at" not in str(exc)
+    assert "262144" not in str(exc)
+    # The fall through reading sized the body by the byte length
+    # of its lossy UTF 8 rendering, a size the body never had.
+    lossy_size = len(body.decode("utf-8", errors="replace").encode("utf-8"))
+    assert str(lossy_size) not in str(exc)
+
+
 def test_capped_error_body_still_reports_the_cap(client, raw_response):
     exc = _raised(client, raw_response, "x" * 300_000)
     assert "stopped at the 262144 byte cap" in str(exc)
