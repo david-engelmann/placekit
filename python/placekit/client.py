@@ -454,6 +454,24 @@ class _Base:
                     "timeout must be a positive, finite number of seconds, "
                     f"at most {_MAX_TIMEOUT_SECONDS}, got {_safe_repr(timeout)}"
                 )
+            if timeout is not None and not isinstance(timeout, float):
+                # Coerce the timeout to a plain float here, inside
+                # the guard. The native build below extracts its
+                # arguments after this block, and extracting an
+                # int spends that value's float conversion one
+                # more time, outside the guard, so a two faced int
+                # subclass whose conversion behaves on the read
+                # validation spends and misbehaves on the
+                # extraction read crossed construction bare
+                # (Round 31 landing repair, red team Minor 1).
+                # Passing a plain float onward leaves no caller
+                # conversion for the extraction to run. A float
+                # instance needs no coercion, because no reader on
+                # either side runs a conversion on a float value.
+                # The key and the base URL need none either, since
+                # their extraction reads the string buffer and
+                # fires no dunder at all.
+                timeout = float(timeout)
         except ConfigError:
             raise
         except Exception as exc:

@@ -72,6 +72,40 @@ class FloatRaisesInt(int):
         raise RuntimeError("evil float")
 
 
+class FloatSecondRaisesInt(int):
+    """An int timeout whose float conversion behaves on its
+    first call and raises on the second."""
+
+    def __new__(cls):
+        return super().__new__(cls, 5)
+
+    def __init__(self):
+        self.calls = 0
+
+    def __float__(self):
+        self.calls += 1
+        if self.calls >= 2:
+            raise RuntimeError("float boom on call %d" % self.calls)
+        return 5.0
+
+
+class FloatSecondReturnsStrInt(int):
+    """An int timeout whose float conversion returns a string
+    on its second call."""
+
+    def __new__(cls):
+        return super().__new__(cls, 5)
+
+    def __init__(self):
+        self.calls = 0
+
+    def __float__(self):
+        self.calls += 1
+        if self.calls >= 2:
+            return "not-a-number"  # type: ignore[return-value]
+        return 5.0
+
+
 @pytest.fixture()
 def client(api_key, base_url) -> Client:
     return Client(api_key, base_url=base_url)
@@ -166,6 +200,30 @@ def test_constructor_timeout_repr_raises_still_refuses_as_config_error():
     with pytest.raises(ConfigError) as caught:
         Client("test-key", timeout=ReprRaisesInt(99999))
     assert "timeout" in str(caught.value)
+
+
+@pytest.mark.parametrize("make", [Client, AsyncClient])
+def test_constructor_timeout_second_conversion_raises_is_config_error(make):
+    # The guarded validation block spends the first float
+    # conversion (the finiteness check). The native build then
+    # extracts the timeout after the block, and that extraction
+    # used to spend the second conversion outside any guard, so
+    # this value crossed construction as a bare RuntimeError
+    # (landing red team Minor 1). The timeout is now coerced to
+    # a plain float inside the guard, so the second conversion
+    # spends inside it and lands as the chained ConfigError.
+    with pytest.raises(ConfigError) as caught:
+        make("test-key", timeout=FloatSecondRaisesInt())
+    assert isinstance(caught.value.__cause__, RuntimeError)
+
+
+def test_constructor_timeout_second_conversion_returning_str_is_config_error():
+    # The same second read in its non raising form. A
+    # conversion returning a string on its second call made
+    # the argument extraction itself raise a bare TypeError.
+    with pytest.raises(ConfigError) as caught:
+        Client("test-key", timeout=FloatSecondReturnsStrInt())
+    assert isinstance(caught.value.__cause__, TypeError)
 
 
 def test_constructor_plain_refusals_keep_their_messages():
