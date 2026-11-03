@@ -371,41 +371,57 @@ fn to_pyerr(py: Python<'_>, err: CoreError) -> PyErr {
         &mut first_failure,
         instance.setattr("retry_after", err.retry_after()),
     );
-    match serde_json::to_value(err.details())
+    // The details surface (the parsed details and the field and
+    // quota views extracted from them) converts as one surface,
+    // and it is best effort diagnostic payload rather than
+    // classification. A value inside it that this layer cannot
+    // convert, an integer literal past the interpreter's exact
+    // conversion limit is the proven shape (Round 41, Finding 3),
+    // used to count as an attachment failure like any other, so
+    // the fallback below demoted the whole error to the plainest
+    // PlacesError and the caller lost the class, the Google
+    // status, the error code and the retryable flag the core had
+    // classified, for the sake of the payload. The surface now
+    // degrades to empty instead and records no failure, so the
+    // classification attributes attached above stand exactly as
+    // classified while the details and both views read empty for
+    // that call.
+    let details_result = serde_json::to_value(err.details())
         .map_err(|e| e.to_string())
-        .and_then(|details| value_to_py(py, &details).map_err(|e| e.to_string()))
-    {
-        Ok(value) => record_failure(&mut first_failure, instance.setattr("details", value)),
-        Err(e) => {
-            if first_failure.is_none() {
-                first_failure = Some(e);
-            }
+        .and_then(|details| value_to_py(py, &details).map_err(|e| e.to_string()));
+    let field_violations_result =
+        value_to_py(py, &serde_json::Value::Array(err.field_violations()))
+            .map_err(|e| e.to_string());
+    let quota_violations_result =
+        value_to_py(py, &serde_json::Value::Array(err.quota_violations()))
+            .map_err(|e| e.to_string());
+    match (
+        details_result,
+        field_violations_result,
+        quota_violations_result,
+    ) {
+        (Ok(details), Ok(field_violations), Ok(quota_violations)) => {
+            record_failure(&mut first_failure, instance.setattr("details", details));
+            record_failure(
+                &mut first_failure,
+                instance.setattr("field_violations", field_violations),
+            );
+            record_failure(
+                &mut first_failure,
+                instance.setattr("quota_violations", quota_violations),
+            );
         }
-    }
-    match value_to_py(py, &serde_json::Value::Array(err.field_violations()))
-        .map_err(|e| e.to_string())
-    {
-        Ok(value) => record_failure(
-            &mut first_failure,
-            instance.setattr("field_violations", value),
-        ),
-        Err(e) => {
-            if first_failure.is_none() {
-                first_failure = Some(e);
-            }
-        }
-    }
-    match value_to_py(py, &serde_json::Value::Array(err.quota_violations()))
-        .map_err(|e| e.to_string())
-    {
-        Ok(value) => record_failure(
-            &mut first_failure,
-            instance.setattr("quota_violations", value),
-        ),
-        Err(e) => {
-            if first_failure.is_none() {
-                first_failure = Some(e);
-            }
+        _ => {
+            let empty = || pyo3::types::PyList::empty(py).unbind().into_any();
+            record_failure(&mut first_failure, instance.setattr("details", empty()));
+            record_failure(
+                &mut first_failure,
+                instance.setattr("field_violations", empty()),
+            );
+            record_failure(
+                &mut first_failure,
+                instance.setattr("quota_violations", empty()),
+            );
         }
     }
     if let Some(failure) = first_failure {
