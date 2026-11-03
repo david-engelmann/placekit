@@ -1054,8 +1054,8 @@ class Client(_Base):
         """
         inner = self._ensure_open("text_search")
         self._check_no_running_loop("text_search")
-        self._require_str("query", query, "text_search")
         try:
+            self._require_str("query", query, "text_search")
             body = self._text_search_body(
                 query,
                 page_token=page_token,
@@ -1240,8 +1240,8 @@ class Client(_Base):
         """
         inner = self._ensure_open("autocomplete")
         self._check_no_running_loop("autocomplete")
-        self._require_str("input_text", input_text, "autocomplete")
         try:
+            self._require_str("input_text", input_text, "autocomplete")
             body = self._autocomplete_body(
                 input_text,
                 language=language,
@@ -1518,8 +1518,8 @@ class AsyncClient(_Base):
         mapping, not only a dict.
         """
         inner = self._ensure_open("text_search")
-        self._require_str("query", query, "text_search")
         try:
+            self._require_str("query", query, "text_search")
             body = self._text_search_body(
                 query,
                 page_token=page_token,
@@ -1703,8 +1703,8 @@ class AsyncClient(_Base):
         mask is optional on this endpoint.
         """
         inner = self._ensure_open("autocomplete")
-        self._require_str("input_text", input_text, "autocomplete")
         try:
+            self._require_str("input_text", input_text, "autocomplete")
             body = self._autocomplete_body(
                 input_text,
                 language=language,
