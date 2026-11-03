@@ -584,7 +584,12 @@ impl Client {
                 // header value and honours only its exact
                 // lowercase token form) is decoded here, once,
                 // under the same cap (Round 31, Decoder Minor
-                // F4; see `gunzip_capped` for the guard).
+                // F4). The guard is the three part condition
+                // below: the magic bytes, a header naming gzip
+                // (`content_encoding_names_gzip`), and the
+                // transport not having decoded the body already
+                // (`transport_decoded_gzip`). The decode itself
+                // is one capped pass (`gunzip_capped`).
                 if bytes.starts_with(&GZIP_MAGIC)
                     && content_encoding_names_gzip(&headers)
                     && !transport_decoded_gzip(&headers)
@@ -882,7 +887,12 @@ async fn read_error_body(
     }
     // A gzip body the transport did not decode is decoded
     // here before the envelope is read (Round 31, Decoder
-    // Minor F4; see `gunzip_capped` for the guard). The cap
+    // Minor F4). The guard is the three part condition below,
+    // the same one the success path applies: the magic bytes,
+    // a header naming gzip (`content_encoding_names_gzip`),
+    // and the transport not having decoded the body already
+    // (`transport_decoded_gzip`). The decode itself is one
+    // capped pass (`gunzip_capped`). The cap
     // judges the decompressed form, as it does on the
     // transport decoded path: a form that runs past it is
     // read as capped, and a stream that fails after yielding
@@ -944,7 +954,13 @@ fn content_encoding_names_gzip(headers: &HeaderMap) -> bool {
 /// spellings and the list forms all reach this layer still
 /// compressed, which is the gap the core side decoding fills.
 /// This judgement rests on the first value alone, matching
-/// that keying (Round 31 landing repair). Reading any later
+/// that keying (Round 31 landing repair), and it compares
+/// the value trimmed of surrounding whitespace against the
+/// lowercase token, one step wider than the transport's own
+/// test. The wider step can only move a body toward not
+/// decoding twice, and no wire input reaches it, because
+/// header values arrive stripped of surrounding whitespace
+/// from the wire parser. Reading any later
 /// value as the transport's claim would leave a body it never
 /// touched compressed in the duplicate arrangement where a
 /// case variant stands first and the exact token second. A

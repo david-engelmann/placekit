@@ -784,27 +784,6 @@ const ENVELOPE_TEXT_CAP_CHARS: usize = 500;
 /// Read the envelope fields of a response body, or `None` when the
 /// body carries no `error` object at all.
 ///
-/// The whole document parse is tried first and its field by field
-/// posture is unchanged (R4-09). When the whole parse refuses the
-/// body, the envelope head fields are recovered tolerantly instead
-/// (Round 25, Major 1 and the red team depth finding): the parse is
-/// all or nothing, so a body truncated by the error read cap, or
-/// carrying a value nested past the parser depth limit anywhere
-/// inside it, lost the status and message and code its head carried
-/// complete, and classification fell back to the bare HTTP code. The
-/// tolerant scan reads only the head, so neither body size nor
-/// nesting anywhere in the body can defeat it. Details are not
-/// recovered by the scan; they degrade to empty while the status,
-/// message and class survive.
-///
-/// String values inside parsed details are capped at the same 500
-/// character discipline as the envelope message (Round 25, Minor
-/// 6). The message cap alone left the details beside it bounded
-/// only by the body cap, and on a success status envelope that cap
-/// is the 32 MiB success cap rather than the error read cap, so a
-/// hostile or broken endpoint could park a details payload of that
-/// size inside an exception callers routinely log or retain.
-///
 /// A body whose bracket nesting reaches the parser recursion
 /// limit anywhere is known before the parse starts to be a body
 /// the parse cannot accept, so past the preflight size bound it
@@ -829,6 +808,28 @@ const ENVELOPE_TEXT_CAP_CHARS: usize = 500;
 /// large body of few brackets, a long string or a flat list,
 /// cannot nest to the limit, so its parse runs exactly as it did
 /// before the preflight existed and pays no walk either.
+///
+/// Past that carve out, the whole document parse is tried first and
+/// its field by field posture is unchanged (R4-09). When the whole
+/// parse refuses the body, the envelope head fields are recovered
+/// tolerantly instead
+/// (Round 25, Major 1 and the red team depth finding): the parse is
+/// all or nothing, so a body truncated by the error read cap, or
+/// carrying a value nested past the parser depth limit anywhere
+/// inside it, lost the status and message and code its head carried
+/// complete, and classification fell back to the bare HTTP code. The
+/// tolerant scan reads only the head, so neither body size nor
+/// nesting anywhere in the body can defeat it. Details are not
+/// recovered by the scan; they degrade to empty while the status,
+/// message and class survive.
+///
+/// String values inside parsed details are capped at the same 500
+/// character discipline as the envelope message (Round 25, Minor
+/// 6). The message cap alone left the details beside it bounded
+/// only by the body cap, and on a success status envelope that cap
+/// is the 32 MiB success cap rather than the error read cap, so a
+/// hostile or broken endpoint could park a details payload of that
+/// size inside an exception callers routinely log or retain.
 fn parse_envelope(body: &str) -> Option<EnvelopeParts> {
     if preflight_trip(body).is_some() {
         return parse_envelope_head(body);
