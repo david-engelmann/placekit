@@ -19,6 +19,8 @@ from __future__ import annotations
 import asyncio
 import gzip
 import json
+import threading
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
 
@@ -438,5 +440,100 @@ def test_other_codings_keep_their_behaviour(client, raw_response):
     )
     with pytest.raises(RateLimitError):
         client.text_search("pizza")
+
+
+# --- Landing repair: duplicate Content Encoding headers
+
+
+class _DuplicateEncodingHandler(BaseHTTPRequestHandler):
+    """Serves one gzipped body under two Content Encoding
+    headers, in the order the class attributes name."""
+
+    encodings: list = []
+    status = 400
+    payload = b""
+
+    def _answer(self):
+        length = int(self.headers.get("Content-Length") or 0)
+        if length:
+            self.rfile.read(length)
+        body = gzip.compress(type(self).payload)
+        self.send_response(type(self).status)
+        self.send_header("Content-Type", "application/json")
+        for value in type(self).encodings:
+            self.send_header("Content-Encoding", value)
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    do_POST = _answer
+    do_GET = _answer
+
+    def log_message(self, *args):
+        pass
+
+
+@pytest.fixture()
+def duplicate_encoding_url():
+    server = ThreadingHTTPServer(("127.0.0.1", 0), _DuplicateEncodingHandler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    yield f"http://127.0.0.1:{server.server_address[1]}/v1"
+    server.shutdown()
+    server.server_close()
+
+
+def test_gzip_duplicate_headers_variant_first_classifies(
+    api_key, duplicate_encoding_url
+):
+    # The transport keys its decoding on the first Content
+    # Encoding value alone, so a case variant first means the
+    # body reaches the core still compressed even when the
+    # exact token stands second. The core judgement previously
+    # scanned every value, read the pair as already decoded,
+    # and the envelope stayed unseen (landing red team
+    # Minor 3).
+    _DuplicateEncodingHandler.encodings = ["GZip", "gzip"]
+    _DuplicateEncodingHandler.status = 400
+    _DuplicateEncodingHandler.payload = QUOTA_BODY.encode()
+    client = Client(api_key, base_url=duplicate_encoding_url)
+    with pytest.raises(RateLimitError) as caught:
+        client.text_search("pizza")
+    assert caught.value.google_status == "RESOURCE_EXHAUSTED"
+
+
+def test_gzip_duplicate_headers_exact_first_classifies(
+    api_key, duplicate_encoding_url
+):
+    # The control order. The exact token first is the
+    # transport's own claim, and the classification is the
+    # same on both sides of the repair.
+    _DuplicateEncodingHandler.encodings = ["gzip", "GZip"]
+    _DuplicateEncodingHandler.status = 400
+    _DuplicateEncodingHandler.payload = QUOTA_BODY.encode()
+    client = Client(api_key, base_url=duplicate_encoding_url)
+    with pytest.raises(RateLimitError) as caught:
+        client.text_search("pizza")
+    assert caught.value.google_status == "RESOURCE_EXHAUSTED"
+
+
+def test_gzip_duplicate_headers_variant_first_photo_form_decodes(
+    api_key, duplicate_encoding_url
+):
+    # The success path form of the same gap, over the photo
+    # URI body: variant first and exact second left the JSON
+    # compressed and the call answered as a DecodeError.
+    _DuplicateEncodingHandler.encodings = ["GZip", "gzip"]
+    _DuplicateEncodingHandler.status = 200
+    _DuplicateEncodingHandler.payload = json.dumps(
+        {
+            "name": "places/x/photos/y",
+            "photoUri": "http://127.0.0.1/photo-uri",
+        }
+    ).encode()
+    client = Client(api_key, base_url=duplicate_encoding_url)
+    result = client.place_photo(
+        "places/x/photos/y", max_width_px=800, skip_http_redirect=True
+    )
+    assert result.photo_uri == "http://127.0.0.1/photo-uri"
 
 

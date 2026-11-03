@@ -580,8 +580,9 @@ impl Client {
         match read_body_capped(response, self.max_response_bytes).await {
             BodyRead::Complete(bytes) => {
                 // A gzip body the transport did not decode (its
-                // Content-Encoding matching honours only the
-                // exact lowercase token) is decoded here, once,
+                // Content-Encoding matching reads the first
+                // header value and honours only its exact
+                // lowercase token form) is decoded here, once,
                 // under the same cap (Round 31, Decoder Minor
                 // F4; see `gunzip_capped` for the guard).
                 if bytes.starts_with(&GZIP_MAGIC)
@@ -936,23 +937,30 @@ fn content_encoding_names_gzip(headers: &HeaderMap) -> bool {
 }
 
 /// Whether the transport already decoded this response's gzip
-/// body. The transport's own matching claims the body only
-/// when a `Content-Encoding` value is exactly the lowercase
-/// token, the whole value with nothing beside it: the case
-/// variant spellings and the list forms all reach this layer
-/// still compressed, which is the gap the core side decoding
-/// fills. A body the transport claimed is never decoded a
-/// second time here. That matters for a twice compressed body
-/// declared once: the transport peels its one layer, the
-/// remaining layer still carries the gzip magic, and its
-/// standing behaviour (the inner body is not an envelope this
-/// client reads) is kept because the exact token says the
-/// transport already did its pass.
+/// body. The transport keys its own decision on the first
+/// `Content-Encoding` value it is given, and it claims the
+/// body only when that value is exactly the lowercase token,
+/// the whole value with nothing beside it: the case variant
+/// spellings and the list forms all reach this layer still
+/// compressed, which is the gap the core side decoding fills.
+/// This judgement rests on the first value alone, matching
+/// that keying (Round 31 landing repair). Reading any later
+/// value as the transport's claim would leave a body it never
+/// touched compressed in the duplicate arrangement where a
+/// case variant stands first and the exact token second. A
+/// body the transport claimed is never decoded a second time
+/// here. That matters for a twice compressed body declared
+/// once: the transport peels its one layer, the remaining
+/// layer still carries the gzip magic, and its standing
+/// behaviour (the inner body is not an envelope this client
+/// reads) is kept because the exact token says the transport
+/// already did its pass.
 fn transport_decoded_gzip(headers: &HeaderMap) -> bool {
     headers
         .get_all(reqwest::header::CONTENT_ENCODING)
         .iter()
-        .any(|value| value.to_str().is_ok_and(|text| text.trim() == "gzip"))
+        .next()
+        .is_some_and(|value| value.to_str().is_ok_and(|text| text.trim() == "gzip"))
 }
 
 /// The outcome of one capped gzip decompression pass.
@@ -1867,6 +1875,41 @@ mod tests {
         for value in ["GZip", "GZIP", "gzip, identity", "identity, gzip"] {
             assert!(!transport_decoded_gzip(&encoding_headers(value)), "{value}");
         }
+    }
+
+    #[test]
+    fn gzip_transport_judgement_reads_the_first_value_only() {
+        // Round 31 landing repair, red team Minor 3: duplicate
+        // Content Encoding headers are legal on the wire, and
+        // the transport keys its decoding on the first value
+        // alone. The guard previously scanned every value, so
+        // a case variant first and the exact token second read
+        // as already decoded and the body stayed compressed in
+        // both engines. The judgement now rests on the first
+        // value only, in both orders.
+        let mut headers = HeaderMap::new();
+        headers.append(
+            reqwest::header::CONTENT_ENCODING,
+            HeaderValue::from_static("GZip"),
+        );
+        headers.append(
+            reqwest::header::CONTENT_ENCODING,
+            HeaderValue::from_static("gzip"),
+        );
+        assert!(!transport_decoded_gzip(&headers));
+        // The naming check still sees the encoding named, so
+        // this is the order the core side pass decodes.
+        assert!(content_encoding_names_gzip(&headers));
+        let mut headers = HeaderMap::new();
+        headers.append(
+            reqwest::header::CONTENT_ENCODING,
+            HeaderValue::from_static("gzip"),
+        );
+        headers.append(
+            reqwest::header::CONTENT_ENCODING,
+            HeaderValue::from_static("GZip"),
+        );
+        assert!(transport_decoded_gzip(&headers));
     }
 
     #[test]
