@@ -283,7 +283,25 @@ class FieldMask:
                 context="FieldMask",
             )
         for path in paths:
-            if not isinstance(path, str) or not _valid_path(path):
+            if not isinstance(path, str):
+                raise ConfigError(
+                    f"invalid field mask path: {_safe_repr(path)}",
+                    context="FieldMask",
+                )
+            try:
+                valid = _valid_path(path)
+            except Exception as exc:
+                # The path check reads the member (strip,
+                # membership, split), and a string subclass whose
+                # read raises used to escape construction as a
+                # bare builtin. The member is rendered safely, so
+                # the refusal itself cannot be the escaping read
+                # (Round 31, Caller Minor 3).
+                raise ConfigError(
+                    f"invalid field mask path: {_safe_repr(path)}",
+                    context="FieldMask",
+                ) from exc
+            if not valid:
                 raise ConfigError(
                     f"invalid field mask path: {_safe_repr(path)}",
                     context="FieldMask",
@@ -376,12 +394,57 @@ def _valid_path(path: str) -> bool:
     return all(_SEGMENT.fullmatch(segment) for segment in path.split("."))
 
 
+def _mask_paths(mask: FieldMask) -> list[str]:
+    """The paths of a mask instance, read defensively.
+
+    A mask is a frozen dataclass, but a caller can fabricate
+    one past its constructor, so the state an instance carries
+    is not trusted here. A mask missing its paths is refused
+    as a ConfigError instead of escaping as a bare
+    AttributeError, and every member is revalidated as a
+    string at this layer, so a fabricated mask carrying a non
+    string member is refused before any native call, whose
+    conversion would otherwise refuse the member with a bare
+    TypeError outside every wrap the client provides (Round
+    31, Caller Minor 3 and red team Minor 1). An ordinary mask
+    reads exactly as it did before.
+    """
+    try:
+        paths = mask.paths
+    except Exception as exc:
+        raise ConfigError(
+            "the FieldMask carries no readable paths",
+            context="FieldMask",
+        ) from exc
+    if isinstance(paths, (str, bytes)) or not isinstance(paths, (tuple, list)):
+        raise ConfigError(
+            "the FieldMask paths must be a tuple of strings, "
+            f"got {_safe_repr(paths)}",
+            context="FieldMask",
+        )
+    try:
+        items = _materialize_bounded(
+            "field paths", paths, MAX_MATERIALIZED_ITEMS
+        )
+    except ConfigError as exc:
+        if exc.context is None:
+            exc.context = "FieldMask"
+        raise
+    for item in items:
+        if not isinstance(item, str):
+            raise ConfigError(
+                f"invalid field mask path: {_safe_repr(item)}",
+                context="FieldMask",
+            )
+    return items
+
+
 def normalize_fields(fields: FieldsLike) -> list[str] | None:
     """Normalize a fields argument into a plain list of paths, or None."""
     if fields is None:
         return None
     if isinstance(fields, FieldMask):
-        return list(fields.paths)
+        return _mask_paths(fields)
     if isinstance(fields, (str, bytes)):
         raise ConfigError(
             "fields must be an iterable of field paths or a FieldMask, "

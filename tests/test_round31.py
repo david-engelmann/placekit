@@ -180,3 +180,77 @@ def test_constructor_plain_refusals_keep_their_messages():
     with pytest.raises(ConfigError):
         Client("key with spaces")
 
+
+# --- Caller Minor 3: FieldMask member validation is guarded
+
+
+def test_mask_member_strip_raises_is_config_error():
+    with pytest.raises(ConfigError) as caught:
+        FieldMask(StripRaisesStr("places.id"))
+    assert isinstance(caught.value.__cause__, RuntimeError)
+
+
+def test_mask_member_split_raises_is_config_error():
+    with pytest.raises(ConfigError) as caught:
+        FieldMask(SplitRaisesStr("places.id"))
+    assert isinstance(caught.value.__cause__, RuntimeError)
+
+
+def test_mask_rebuild_member_dunders_raise_as_config_error():
+    with pytest.raises(ConfigError):
+        FieldMask.of([StripRaisesStr("places.id")])
+    with pytest.raises(ConfigError):
+        FieldMask.of([SplitRaisesStr("places.id")])
+
+
+def test_mask_plain_members_behave_as_before():
+    mask = FieldMask("places.id", "places.rating", "places.id")
+    assert mask.paths == ("places.id", "places.rating")
+    assert mask.header_value == "places.id,places.rating"
+    assert normalize_fields(mask) == ["places.id", "places.rating"]
+    with pytest.raises(ConfigError):
+        FieldMask("not a path")
+
+
+# --- Caller Minor 3 and red team Minor 1: fabricated masks
+
+
+def _fabricated_mask(paths) -> FieldMask:
+    mask = FieldMask("places.id")
+    object.__setattr__(mask, "paths", paths)
+    return mask
+
+
+def test_normalize_fields_ghost_mask_is_config_error():
+    ghost = object.__new__(FieldMask)
+    with pytest.raises(ConfigError):
+        normalize_fields(ghost)
+
+
+def test_normalize_fields_fabricated_non_string_member_is_config_error():
+    for paths in [(123,), (None,), ("places.id", 123), [123]]:
+        with pytest.raises(ConfigError):
+            normalize_fields(_fabricated_mask(paths))
+
+
+def test_fabricated_mask_non_string_member_refused_through_client(
+    client, stub_server
+):
+    stub_server.last_request = None
+    with pytest.raises(ConfigError):
+        client.text_search("cafes", fields=_fabricated_mask((123,)))
+    assert stub_server.last_request is None
+
+
+def test_fabricated_mask_bad_grammar_still_refused_typed(client):
+    with pytest.raises(PlacesError):
+        client.text_search(
+            "cafes", fields=_fabricated_mask(("not a path",))
+        )
+
+
+def test_fabricated_mask_string_paths_state_is_config_error():
+    with pytest.raises(ConfigError):
+        normalize_fields(_fabricated_mask("places.id"))
+
+
