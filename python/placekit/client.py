@@ -22,6 +22,7 @@ from .fields import (
     MAX_MATERIALIZED_ITEMS,
     FieldsLike,
     _materialize_bounded,
+    _safe_repr,
     normalize_fields,
 )
 from .types import COLLECTION_CITIES, COLLECTION_REGIONS
@@ -416,28 +417,49 @@ class _Base:
         base_url: Optional[str] = None,
         timeout: Optional[float] = None,
     ) -> None:
-        if not isinstance(api_key, str):
-            raise ConfigError(f"api_key must be a string, got {api_key!r}")
-        if not api_key.strip():
-            raise ConfigError("api_key must not be empty")
-        if api_key != api_key.strip() or not api_key.isascii() or any(
-            char.isspace() for char in api_key
-        ):
-            raise ConfigError(
-                "api_key must not contain whitespace or non-ASCII characters"
-            )
-        if base_url is not None and not isinstance(base_url, str):
-            raise ConfigError(f"base_url must be a string, got {base_url!r}")
-        if timeout is not None and (
-            isinstance(timeout, bool)
-            or not isinstance(timeout, (int, float))
-            or not math.isfinite(timeout)
-            or not 0 < timeout <= _MAX_TIMEOUT_SECONDS
-        ):
-            raise ConfigError(
-                "timeout must be a positive, finite number of seconds, "
-                f"at most {_MAX_TIMEOUT_SECONDS}, got {timeout!r}"
-            )
+        # Every read of a caller value in this block is guarded.
+        # The key is stripped, scanned and case read, and the
+        # timeout is converted, compared and rendered into its
+        # own refusal message, and a hostile subclass whose
+        # dunder raises on any of those reads used to escape
+        # construction as a bare builtin where the methods wrap
+        # the same class of failure into ConfigError. The values
+        # the messages render go through the safe repr, so the
+        # refusal text itself cannot be the escaping read
+        # (Round 31, Caller Minor 2 and red team Minor 2).
+        try:
+            if not isinstance(api_key, str):
+                raise ConfigError(
+                    f"api_key must be a string, got {_safe_repr(api_key)}"
+                )
+            if not api_key.strip():
+                raise ConfigError("api_key must not be empty")
+            if api_key != api_key.strip() or not api_key.isascii() or any(
+                char.isspace() for char in api_key
+            ):
+                raise ConfigError(
+                    "api_key must not contain whitespace or non-ASCII characters"
+                )
+            if base_url is not None and not isinstance(base_url, str):
+                raise ConfigError(
+                    f"base_url must be a string, got {_safe_repr(base_url)}"
+                )
+            if timeout is not None and (
+                isinstance(timeout, bool)
+                or not isinstance(timeout, (int, float))
+                or not math.isfinite(timeout)
+                or not 0 < timeout <= _MAX_TIMEOUT_SECONDS
+            ):
+                raise ConfigError(
+                    "timeout must be a positive, finite number of seconds, "
+                    f"at most {_MAX_TIMEOUT_SECONDS}, got {_safe_repr(timeout)}"
+                )
+        except ConfigError:
+            raise
+        except Exception as exc:
+            raise self._invalid_arguments(
+                "client construction", exc
+            ) from exc
         self._closed = False
         try:
             self._inner = _placekit.Client(api_key, base_url, timeout)

@@ -121,3 +121,62 @@ def test_free_text_wrong_type_still_names_the_argument(client):
     with pytest.raises(ConfigError) as caught:
         client.autocomplete(None)  # type: ignore[arg-type]
     assert "input_text" in str(caught.value)
+
+
+# --- Caller Minor 2 and red team Minor 2: constructor reads guarded
+
+
+@pytest.mark.parametrize("make", [Client, AsyncClient])
+def test_constructor_key_strip_raises_is_config_error(make):
+    with pytest.raises(ConfigError) as caught:
+        make(StripRaisesStr("test-key"))
+    assert isinstance(caught.value.__cause__, RuntimeError)
+
+
+@pytest.mark.parametrize("make", [Client, AsyncClient])
+def test_constructor_key_iteration_raises_is_config_error(make):
+    with pytest.raises(ConfigError) as caught:
+        make(IterRaisesStr("test-key"))
+    assert isinstance(caught.value.__cause__, RuntimeError)
+
+
+@pytest.mark.parametrize("make", [Client, AsyncClient])
+def test_constructor_key_isascii_raises_is_config_error(make):
+    with pytest.raises(ConfigError) as caught:
+        make(AsciiRaisesStr("test-key"))
+    assert isinstance(caught.value.__cause__, RuntimeError)
+
+
+def test_constructor_timeout_comparison_raises_is_config_error():
+    with pytest.raises(ConfigError) as caught:
+        Client("test-key", timeout=CmpRaisesInt(5))
+    assert isinstance(caught.value.__cause__, RuntimeError)
+
+
+def test_constructor_timeout_float_conversion_raises_is_config_error():
+    with pytest.raises(ConfigError) as caught:
+        Client("test-key", timeout=FloatRaisesInt(5))
+    assert isinstance(caught.value.__cause__, RuntimeError)
+
+
+def test_constructor_timeout_repr_raises_still_refuses_as_config_error():
+    # The value is out of range, so the refusal itself fires;
+    # formatting the value into the refusal message must not be
+    # the read that escapes (red team Minor 2).
+    with pytest.raises(ConfigError) as caught:
+        Client("test-key", timeout=ReprRaisesInt(99999))
+    assert "timeout" in str(caught.value)
+
+
+def test_constructor_plain_refusals_keep_their_messages():
+    with pytest.raises(ConfigError) as caught:
+        Client(123)  # type: ignore[arg-type]
+    assert str(caught.value) == "api_key must be a string, got 123"
+    with pytest.raises(ConfigError) as caught:
+        Client("test-key", timeout=0)
+    assert "got 0" in str(caught.value)
+    with pytest.raises(ConfigError):
+        Client("test-key", timeout=float("nan"))
+    with pytest.raises(ConfigError):
+        Client("key with spaces")
+
