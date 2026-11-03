@@ -167,7 +167,7 @@ city.value, city.carrier, city.confidence
 code = address.country_code(place)
 ```
 
-The details call in that example is load bearing. These readers read the address a place carries, and a bare search result without address components gives them nothing to read, so the same calls over a search result answer quietly instead, a city resolution carrying no value and a country code of None, and no error marks the difference.
+The details call in that example is load bearing. These readers read the address a place carries, and a bare search result carrying neither address components nor a postal address gives them nothing to read, so the same calls over such a result answer quietly instead, a city resolution carrying no value and a country code of None, and no error marks the difference.
 
 `city_resolutions` returns every reading a place supports, and where the carriers disagree the reading carries its rival on the result itself, as `competing_value` and `competing_carrier`. A British place whose locality and postal town differ therefore hands back both values with the rivalry visible, instead of one value with the other hidden.
 
