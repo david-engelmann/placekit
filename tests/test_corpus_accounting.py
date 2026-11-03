@@ -66,6 +66,135 @@ def _builder_module():
     return module
 
 
+def _loader_function_names(filename: str) -> set[str]:
+    """Names of the module level helpers that load a fixture by name.
+
+    The set is derived from the module itself. The reader at the
+    bottom is the helper whose own body reads a file from disk, and a
+    helper joins the set when it calls a helper already in the set,
+    so the payload helper and the search and details replayers join
+    through the readers they call. Test functions never join, because
+    nothing loads a fixture through a test.
+    """
+    path = Path(__file__).parent / filename
+    tree = ast.parse(path.read_text())
+    helpers = {
+        node.name: node
+        for node in tree.body
+        if isinstance(node, ast.FunctionDef) and not node.name.startswith("test_")
+    }
+    calls = {}
+    loaders = set()
+    for name, node in helpers.items():
+        called = set()
+        for sub in ast.walk(node):
+            if isinstance(sub, ast.Call) and isinstance(sub.func, ast.Name):
+                called.add(sub.func.id)
+            if (
+                isinstance(sub, ast.Call)
+                and isinstance(sub.func, ast.Attribute)
+                and sub.func.attr in ("read_bytes", "read_text")
+            ):
+                loaders.add(name)
+        calls[name] = called
+    growing = True
+    while growing:
+        growing = False
+        for name, called in calls.items():
+            if name not in loaders and called & loaders:
+                loaders.add(name)
+                growing = True
+    return loaders
+
+
+RECORDED_LOADERS = _loader_function_names("test_recorded_corpus.py")
+
+
+def _fixtures_a_test_loads(source: str, loaders: set[str]) -> set[str]:
+    """Fixture file names one test hands to a loading helper.
+
+    A name counts when the test hands the literal itself to a call of
+    one of the loading helpers, or binds the literal to a local name,
+    alone or inside a tuple or list, and hands that local name to
+    such a call, either directly or as the value a loop variable
+    takes from the binding. A name that only sits in a comment, in a
+    docstring, or in an assignment no loading call consumes is not
+    in the returned set, and neither is a name bound to a local name
+    the test never hands to a loading helper.
+    """
+    function = ast.parse(source).body[0]
+    fed = set()
+    loaded = set()
+    for sub in ast.walk(function):
+        if (
+            isinstance(sub, ast.Call)
+            and isinstance(sub.func, ast.Name)
+            and sub.func.id in loaders
+        ):
+            arguments = [*sub.args, *(kw.value for kw in sub.keywords)]
+            for argument in arguments:
+                if isinstance(argument, ast.Name):
+                    fed.add(argument.id)
+                elif isinstance(argument, ast.Starred) and isinstance(
+                    argument.value, ast.Name
+                ):
+                    fed.add(argument.value.id)
+                elif isinstance(argument, ast.Constant) and isinstance(
+                    argument.value, str
+                ):
+                    loaded.add(argument.value)
+    growing = True
+    while growing:
+        growing = False
+        for sub in ast.walk(function):
+            feeder = None
+            if isinstance(sub, ast.Assign) and isinstance(sub.value, ast.Name):
+                if any(
+                    isinstance(target, ast.Name) and target.id in fed
+                    for target in sub.targets
+                ):
+                    feeder = sub.value.id
+            if (
+                isinstance(sub, ast.For)
+                and isinstance(sub.target, ast.Name)
+                and sub.target.id in fed
+                and isinstance(sub.iter, ast.Name)
+            ):
+                feeder = sub.iter.id
+            if feeder is not None and feeder not in fed:
+                fed.add(feeder)
+                growing = True
+    for sub in ast.walk(function):
+        bound = []
+        if isinstance(sub, ast.Assign) and any(
+            isinstance(target, ast.Name) and target.id in fed for target in sub.targets
+        ):
+            bound.append(sub.value)
+        if (
+            isinstance(sub, ast.AnnAssign)
+            and isinstance(sub.target, ast.Name)
+            and sub.target.id in fed
+            and sub.value is not None
+        ):
+            bound.append(sub.value)
+        if (
+            isinstance(sub, ast.For)
+            and isinstance(sub.target, ast.Name)
+            and sub.target.id in fed
+        ):
+            bound.append(sub.iter)
+        for value in bound:
+            if isinstance(value, ast.Constant) and isinstance(value.value, str):
+                loaded.add(value.value)
+            elif isinstance(value, (ast.Tuple, ast.List)):
+                for element in value.elts:
+                    if isinstance(element, ast.Constant) and isinstance(
+                        element.value, str
+                    ):
+                        loaded.add(element.value)
+    return loaded
+
+
 def _case_map():
     return {case["id"]: case for case in MANIFEST["cases"]}
 
@@ -121,18 +250,24 @@ def test_accounting_recorded_fixtures_exist_match_hashes_and_carry_selectors():
 
 
 def test_accounting_named_tests_exist_and_load_their_fixtures():
-    # The linkage proof. The named test must exist, and its own source
-    # must name every fixture file the case claims, so a test that
-    # silently stopped loading its fixture fails here.
+    # The linkage proof. The named test must exist, and the test must
+    # hand every fixture file the case claims to one of the recorded
+    # module loading helpers, as the literal argument of the call or
+    # through a local name bound to the literal, so a test that
+    # silently stopped loading its fixture fails here. A fixture name
+    # resting in a comment, a docstring, or an assignment no loading
+    # call consumes does not satisfy the proof.
     for case in MANIFEST["cases"]:
         if case["state"] not in RECORDED_STATES:
             continue
         assert case["tests"], case["id"]
         for test_name in case["tests"]:
             assert test_name in RECORDED_SOURCES, test_name
-            source = RECORDED_SOURCES[test_name]
+            loaded = _fixtures_a_test_loads(
+                RECORDED_SOURCES[test_name], RECORDED_LOADERS
+            )
             for entry in case["fixtures"]:
-                assert entry["file"] in source, (test_name, entry["file"])
+                assert entry["file"] in loaded, (test_name, entry["file"])
 
 
 def test_accounting_synthesized_fixtures_are_enveloped_and_tested():
@@ -207,12 +342,13 @@ def test_accounting_observation_fixtures_and_hosts_exist():
             assert digest == obs["fixture_sha256"]
 
 
-def test_accounting_observation_tests_name_their_fixtures():
+def test_accounting_observation_tests_load_their_fixtures():
     # The linkage proof for the observation half, at the same strength
-    # as the case linkage above. The named test must exist, and its own
-    # source must name every fixture the observation claims, its own
-    # fixture and its host fixtures alike, so an observation test that
-    # silently stopped loading the fixture it pins fails here.
+    # as the case linkage above. The named test must exist, and the
+    # test must hand every fixture the observation claims, its own
+    # fixture and its host fixtures alike, to one of the recorded
+    # module loading helpers in the same way, so an observation test
+    # that silently stopped loading the fixture it pins fails here.
     for obs in MANIFEST["observations"]:
         claimed = ([obs["fixture"]] if obs.get("fixture") else []) + obs.get(
             "host_fixtures", []
@@ -221,9 +357,11 @@ def test_accounting_observation_tests_name_their_fixtures():
         assert obs["tests"], obs["id"]
         for test_name in obs["tests"]:
             assert test_name in RECORDED_SOURCES, test_name
-            source = RECORDED_SOURCES[test_name]
+            loaded = _fixtures_a_test_loads(
+                RECORDED_SOURCES[test_name], RECORDED_LOADERS
+            )
             for name in claimed:
-                assert name in source, (test_name, name)
+                assert name in loaded, (test_name, name)
 
 
 def test_accounting_builder_specs_match_the_manifest_recorded_set():
