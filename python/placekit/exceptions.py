@@ -61,6 +61,20 @@ class PlacesError(Exception):
         #: errors and server side failures). The client never retries
         #: on its own; this only informs the caller's policy.
         self.retryable = retryable
+        # The conversion is guarded on its own. The isinstance
+        # check admits an int too large for a float and numeric
+        # subclasses whose conversion raises, and those failures
+        # used to escape the constructor bare, breaking the rule
+        # the attribute comment below states (Round 34, red team
+        # Minor 2).
+        retry_after_value: Optional[float] = None
+        if isinstance(retry_after, (int, float)) and not isinstance(
+            retry_after, bool
+        ):
+            try:
+                retry_after_value = float(retry_after)
+            except Exception:
+                retry_after_value = None
         #: Seconds from the response's ``Retry-After`` header, when
         #: the failing response carried one. Both header forms are
         #: read: delta seconds (a fraction is kept) and the HTTP
@@ -73,12 +87,11 @@ class PlacesError(Exception):
         #: not a count of seconds either, and also reads as None
         #: (Round 25), so the stored value is a float or None,
         #: never the caller's object passed through untouched.
-        self.retry_after = (
-            float(retry_after)
-            if isinstance(retry_after, (int, float))
-            and not isinstance(retry_after, bool)
-            else None
-        )
+        #: An admitted numeric whose conversion itself fails, an
+        #: int too large to convert or a numeric subclass whose
+        #: conversion raises, reads as None on the same terms
+        #: (Round 34).
+        self.retry_after = retry_after_value
         #: Which call failed, as an operation name plus its identifying
         #: argument where one exists (for example ``place_details
         #: place_id=...``), set by the client methods. Never a URL, so
