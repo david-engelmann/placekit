@@ -11,6 +11,55 @@ from __future__ import annotations
 from typing import Any, NoReturn, Optional
 
 
+def _copy_list_argument(name: str, value: Optional[list[Any]]) -> list[Any]:
+    """Copy one list argument of the exception constructor.
+
+    The three list arguments are copied so later mutation of the
+    caller's list cannot rewrite a raised exception, and the copy
+    sits under the same typed discipline as every other read of a
+    caller iterable in the library (Round 41, Findings 1 and 2).
+    The constructor used to copy through a plain ``list`` call, so
+    a value whose iteration raised escaped construction as a bare
+    builtin, and an endless iterable was consumed forever. The
+    three copies were the one unguarded, unbounded caller iterable
+    read left in the library.
+
+    A plain list or tuple is already materialised in full, so its
+    copy is bounded by the value itself and simply guarded. The
+    library's own constructions pass exactly those, including the
+    wire details arrays past the materialisation ceiling whose
+    length the Round 35 counting identity rests on, so no ceiling
+    applies to them. Any other iterable is a stream whose end
+    cannot be known without consuming it, so it is materialised
+    through the shared bounded read under the universal ceiling,
+    and anything it raises surfaces as a chained ``ConfigError``.
+    """
+    if value is None:
+        return []
+    if type(value) is list or type(value) is tuple:
+        try:
+            return list(value)
+        except Exception as exc:
+            raise ConfigError(
+                f"{name} could not be copied: {exc!r}",
+                context="PlacesError",
+            ) from exc
+    # Imported here rather than at module level, because fields
+    # imports this module for ConfigError and the bounded read
+    # helper cannot be imported the other way at module level.
+    from .fields import MAX_MATERIALIZED_ITEMS, _materialize_bounded
+
+    try:
+        return _materialize_bounded(name, value, MAX_MATERIALIZED_ITEMS)
+    except ConfigError as exc:
+        # A constructor failure carries the constructor as its
+        # context, the same treatment FieldMask.of gives its own
+        # materialisation failures (Round 25, Minor 4).
+        if exc.context is None:
+            exc.context = "PlacesError"
+        raise
+
+
 class PlacesError(Exception):
     """Base class for every error raised by placekit."""
 
@@ -40,8 +89,12 @@ class PlacesError(Exception):
         #: The parsed ``details`` array of the envelope (google.rpc detail
         #: objects as dicts), empty when the response carried none. The
         #: list is copied, so later mutation of the caller's list cannot
-        #: rewrite a raised exception.
-        self.details = list(details) if details is not None else []
+        #: rewrite a raised exception. All three list arguments copy
+        #: through ``_copy_list_argument``, so a caller iterable that
+        #: raises while being read, or one that never ends, is refused
+        #: as a ``ConfigError`` instead of escaping bare or hanging
+        #: construction (Round 41, Findings 1 and 2).
+        self.details = _copy_list_argument("details", details)
         #: Field violations from a BadRequest detail. A well
         #: formed entry, one whose ``field`` and ``description``
         #: members are both strings, reads as a dict with ``field``
@@ -50,12 +103,12 @@ class PlacesError(Exception):
         #: the wire carried it, so the view never invents a value
         #: and its length always equals the number of entries in
         #: the wire array.
-        self.field_violations = (
-            list(field_violations) if field_violations is not None else []
+        self.field_violations = _copy_list_argument(
+            "field_violations", field_violations
         )
         #: Violation dicts from a QuotaFailure detail.
-        self.quota_violations = (
-            list(quota_violations) if quota_violations is not None else []
+        self.quota_violations = _copy_list_argument(
+            "quota_violations", quota_violations
         )
         #: True when the envelope ``code`` and the HTTP status disagree.
         #: Classification follows the envelope status first and the HTTP
