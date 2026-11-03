@@ -341,7 +341,9 @@ def test_gzip_variant_on_the_photo_form_decodes(client, raw_response):
         gzip.compress(body.encode()),
         headers={"Content-Encoding": "GZip"},
     )
-    result = client.place_photo("places/x/photos/y", skip_http_redirect=True)
+    result = client.place_photo(
+        "places/x/photos/y", max_width_px=800, skip_http_redirect=True
+    )
     assert result.name == "places/x/photos/y"
     assert result.photo_uri == "http://127.0.0.1/photo-uri"
 
