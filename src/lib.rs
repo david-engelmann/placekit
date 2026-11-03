@@ -182,19 +182,34 @@ enum CallOutput {
 /// Serialize a JSON call result for storage in a call handle. A
 /// value that fails to serialize fails the call with the same
 /// decode error the sync path raises for it in [`result_to_py`].
+///
+/// The conversion runs under the same panic guard discipline as
+/// the core future (Round 33, Info 9). It executes inside the
+/// spawned task after [`run_guarded`] returns, so a panic there
+/// would unwind the task before [`start_call`] writes the slot
+/// or sets the done flag, and the Python pump would poll the
+/// handle until the caller cancelled. A panic now settles the
+/// call with the same network class error a guarded core panic
+/// produces, so the slot is always written and the handle
+/// always completes.
 fn stored_json<T>(result: Result<(T, String, u16), CoreError>) -> CallOutput
 where
     T: serde::Serialize,
 {
-    let stored = result.and_then(|(value, body, status)| {
-        serde_json::to_value(&value)
-            .map(|json| (json, body, status))
-            .map_err(|e| CoreError::Decode {
-                detail: e.to_string(),
-                status: None,
-                source: Some(Box::new(e)),
-            })
-    });
+    let stored = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        result.and_then(|(value, body, status)| {
+            serde_json::to_value(&value)
+                .map(|json| (json, body, status))
+                .map_err(|e| CoreError::Decode {
+                    detail: e.to_string(),
+                    status: None,
+                    source: Some(Box::new(e)),
+                })
+        })
+    })) {
+        Ok(stored) => stored,
+        Err(payload) => Err(runtime_panic_error(&*payload)),
+    };
     CallOutput::Json(stored)
 }
 
@@ -1006,4 +1021,72 @@ fn _placekit(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("PlacesError", m.py().get_type::<PlacesError>())?;
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A value whose serialization panics, standing in for the
+    /// conversion panic Round 33 Info 9 records as not
+    /// constructible through the shipped response types. Test
+    /// only: no production code path builds one.
+    struct PanickingValue;
+
+    impl serde::Serialize for PanickingValue {
+        fn serialize<S>(&self, _serializer: S) -> Result<S::Ok, S::Error>
+        where
+            S: serde::Serializer,
+        {
+            panic!("synthetic serialization panic for the guard pin")
+        }
+    }
+
+    /// The pin for the Round 33 repair. A panic inside the
+    /// stored form conversion settles the call as the network
+    /// class runtime panic error instead of unwinding, so the
+    /// completion slot is written and the handle completes.
+    /// Against the unguarded conversion this test fails by the
+    /// panic escaping `stored_json` itself.
+    #[test]
+    fn stored_json_settles_a_serialization_panic_as_the_runtime_panic_error() {
+        let output = stored_json(Ok((PanickingValue, String::new(), 200)));
+        match output {
+            CallOutput::Json(Err(CoreError::Network { detail, .. })) => {
+                assert!(
+                    detail.contains("synthetic serialization panic for the guard pin"),
+                    "{detail}"
+                );
+            }
+            _ => panic!("a conversion panic must settle as the runtime panic error"),
+        }
+    }
+
+    /// The ordinary shapes the guard leaves untouched: a value
+    /// that serializes is stored with its body and status, and a
+    /// core error passes through as itself.
+    #[test]
+    fn stored_json_keeps_the_ordinary_shapes() {
+        let mut value = serde_json::Map::new();
+        value.insert("id".to_string(), Value::from("places/test"));
+        match stored_json(Ok((Value::Object(value), "body".to_string(), 200))) {
+            CallOutput::Json(Ok((json, body, status))) => {
+                assert_eq!(json["id"], Value::from("places/test"));
+                assert_eq!(body, "body");
+                assert_eq!(status, 200);
+            }
+            _ => panic!("a serializable value must be stored whole"),
+        }
+        let err = CoreError::Decode {
+            detail: "boom".to_string(),
+            status: None,
+            source: None,
+        };
+        match stored_json::<Value>(Err(err)) {
+            CallOutput::Json(Err(CoreError::Decode { detail, .. })) => {
+                assert_eq!(detail, "boom");
+            }
+            _ => panic!("a core error must pass through as itself"),
+        }
+    }
 }
