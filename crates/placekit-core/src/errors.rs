@@ -1649,13 +1649,13 @@ impl<'a> HeadScan<'a> {
                                 self.peek(),
                                 Some(
                                     b'0'..=b'9'
-                                        | b'-'
-                                        | b'+'
-                                        | b'.'
-                                        | b'e'
-                                        | b'E'
-                                        | b'a'..=b'z'
-                                        | b'A'..=b'Z'
+                                    | b'-'
+                                    | b'+'
+                                    | b'.'
+                                    | b'e'
+                                    | b'E'
+                                    | b'a'..=b'z'
+                                    | b'A'..=b'Z',
                                 )
                             ) {
                                 self.pos += 1;
@@ -2749,7 +2749,8 @@ mod tests {
         // letters left behind ended the object walk before the
         // status and message were read. The field alone is lost
         // now and the well formed fields behind it classify.
-        let body = r#"{"error": {"code": 400evil, "message": "quota", "status": "RESOURCE_EXHAUSTED"}}"#;
+        let body =
+            r#"{"error": {"code": 400evil, "message": "quota", "status": "RESOURCE_EXHAUSTED"}}"#;
         let err = Error::from_response(400, body);
         assert_eq!(err.kind(), "rate_limit");
         assert_eq!(err.google_status(), Some("RESOURCE_EXHAUSTED"));
@@ -2775,7 +2776,8 @@ mod tests {
         // field after it. The broken field alone degrades now.
         // Status broken first: the code and message behind it
         // still classify and read.
-        let body = r#"{"error": {"status": "RESOURCE_\qEXHAUSTED", "code": 429, "message": "quota"}}"#;
+        let body =
+            r#"{"error": {"status": "RESOURCE_\qEXHAUSTED", "code": 429, "message": "quota"}}"#;
         let err = Error::from_response(400, body);
         assert_eq!(err.kind(), "rate_limit");
         assert_eq!(err.google_status(), None);
@@ -2794,7 +2796,8 @@ mod tests {
         // A message carrying a lone surrogate escape degrades
         // the same way, with the status before it and the code
         // after it both surviving.
-        let body = r#"{"error": {"status": "NOT_FOUND", "message": "lone \uD800 here", "code": 404}}"#;
+        let body =
+            r#"{"error": {"status": "NOT_FOUND", "message": "lone \uD800 here", "code": 404}}"#;
         let err = Error::from_response(400, body);
         assert_eq!(err.kind(), "not_found");
         assert_eq!(err.google_status(), Some("NOT_FOUND"));
@@ -2866,7 +2869,8 @@ mod tests {
     }
 
     #[test]
-    fn head_scan_repeated_status_key_takes_the_last_value() {        // Round 25 landing repair: a repeated status key whose
+    fn head_scan_repeated_status_key_takes_the_last_value() {
+        // Round 25 landing repair: a repeated status key whose
         // later value is mistyped clears the field in the whole
         // parse (the later value is read and skipped as mistyped,
         // leaving no status), and the scan kept the earlier

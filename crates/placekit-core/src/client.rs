@@ -1811,7 +1811,8 @@ mod tests {
     }
 
     #[test]
-    fn retry_after_parses_delta_seconds_and_http_dates() {        // R4-25: both header forms are read; a past date is zero.
+    fn retry_after_parses_delta_seconds_and_http_dates() {
+        // R4-25: both header forms are read; a past date is zero.
         // Round 24: the value is float seconds end to end, fractional
         // deltas keep their fraction, and a negative delta is unread.
         let now = httpdate::parse_http_date("Sun, 06 Nov 1994 08:49:37 GMT").unwrap();
@@ -1841,8 +1842,7 @@ mod tests {
 
     fn gzipped(data: &[u8]) -> Vec<u8> {
         use std::io::Write;
-        let mut encoder =
-            flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+        let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
         encoder.write_all(data).unwrap();
         encoder.finish().unwrap()
     }
@@ -1865,10 +1865,7 @@ mod tests {
         }
         assert!(transport_decoded_gzip(&encoding_headers("gzip")));
         for value in ["GZip", "GZIP", "gzip, identity", "identity, gzip"] {
-            assert!(
-                !transport_decoded_gzip(&encoding_headers(value)),
-                "{value}"
-            );
+            assert!(!transport_decoded_gzip(&encoding_headers(value)), "{value}");
         }
     }
 
