@@ -917,7 +917,7 @@ async fn read_error_body(
             Gunzip::Done(out) => Some((out, capped)),
             Gunzip::OverCap(out) => Some((out, true)),
             Gunzip::Failed { partial, error } => {
-                if !capped && !partial.is_empty() {
+                if !capped {
                     return Error::from_unreadable_body(status, &error, content_type);
                 }
                 if partial.is_empty() {
