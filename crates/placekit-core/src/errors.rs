@@ -1495,6 +1495,21 @@ impl<'a> HeadScan<'a> {
     /// a message missing from a partly read object was not
     /// shown to be absent.
     ///
+    /// A malformed head field costs that field only (Round 31,
+    /// Decoder Minor F2). The scan skips malformed values in
+    /// unknown keys field by field, and head fields now get the
+    /// same posture: a head string that will not decode and a
+    /// code token that will not parse lose their own field, the
+    /// walk continues, and every well formed head field behind
+    /// them still reads. A field lost that way keeps the parts
+    /// marked partial even when the object later closes, because
+    /// a message read as absent may only be unreadable, which
+    /// is exactly what the partial flag exists to say. A value
+    /// in an unknown key that cannot be skipped at all (an
+    /// unclosed container) still ends the object walk, the
+    /// boundary the top level repair of the same round covers
+    /// for siblings of the error key.
+    ///
     /// Duplicate head keys resolve last wins inside the object
     /// too, as the whole parse resolves them: a repeated field
     /// whose later value is mistyped clears the field, matching
@@ -1510,13 +1525,14 @@ impl<'a> HeadScan<'a> {
             details: Vec::new(),
             partial: true,
         };
+        let mut lost_field = false;
         loop {
             self.skip_ws();
             if self.at_end() {
                 return (parts, false);
             }
             if self.eat(b'}') {
-                parts.partial = false;
+                parts.partial = lost_field;
                 return (parts, true);
             }
             let Some(key) = self.string() else {
@@ -1537,7 +1553,25 @@ impl<'a> HeadScan<'a> {
                     if self.peek() == Some(b'"') {
                         match self.string() {
                             Some(value) => *slot = Some(value),
-                            None => return (parts, false),
+                            None => {
+                                // The string token was consumed
+                                // but would not decode, through
+                                // an invalid escape, a lone
+                                // surrogate or a raw control
+                                // character. The field alone is
+                                // lost and the walk continues to
+                                // the delimiter below, so a well
+                                // formed head field behind it
+                                // still reads. A token cut off by
+                                // the end of the text has nothing
+                                // behind it and ends the object
+                                // as before.
+                                *slot = None;
+                                lost_field = true;
+                                if self.at_end() {
+                                    return (parts, false);
+                                }
+                            }
                         }
                     } else {
                         *slot = None;
@@ -1556,9 +1590,44 @@ impl<'a> HeadScan<'a> {
                             self.pos += 1;
                         }
                         let token = std::str::from_utf8(&self.bytes[start..self.pos]).unwrap_or("");
-                        parts.code = serde_json::from_str::<serde_json::Value>(token)
-                            .ok()
-                            .and_then(|v| v.as_i64());
+                        match serde_json::from_str::<serde_json::Value>(token) {
+                            Ok(value) => parts.code = value.as_i64(),
+                            Err(_) => {
+                                // The token is not a number at
+                                // all (400e and its kin). The
+                                // field alone is lost, where the
+                                // walk used to end here and take
+                                // every field behind it down too.
+                                parts.code = None;
+                                lost_field = true;
+                            }
+                        }
+                        // Letters trailing the token (the vil
+                        // of 400evil, the x of 400x) belong to
+                        // the same malformed value. Skip the
+                        // scalar run they form so the delimiter
+                        // walk below reaches the fields behind
+                        // the value instead of ending the
+                        // object on them.
+                        self.skip_ws();
+                        if !matches!(self.peek(), Some(b',' | b'}') | None) {
+                            while matches!(
+                                self.peek(),
+                                Some(
+                                    b'0'..=b'9'
+                                        | b'-'
+                                        | b'+'
+                                        | b'.'
+                                        | b'e'
+                                        | b'E'
+                                        | b'a'..=b'z'
+                                        | b'A'..=b'Z'
+                                )
+                            ) {
+                                self.pos += 1;
+                            }
+                            lost_field = true;
+                        }
                     }
                     _ => {
                         parts.code = None;
@@ -1584,7 +1653,7 @@ impl<'a> HeadScan<'a> {
             // either way.
             let closed = self.eat(b'}');
             if closed {
-                parts.partial = false;
+                parts.partial = lost_field;
             }
             return (parts, closed);
         }
@@ -2535,6 +2604,66 @@ mod tests {
             control.to_string().contains("carried no message"),
             "{control}"
         );
+    }
+
+    #[test]
+    fn head_scan_malformed_code_token_costs_the_code_only() {
+        // Round 31, Decoder Minor F2: a code written as 400evil
+        // lost the whole envelope, because the token the code
+        // reader reads is 400e, which does not parse, and the
+        // letters left behind ended the object walk before the
+        // status and message were read. The field alone is lost
+        // now and the well formed fields behind it classify.
+        let body = r#"{"error": {"code": 400evil, "message": "quota", "status": "RESOURCE_EXHAUSTED"}}"#;
+        let err = Error::from_response(400, body);
+        assert_eq!(err.kind(), "rate_limit");
+        assert_eq!(err.google_status(), Some("RESOURCE_EXHAUSTED"));
+        assert_eq!(err.error_code(), None);
+        assert!(err.to_string().contains("quota"), "{err}");
+        // On a neutral pairing the loss used to move the class
+        // to the bare HTTP fallback; the status now carries it.
+        let err = Error::from_response(418, body);
+        assert_eq!(err.kind(), "rate_limit");
+        // The 400x form keeps its code and loses nothing behind
+        // it either.
+        let body = r#"{"error": {"code": 400x, "message": "bad", "status": "INVALID_ARGUMENT"}}"#;
+        let err = Error::from_response(418, body);
+        assert_eq!(err.kind(), "invalid_request");
+        assert_eq!(err.error_code(), Some(400));
+        assert!(err.to_string().contains("bad"), "{err}");
+    }
+
+    #[test]
+    fn head_scan_broken_head_string_costs_that_field_only() {
+        // Round 31, Decoder Minor F2: a head string whose escape
+        // is invalid ended the object walk at once, taking every
+        // field after it. The broken field alone degrades now.
+        // Status broken first: the code and message behind it
+        // still classify and read.
+        let body = r#"{"error": {"status": "RESOURCE_\qEXHAUSTED", "code": 429, "message": "quota"}}"#;
+        let err = Error::from_response(400, body);
+        assert_eq!(err.kind(), "rate_limit");
+        assert_eq!(err.google_status(), None);
+        assert!(err.to_string().contains("quota"), "{err}");
+        let err = Error::from_response(418, body);
+        assert_eq!(err.kind(), "rate_limit");
+        // Code before the broken status: the code carries the
+        // class and the real message behind the broken field
+        // survives whole instead of degrading to the partial
+        // wording.
+        let body = r#"{"error": {"code": 400, "status": "BAD\q", "message": "real message"}}"#;
+        let err = Error::from_response(418, body);
+        assert_eq!(err.kind(), "invalid_request");
+        assert_eq!(err.error_code(), Some(400));
+        assert!(err.to_string().contains("real message"), "{err}");
+        // A message carrying a lone surrogate escape degrades
+        // the same way, with the status before it and the code
+        // after it both surviving.
+        let body = r#"{"error": {"status": "NOT_FOUND", "message": "lone \uD800 here", "code": 404}}"#;
+        let err = Error::from_response(400, body);
+        assert_eq!(err.kind(), "not_found");
+        assert_eq!(err.google_status(), Some("NOT_FOUND"));
+        assert_eq!(err.error_code(), Some(404));
     }
 
     #[test]
