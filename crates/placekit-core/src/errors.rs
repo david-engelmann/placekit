@@ -404,6 +404,21 @@ impl Error {
         read_cap: Option<usize>,
     ) -> Error {
         let parsed = parse_envelope(body);
+        Self::from_envelope_parts(status, body, content_type, read_cap, parsed)
+    }
+
+    /// Build the mapped error from an envelope parse already in
+    /// hand. [`Error::from_response_read`] parses for itself; the
+    /// success status guard parses once through
+    /// [`Error::from_success_body`] and hands its parts here, so
+    /// detection and construction share the one parse.
+    fn from_envelope_parts(
+        status: u16,
+        body: &str,
+        content_type: Option<&str>,
+        read_cap: Option<usize>,
+        parsed: Option<EnvelopeParts>,
+    ) -> Error {
         let (google_status, message, code, details, class_status) = match parsed {
             Some(parts) => {
                 // Classification follows the envelope status first.
@@ -567,15 +582,32 @@ impl Error {
             .with_note(&format!("error body unreadable: {read_error}"))
     }
 
-    /// True when a body parses as a Google error envelope: an `error`
-    /// object carrying a status string, or a numeric code or a message
-    /// even without one. Used to catch error envelopes that arrive on
-    /// a success HTTP status, where they would otherwise decode as an
-    /// empty or defaulted success value.
-    pub(crate) fn has_error_envelope(body: &str) -> bool {
-        parse_envelope(body)
-            .map(|parts| parts.status.is_some() || parts.code.is_some() || parts.message.is_some())
-            .unwrap_or(false)
+    /// The mapped error for a response on a success status whose
+    /// body carries a Google error envelope, or `None` when it
+    /// carries none. A body carries an envelope when its `error`
+    /// object holds a status string, or a numeric code or a message
+    /// even without one. The body is parsed once and the parts
+    /// serve both the detection and the construction. The guard
+    /// this replaces ran the envelope parse twice per success
+    /// status response, once to detect and once to build, which
+    /// doubled the price of the whole parse failure this round
+    /// measured (Round 29, Finding 1).
+    pub(crate) fn from_success_body(
+        status: u16,
+        body: &str,
+        content_type: Option<&str>,
+    ) -> Option<Error> {
+        let parts = parse_envelope(body)?;
+        if parts.status.is_none() && parts.code.is_none() && parts.message.is_none() {
+            return None;
+        }
+        Some(Self::from_envelope_parts(
+            status,
+            body,
+            content_type,
+            None,
+            Some(parts),
+        ))
     }
 
     pub(crate) fn network(err: reqwest::Error) -> Error {
@@ -772,7 +804,24 @@ const ENVELOPE_TEXT_CAP_CHARS: usize = 500;
 /// is the 32 MiB success cap rather than the error read cap, so a
 /// hostile or broken endpoint could park a details payload of that
 /// size inside an exception callers routinely log or retain.
+///
+/// A body whose bracket nesting reaches the parser recursion
+/// limit anywhere is known before the parse starts to be a body
+/// the parse cannot accept, so past the preflight size bound it
+/// goes to the tolerant scan directly (Round 29, Finding 1). The
+/// skipped attempt was not free: when a parse fails inside
+/// nested containers, every open frame on the unwind path
+/// rebuilds its error position by scanning the input from the
+/// start, so the attempt priced at roughly the open frame count
+/// times the bytes before the failure point, seconds on a multi
+/// megabyte body. The scan reads the same head either way, so the
+/// outcome is unchanged. At or below the bound the attempt's
+/// worst unwind stays in the tens of milliseconds and the parse
+/// keeps its own word, so ordinary bodies pay no walk at all.
 fn parse_envelope(body: &str) -> Option<EnvelopeParts> {
+    if body.len() > PARSE_PREFLIGHT_MIN_BYTES && recursion_trip(body).is_some() {
+        return parse_envelope_head(body);
+    }
     let value: serde_json::Value = match serde_json::from_str(body) {
         Ok(value) => value,
         Err(_) => return parse_envelope_head(body),
@@ -883,6 +932,211 @@ fn parse_envelope_head(body: &str) -> Option<EnvelopeParts> {
         break;
     }
     found.filter(|parts| parts.status.is_some() || parts.message.is_some() || parts.code.is_some())
+}
+
+/// The container nesting limit the JSON parser enforces. Its
+/// deserializer opens a document with a remaining depth of 128
+/// and refuses the container whose opening would spend the last
+/// unit, so a body whose bracket nesting reaches 128 open
+/// containers anywhere fails the whole document parse with a
+/// recursion limit error, whatever else it carries. The value is
+/// the parser's own, mirrored here because the parser does not
+/// export it.
+const RECURSION_DEPTH_LIMIT: usize = 128;
+
+/// The size past which a body's nesting is walked before its
+/// parse is attempted, in [`parse_envelope`] here and in the
+/// client's typed decode refusal. The value sits at the error
+/// read cap's scale, the largest body this crate reads only to
+/// refuse it: at or below it a doomed parse's failure unwind is
+/// bounded by the frame count times the size, and past it the
+/// structural walk is cheaper than the unwind it replaces by
+/// orders of magnitude.
+pub(crate) const PARSE_PREFLIGHT_MIN_BYTES: usize = 256 * 1024;
+
+/// The point where a body's bracket nesting reaches
+/// [`RECURSION_DEPTH_LIMIT`], when it does: the byte offset of
+/// the bracket that trips the limit, and the field path of the
+/// value at that bracket in the rendering the decode error detail
+/// uses (wire keys joined by dots, list indices in brackets).
+pub(crate) struct RecursionTrip {
+    offset: usize,
+    pub(crate) path: String,
+}
+
+impl RecursionTrip {
+    /// The recursion limit message the parser reports for a
+    /// failure at this trip point, with the line and column
+    /// computed from the body exactly as its slice reader computes
+    /// them: the position just past the bracket byte, resolved
+    /// against the last newline before it.
+    pub(crate) fn message(&self, body: &str) -> String {
+        let bytes = body.as_bytes();
+        let past = (self.offset + 1).min(bytes.len());
+        let start_of_line = bytes[..past]
+            .iter()
+            .rposition(|byte| *byte == b'\n')
+            .map(|found| found + 1)
+            .unwrap_or(0);
+        let line = 1 + bytes[..start_of_line]
+            .iter()
+            .filter(|byte| **byte == b'\n')
+            .count();
+        let column = past - start_of_line;
+        format!("recursion limit exceeded at line {line} column {column}")
+    }
+}
+
+/// Walk a body's bracket structure without building it and
+/// report where its nesting reaches [`RECURSION_DEPTH_LIMIT`],
+/// when it does.
+///
+/// The walk is the tolerant head scan's cursor driven by an
+/// explicit frame stack, so its cost per byte is the scan's own
+/// skip rate. Its tokens are read exactly, under the same
+/// grammar the parser applies, so a malformed token ahead of the
+/// deep value abstains rather than certifying past it. It proves
+/// a negative the callers act on: a body
+/// that trips here is a body the whole document parse is
+/// guaranteed to refuse with the recursion limit error, so the
+/// callers can skip a parse attempt whose failure is certain and
+/// whose unwind is priced by the failure (Round 29, Finding 1).
+/// The converse is not claimed: a body the walk clears can still
+/// fail the parse for any other reason, and the walk abstains
+/// with `None` on the first structure it cannot read, so every
+/// doubt resolves toward running the parse as before.
+///
+/// Frame accounting mirrors the parser: the root value's
+/// container is the first open frame, and the trip is entering a
+/// container while 127 frames are already open. The path is
+/// tracked segment by segment as values are entered: an object
+/// value under its decoded wire key, an array value under its
+/// element index in the parent.
+pub(crate) fn recursion_trip(body: &str) -> Option<RecursionTrip> {
+    struct Frame {
+        object: bool,
+        elements: usize,
+        key: Option<String>,
+    }
+
+    let mut scan = HeadScan::new(body);
+    let mut frames: Vec<Frame> = Vec::new();
+    // The path segment each open container was itself entered
+    // under, innermost last. The root container has none.
+    let mut segments: Vec<(bool, String)> = Vec::new();
+    'walk: loop {
+        // The cursor stands at a value: the root value first,
+        // then each child as its parent frame admits it.
+        scan.skip_ws();
+        let segment: Option<(bool, String)> = match frames.last() {
+            None => None,
+            Some(frame) if frame.object => Some((false, frame.key.clone()?)),
+            Some(frame) => Some((true, format!("[{}]", frame.elements))),
+        };
+        match scan.peek() {
+            Some(b'{' | b'[') => {
+                if frames.len() + 1 == RECURSION_DEPTH_LIMIT {
+                    let mut path = String::new();
+                    for (index, (is_index, text)) in
+                        segments.iter().chain(segment.iter()).enumerate()
+                    {
+                        if *is_index {
+                            path.push_str(text);
+                        } else {
+                            if index > 0 {
+                                path.push('.');
+                            }
+                            path.push_str(text);
+                        }
+                    }
+                    return Some(RecursionTrip {
+                        offset: scan.pos,
+                        path,
+                    });
+                }
+                let object = scan.peek() == Some(b'{');
+                scan.pos += 1;
+                if let Some(entered) = segment {
+                    segments.push(entered);
+                }
+                frames.push(Frame {
+                    object,
+                    elements: 0,
+                    key: None,
+                });
+                scan.skip_ws();
+                if object {
+                    if scan.eat(b'}') {
+                        frames.pop();
+                        segments.pop();
+                    } else {
+                        let key = scan.string()?;
+                        scan.skip_ws();
+                        if !scan.eat(b':') {
+                            return None;
+                        }
+                        if let Some(frame) = frames.last_mut() {
+                            frame.key = Some(key);
+                        }
+                        continue 'walk;
+                    }
+                } else if scan.eat(b']') {
+                    frames.pop();
+                    segments.pop();
+                } else {
+                    continue 'walk;
+                }
+            }
+            Some(_) => {
+                if !scan.skip_scalar() {
+                    return None;
+                }
+            }
+            None => return None,
+        }
+        // A value is complete: account it in its parent frame and
+        // advance to the next sibling position, closing containers
+        // as they end. The root value completing ends the walk.
+        loop {
+            let (object, closed, advanced) = {
+                let frame = frames.last_mut()?;
+                frame.elements += 1;
+                scan.skip_ws();
+                if frame.object {
+                    if scan.eat(b'}') {
+                        (true, true, false)
+                    } else if scan.eat(b',') {
+                        (true, false, true)
+                    } else {
+                        return None;
+                    }
+                } else if scan.eat(b']') {
+                    (false, true, false)
+                } else if scan.eat(b',') {
+                    (false, false, true)
+                } else {
+                    return None;
+                }
+            };
+            if closed {
+                frames.pop();
+                segments.pop();
+                continue;
+            }
+            if advanced && object {
+                scan.skip_ws();
+                let key = scan.string()?;
+                scan.skip_ws();
+                if !scan.eat(b':') {
+                    return None;
+                }
+                if let Some(frame) = frames.last_mut() {
+                    frame.key = Some(key);
+                }
+            }
+            break;
+        }
+    }
 }
 
 /// A byte cursor over a response body for the tolerant head scan.
@@ -1014,6 +1268,162 @@ impl<'a> HeadScan<'a> {
             }
             None => false,
         }
+    }
+
+    /// Skip one scalar token at the cursor, exactly as the
+    /// parser reads it: a string by
+    /// [`HeadScan::skip_string_strict`], a literal by its full
+    /// spelling, a number by the JSON number grammar. Anything
+    /// else is a failure rather than a skip. The recursion walk
+    /// stands at a value it must account for, and a token read
+    /// loosely here would let the walk certify a trip past a
+    /// malformed token the parser refuses first, so where
+    /// `skip_value` tolerates, this refuses.
+    fn skip_scalar(&mut self) -> bool {
+        match self.peek() {
+            Some(b'"') => self.skip_string_strict(),
+            Some(b't') => self.skip_literal("true"),
+            Some(b'f') => self.skip_literal("false"),
+            Some(b'n') => self.skip_literal("null"),
+            Some(b'-' | b'0'..=b'9') => self.skip_number(),
+            _ => false,
+        }
+    }
+
+    /// Skip a literal at the cursor by its full spelling. A
+    /// longer letter run starting with the spelling is not the
+    /// literal, but it needs no special case here: the walk's
+    /// structural step after the value meets the extra letters
+    /// where a delimiter belongs and abstains there.
+    fn skip_literal(&mut self, literal: &str) -> bool {
+        if self.bytes[self.pos..].starts_with(literal.as_bytes()) {
+            self.pos += literal.len();
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Skip a number at the cursor under the JSON number
+    /// grammar: an optional minus, an integer part that is a
+    /// lone zero or a digit run not starting with zero, and
+    /// optional fraction and exponent parts that each carry at
+    /// least one digit.
+    fn skip_number(&mut self) -> bool {
+        if self.peek() == Some(b'-') {
+            self.pos += 1;
+        }
+        match self.peek() {
+            Some(b'0') => self.pos += 1,
+            Some(b'1'..=b'9') => {
+                while matches!(self.peek(), Some(b'0'..=b'9')) {
+                    self.pos += 1;
+                }
+            }
+            _ => return false,
+        }
+        if self.peek() == Some(b'.') {
+            self.pos += 1;
+            if !matches!(self.peek(), Some(b'0'..=b'9')) {
+                return false;
+            }
+            while matches!(self.peek(), Some(b'0'..=b'9')) {
+                self.pos += 1;
+            }
+        }
+        if matches!(self.peek(), Some(b'e' | b'E')) {
+            self.pos += 1;
+            if matches!(self.peek(), Some(b'+' | b'-')) {
+                self.pos += 1;
+            }
+            if !matches!(self.peek(), Some(b'0'..=b'9')) {
+                return false;
+            }
+            while matches!(self.peek(), Some(b'0'..=b'9')) {
+                self.pos += 1;
+            }
+        }
+        true
+    }
+
+    /// Skip the string token at the cursor, exactly as the
+    /// parser reads it. The raw skipper this module uses for
+    /// tolerance (`skip_string_raw`) accepts shapes the parser
+    /// refuses, which is safe for recovery but not for the
+    /// recursion walk's certification, so the walk's strings are
+    /// read strictly: an escape must be one of the JSON escapes,
+    /// a unicode escape must carry four hex digits with its
+    /// surrogate pairing intact, and a raw control character
+    /// refuses.
+    fn skip_string_strict(&mut self) -> bool {
+        if self.peek() != Some(b'"') {
+            return false;
+        }
+        self.pos += 1;
+        loop {
+            match self.peek() {
+                None => return false,
+                Some(b'"') => {
+                    self.pos += 1;
+                    return true;
+                }
+                Some(b'\\') => {
+                    self.pos += 1;
+                    match self.peek() {
+                        Some(b'"' | b'\\' | b'/' | b'b' | b'f' | b'n' | b'r' | b't') => {
+                            self.pos += 1;
+                        }
+                        Some(b'u') => {
+                            self.pos += 1;
+                            let Some(unit) = self.hex_unit() else {
+                                return false;
+                            };
+                            if (0xd800..=0xdbff).contains(&unit) {
+                                // A leading surrogate stands only
+                                // paired with a trailing one.
+                                if self.peek() != Some(b'\\') {
+                                    return false;
+                                }
+                                self.pos += 1;
+                                if self.peek() != Some(b'u') {
+                                    return false;
+                                }
+                                self.pos += 1;
+                                let Some(trailing) = self.hex_unit() else {
+                                    return false;
+                                };
+                                if !(0xdc00..=0xdfff).contains(&trailing) {
+                                    return false;
+                                }
+                            } else if (0xdc00..=0xdfff).contains(&unit) {
+                                return false;
+                            }
+                        }
+                        _ => return false,
+                    }
+                }
+                Some(0x00..=0x1f) => return false,
+                Some(_) => self.pos += 1,
+            }
+        }
+    }
+
+    /// Read the four hex digits of a unicode escape at the
+    /// cursor as its code unit, advancing past them.
+    fn hex_unit(&mut self) -> Option<u32> {
+        let mut unit: u32 = 0;
+        for _ in 0..4 {
+            let byte = self.peek()?;
+            let digit = match byte {
+                b'0'..=b'9' => u32::from(byte - b'0'),
+                b'a'..=b'f' => u32::from(byte - b'a') + 10,
+                b'A'..=b'F' => u32::from(byte - b'A') + 10,
+                _ => return None,
+            };
+            unit = unit * 16 + digit;
+            self.pos += 1;
+        }
+        Some(unit)
     }
 
     /// Read the error object's scalar head fields. The cursor is
@@ -1392,19 +1802,38 @@ mod tests {
 
     #[test]
     fn error_envelope_detection() {
-        assert!(Error::has_error_envelope(
-            r#"{"error": {"code": 403, "message": "m", "status": "PERMISSION_DENIED"}}"#
-        ));
-        assert!(!Error::has_error_envelope(r#"{"places": []}"#));
-        assert!(!Error::has_error_envelope("not json"));
+        // The success status guard builds the mapped error from
+        // the one parse, so detection is the presence of the
+        // built error here (Round 29).
+        let err = Error::from_success_body(
+            200,
+            r#"{"error": {"code": 403, "message": "m", "status": "PERMISSION_DENIED"}}"#,
+            None,
+        )
+        .expect("a full envelope builds an error");
+        assert_eq!(err.kind(), "auth");
+        assert_eq!(err.status_code(), Some(200));
+        assert_eq!(err.google_status(), Some("PERMISSION_DENIED"));
+        assert!(Error::from_success_body(200, r#"{"places": []}"#, None).is_none());
+        assert!(Error::from_success_body(200, "not json", None).is_none());
         // A code or a message makes the envelope an error signal even
         // without a status string; a bare error object carries neither
         // and is not one.
-        assert!(Error::has_error_envelope(r#"{"error": {"code": 403}}"#));
-        assert!(Error::has_error_envelope(
-            r#"{"error": {"message": "denied"}}"#
-        ));
-        assert!(!Error::has_error_envelope(r#"{"error": {}}"#));
+        assert!(Error::from_success_body(200, r#"{"error": {"code": 403}}"#, None).is_some());
+        assert!(
+            Error::from_success_body(200, r#"{"error": {"message": "denied"}}"#, None).is_some()
+        );
+        assert!(Error::from_success_body(200, r#"{"error": {}}"#, None).is_none());
+        // The details of a parseable envelope survive the shared
+        // parse; they are part of the built error, not a casualty
+        // of the detection sharing it.
+        let err = Error::from_success_body(
+            200,
+            r#"{"error": {"code": 429, "message": "Quota", "status": "RESOURCE_EXHAUSTED", "details": [{"@type": "t", "reason": "r"}]}}"#,
+            None,
+        )
+        .expect("an envelope with details builds an error");
+        assert_eq!(err.details().len(), 1);
     }
 
     #[test]
@@ -1463,9 +1892,162 @@ mod tests {
         let err = Error::from_response(404, body);
         assert_eq!(err.kind(), "not_found");
         assert!(err.details().is_empty());
-        assert!(Error::has_error_envelope(
-            r#"{"error": {"code": "x", "status": "NOT_FOUND"}}"#
-        ));
+        assert!(Error::from_success_body(
+            200,
+            r#"{"error": {"code": "x", "status": "NOT_FOUND"}}"#,
+            None
+        )
+        .is_some());
+    }
+
+    /// Nested arrays of the given depth around a scalar leaf.
+    fn nested_arrays(depth: usize) -> String {
+        let mut body = String::new();
+        for _ in 0..depth {
+            body.push('[');
+        }
+        body.push('1');
+        for _ in 0..depth {
+            body.push(']');
+        }
+        body
+    }
+
+    #[test]
+    fn recursion_trip_reports_the_parser_limit_point() {
+        // Shallow and unreadable bodies never trip.
+        assert!(recursion_trip(r#"{"places": []}"#).is_none());
+        assert!(recursion_trip("not json").is_none());
+        assert!(recursion_trip("").is_none());
+        // Brackets inside a string are content, not structure.
+        let mut in_string = String::from(r#"{"s": ""#);
+        in_string.push_str(&"[".repeat(200));
+        in_string.push_str(r#"", "x": 1}"#);
+        assert!(recursion_trip(&in_string).is_none());
+        // Depth 127 counting the root object stays under the
+        // limit and the whole parse accepts the body.
+        let under = format!("{{\"deep\": {}}}", nested_arrays(126));
+        assert!(recursion_trip(&under).is_none());
+        assert!(serde_json::from_str::<serde_json::Value>(&under).is_ok());
+        // Depth 128 trips on the last array bracket, at the path
+        // and position the parser itself reports.
+        let over = format!("{{\"deep\": {}}}", nested_arrays(127));
+        let trip = recursion_trip(&over).expect("depth 128 trips");
+        assert_eq!(trip.offset, "{\"deep\": ".len() + 126);
+        assert_eq!(over.as_bytes()[trip.offset], b'[');
+        let mut path = String::from("deep");
+        for _ in 0..126 {
+            path.push_str("[0]");
+        }
+        assert_eq!(trip.path, path);
+        let real = serde_json::from_str::<serde_json::Value>(&over)
+            .expect_err("the parser refuses the same body")
+            .to_string();
+        assert_eq!(trip.message(&over), real);
+    }
+
+    #[test]
+    fn recursion_trip_paths_follow_keys_and_indices() {
+        // Object keys join by dots, indices ride their element.
+        let body = format!("{{\"a\": [0, 0, {{\"b\": {}}}]}}", nested_arrays(125));
+        let trip = recursion_trip(&body).expect("the nested value trips");
+        let mut path = String::from("a[2].b");
+        for _ in 0..124 {
+            path.push_str("[0]");
+        }
+        assert_eq!(trip.path, path);
+        // A root array renders its first segment as an index.
+        let body = format!("[{{\"x\": {}}}]", nested_arrays(126));
+        let trip = recursion_trip(&body).expect("the nested value trips");
+        assert!(trip.path.starts_with("[0].x[0]"), "{}", trip.path);
+        // Keys are the decoded wire keys, escapes included.
+        let body = format!("{{\"a\\\"b\": {}}}", nested_arrays(127));
+        let trip = recursion_trip(&body).expect("the nested value trips");
+        assert!(trip.path.starts_with("a\"b[0]"), "{}", trip.path);
+        // Line and column track newlines as the parser counts
+        // them: the same failure on the third line reports it.
+        let body = format!(
+            "{{\n  \"sibling\": \"{}\",\n  \"deep\": {}\n}}",
+            "y".repeat(64),
+            nested_arrays(127)
+        );
+        let trip = recursion_trip(&body).expect("the nested value trips");
+        let real = serde_json::from_str::<serde_json::Value>(&body)
+            .expect_err("the parser refuses the same body")
+            .to_string();
+        assert_eq!(trip.message(&body), real);
+        assert!(real.starts_with("recursion limit exceeded at line 3 column "));
+    }
+
+    #[test]
+    fn recursion_trip_abstains_on_unreadable_structure() {
+        // A malformed token before the deep value leaves the
+        // question to the parse, even at tripping depth.
+        let body = format!("{{\"a\": tru, \"deep\": {}}}", nested_arrays(200));
+        assert!(recursion_trip(&body).is_none());
+        // A body cut short before the limit is reached abstains:
+        // its failure is the truncation, not the depth.
+        let body = format!("{{\"deep\": {}", "[".repeat(100));
+        assert!(recursion_trip(&body).is_none());
+        // A body cut short past the limit still trips, because
+        // the parser meets the limit before it meets the end.
+        let body = format!("{{\"deep\": {}", "[".repeat(200));
+        let trip = recursion_trip(&body).expect("the limit precedes the cut");
+        let real = serde_json::from_str::<serde_json::Value>(&body)
+            .expect_err("the parser refuses the same body")
+            .to_string();
+        assert_eq!(trip.message(&body), real);
+        // An unterminated string abstains.
+        let body = format!("{{\"deep\": \"{}", "[".repeat(200));
+        assert!(recursion_trip(&body).is_none());
+        // Tokens the parser refuses before the deep value abstain
+        // the same way, each for its own reason: a bad number, a
+        // raw control character inside a string, a bad escape, and
+        // a lone surrogate.
+        for prefix in [
+            r#"{"a": 1e, "deep": "#,
+            "{\"a\": \"x\ty\", \"deep\": ",
+            r#"{"a": "\q", "deep": "#,
+            r#"{"a": "\ud800", "deep": "#,
+        ] {
+            let body = format!("{prefix}{}}}", nested_arrays(200));
+            assert!(recursion_trip(&body).is_none(), "{prefix}");
+        }
+        // The well formed forms of the same tokens walk through:
+        // the trip beyond them is certified.
+        for prefix in [
+            r#"{"a": -1.5e+10, "deep": "#,
+            r#"{"a": true, "b": false, "c": null, "deep": "#,
+            r#"{"a": "x\ty\ud83d\ude00", "deep": "#,
+        ] {
+            let body = format!("{prefix}{}}}", nested_arrays(200));
+            assert!(recursion_trip(&body).is_some(), "{prefix}");
+        }
+    }
+
+    #[test]
+    fn envelope_parse_routes_a_tripping_body_to_the_scan() {
+        // At depth 127 under the root the whole parse still runs
+        // and the details survive it.
+        let body = format!(
+            "{{\"error\": {{\"code\": 429, \"message\": \"Quota\", \"status\": \"RESOURCE_EXHAUSTED\", \"details\": [{{\"@type\": \"t\"}}]}}, \"deep\": {}}}",
+            nested_arrays(126)
+        );
+        let err = Error::from_response(200, &body);
+        assert_eq!(err.kind(), "rate_limit");
+        assert_eq!(err.details().len(), 1);
+        // One level deeper the parse is guaranteed to fail, so
+        // the envelope comes from the tolerant scan: status,
+        // message and class survive, the details degrade.
+        let body = format!(
+            "{{\"error\": {{\"code\": 429, \"message\": \"Quota\", \"status\": \"RESOURCE_EXHAUSTED\", \"details\": [{{\"@type\": \"t\"}}]}}, \"deep\": {}}}",
+            nested_arrays(127)
+        );
+        let err = Error::from_response(200, &body);
+        assert_eq!(err.kind(), "rate_limit");
+        assert_eq!(err.google_status(), Some("RESOURCE_EXHAUSTED"));
+        assert!(err.to_string().contains("Quota"));
+        assert!(err.details().is_empty());
     }
 
     #[test]

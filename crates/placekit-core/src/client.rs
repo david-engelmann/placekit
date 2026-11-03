@@ -30,6 +30,16 @@ pub const DEFAULT_MAX_RESPONSE_BYTES: usize = 32 * 1024 * 1024;
 /// the error message, which is itself capped, so they stop early.
 const ERROR_BODY_CAP: usize = 256 * 1024;
 
+/// The size past which [`decode_typed`] refuses a body whose
+/// nesting trips the parser recursion limit from the structural
+/// walk instead of from the parse (Round 29, Finding 1). The
+/// bound is the shared parse preflight bound from the errors
+/// module: at or below it the parse attempt's worst failure
+/// unwind stays bounded by the frame count times the size, tens
+/// of milliseconds at this bound in the develop build, so small
+/// bodies keep the parse's own word for every failure.
+const DECODE_FAST_REFUSAL_MIN_BYTES: usize = crate::errors::PARSE_PREFLIGHT_MIN_BYTES;
+
 const API_KEY_HEADER: &str = "x-goog-api-key";
 const FIELD_MASK_HEADER: &str = "x-goog-fieldmask";
 const USER_AGENT: &str = concat!("placekit/", env!("CARGO_PKG_VERSION"), " (rust core)");
@@ -686,7 +696,38 @@ impl Client {
 /// keeps the bare message, and a trailing `.?` segment (a failure
 /// naming a container's unnamed member) trims to the parent path
 /// that is known.
+///
+/// Round 29: a large body whose bracket nesting trips the parser
+/// recursion limit is refused from the structural walk instead of
+/// from the parse. Every model in the decode graph flattens its
+/// unknown fields into an extra map rather than skipping them, so
+/// a body that deep fails the parse with the recursion limit
+/// wherever the deep value sits, and the walk names the same
+/// failure (the same path, the same line and column) at the scan's
+/// own per byte rate. Running the parse anyway bought nothing but
+/// its failure unwind, which the round measured at roughly the
+/// open frame count times the bytes before the failure point. The
+/// refusal carries no source error, since no parse ran.
 fn decode_typed<T: DeserializeOwned>(body: &str, status: u16) -> Result<T, Error> {
+    let root_is_object = body
+        .bytes()
+        .find(|byte| !matches!(byte, b' ' | b'\t' | b'\n' | b'\r'))
+        == Some(b'{');
+    if body.len() > DECODE_FAST_REFUSAL_MIN_BYTES && root_is_object {
+        if let Some(trip) = crate::errors::recursion_trip(body) {
+            let inner = trip.message(body);
+            let detail = if trip.path.is_empty() {
+                inner
+            } else {
+                format!("{}: {inner}", trip.path)
+            };
+            return Err(Error::Decode {
+                detail,
+                status: Some(status),
+                source: None,
+            });
+        }
+    }
     let mut deserializer = serde_json::Deserializer::from_str(body);
     serde_path_to_error::deserialize(&mut deserializer).map_err(|e| {
         let path = e.path().to_string();
@@ -822,20 +863,16 @@ async fn read_error_body(
 /// Google error envelope, with the response's `Retry-After` attached,
 /// or `None` when the body carries no envelope. Shared by the JSON
 /// paths and both photo branches so the check and the error
-/// construction cannot drift apart.
+/// construction cannot drift apart. The envelope is parsed once for
+/// both (Round 29, Finding 1).
 fn envelope_error(
     status: u16,
     body: &str,
     content_type: Option<&str>,
     retry_after: Option<f64>,
 ) -> Option<Error> {
-    if Error::has_error_envelope(body) {
-        Some(
-            Error::from_response_detailed(status, body, content_type).with_retry_after(retry_after),
-        )
-    } else {
-        None
-    }
+    Error::from_success_body(status, body, content_type)
+        .map(|err| err.with_retry_after(retry_after))
 }
 
 /// The `Retry-After` header in seconds, when present. Both forms
@@ -2702,6 +2739,102 @@ mod tests {
         let err = block_on(client.text_search(&req, None)).unwrap_err();
         assert_eq!(err.kind(), "decode");
         assert!(!err.to_string().contains(".: "), "{err}");
+    }
+
+    /// Nested arrays of the given depth around a scalar leaf.
+    fn nested_arrays(depth: usize) -> String {
+        let mut body = String::new();
+        for _ in 0..depth {
+            body.push('[');
+        }
+        body.push('1');
+        for _ in 0..depth {
+            body.push(']');
+        }
+        body
+    }
+
+    /// The decode detail the parse itself produces for a refusing
+    /// body, computed the way `decode_typed` computed it before
+    /// the Round 29 fast refusal. The refusal must match this
+    /// reference word for word on every shape it takes over.
+    fn slow_decode_detail(body: &str) -> String {
+        let mut deserializer = serde_json::Deserializer::from_str(body);
+        let result: Result<SearchResponse, _> = serde_path_to_error::deserialize(&mut deserializer);
+        let err = match result {
+            Ok(_) => panic!("the battery bodies all refuse"),
+            Err(err) => err,
+        };
+        let path = err.path().to_string();
+        let inner = err.into_inner();
+        if path == "." || path == "?" {
+            inner.to_string()
+        } else if let Some(parent) = path.strip_suffix(".?") {
+            format!("{parent}: {inner}")
+        } else {
+            format!("{path}: {inner}")
+        }
+    }
+
+    #[test]
+    fn fast_refusal_matches_the_parse_word_for_word() {
+        // Round 29, Finding 1: past the size bound, a body whose
+        // nesting trips the parser recursion limit is refused from
+        // the structural walk. The refusal is the parse's own
+        // refusal (same detail, same status, same kind) produced
+        // without paying the parse's failure unwind.
+        let pad = "y".repeat(300_000);
+        let bodies = [
+            // A large scalar ahead of the deep value, the shape
+            // whose unwind the round priced.
+            format!(
+                "{{\"sibling\": \"{pad}\", \"deep\": {}}}",
+                nested_arrays(200)
+            ),
+            // The deep value under a modelled element's unknown
+            // key, with the bulk of the body after the failure.
+            format!(
+                "{{\"places\": [{{\"id\": \"abc\", \"unknownDeep\": {}}}], \"tail\": \"{pad}\"}}",
+                nested_arrays(200)
+            ),
+            // The same failure spread over lines: the line and
+            // column arithmetic must follow the body.
+            format!(
+                "{{\n  \"sibling\": \"{pad}\",\n  \"deep\": {}\n}}",
+                nested_arrays(200)
+            ),
+        ];
+        for body in &bodies {
+            assert!(body.len() > DECODE_FAST_REFUSAL_MIN_BYTES);
+            let err = decode_typed::<SearchResponse>(body, 200).expect_err("the body refuses");
+            assert_eq!(err.kind(), "decode");
+            assert_eq!(err.status_code(), Some(200));
+            let Error::Decode { detail, .. } = &err else {
+                panic!("expected a decode error, got {err:?}");
+            };
+            assert_eq!(detail, &slow_decode_detail(body));
+        }
+    }
+
+    #[test]
+    fn fast_refusal_leaves_other_shapes_to_the_parse() {
+        // A root array is not a response object: its shallow type
+        // failure is the parse's to report, even past the bound
+        // with tripping depth inside it.
+        let body = format!("[\"{}\", {}]", "y".repeat(300_000), nested_arrays(200));
+        let err = decode_typed::<SearchResponse>(&body, 200).expect_err("the body refuses");
+        let text = err.to_string();
+        assert!(text.contains("invalid type: sequence"), "{text}");
+        // A large well formed body with deep but legal nesting
+        // decodes: the walk clears it and the parse runs.
+        let body = format!(
+            "{{\"places\": [{{\"id\": \"abc\", \"deep\": {}}}], \"tail\": \"{}\"}}",
+            nested_arrays(100),
+            "y".repeat(300_000)
+        );
+        let value = decode_typed::<SearchResponse>(&body, 200).expect("the body decodes");
+        assert_eq!(value.places.len(), 1);
+        assert_eq!(value.places[0].id.as_str(), "abc");
     }
 
     #[test]
