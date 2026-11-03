@@ -889,12 +889,18 @@ fn cap_detail_strings(value: &mut serde_json::Value) {
 /// Duplicate keys resolve last wins, as the whole document parse
 /// resolves them (Round 25 landing repair). The walk does not
 /// stop at the first `error` key: a later error object replaces
-/// an earlier one, and an `error` value that is not an object is
-/// skipped like any other value rather than ending the scan. One
-/// limit stands where the data runs out: a later error object
-/// cut off before it yields a head field does not erase an
-/// earlier complete one, because the first readable value is
-/// the only data there is. A scan that recovers no head field
+/// an earlier one, and a later `error` value that is not an
+/// object clears an earlier one (Round 31, Decoder Minor F1),
+/// because the whole parse reads the last `error` value and a
+/// non object value there is no envelope at all. An `error`
+/// value that is not an object and stands before any envelope
+/// is skipped like any other value rather than ending the scan.
+/// One limit stands where the data runs out: a later error
+/// object cut off before it yields a head field does not erase
+/// an earlier complete one, because the first readable value is
+/// the only data there is, and a later non object value cut off
+/// before it is fully read does not clear one either, for the
+/// same reason. A scan that recovers no head field
 /// at all reports no envelope, the same verdict the whole parse
 /// gives an error object with no usable field, so the caller
 /// takes the bare HTTP fallback and its wording.
@@ -925,6 +931,18 @@ fn parse_envelope_head(body: &str) -> Option<EnvelopeParts> {
                 found = Some(parts);
             }
             if !closed {
+                break;
+            }
+        } else if key == "error" {
+            // A later `error` value that is not an object clears
+            // the envelope an earlier key found (Round 31,
+            // Decoder Minor F1), matching the whole parse reading
+            // of the later value. The clear lands only when the
+            // value was read whole; a value cut off by the read
+            // cap does not erase an earlier complete envelope.
+            if scan.skip_value() {
+                found = None;
+            } else {
                 break;
             }
         } else if !scan.skip_value() {
@@ -2409,8 +2427,118 @@ mod tests {
     }
 
     #[test]
-    fn head_scan_repeated_status_key_takes_the_last_value() {
-        // Round 25 landing repair: a repeated status key whose
+    fn head_scan_later_non_object_error_value_clears_the_envelope() {
+        // Round 31, Decoder Minor F1: the last wins alignment
+        // failed in the mirror order. With a complete error
+        // object first and a second `error` key carrying a value
+        // that is not an object, the whole parse takes the later
+        // value, finds no error object there, and reports no
+        // envelope, while the scan kept the first envelope. The
+        // scan now clears what it found when the later value is
+        // read whole, so both engines fall back to the bare HTTP
+        // class in every tail shape.
+        for tail in [r#""tail""#, "42", "null", "[1]"] {
+            let body = |junk: &str| {
+                format!(
+                    r#"{{"error": {{"code": 429, "message": "quota", "status": "RESOURCE_EXHAUSTED"}}, "error": {tail}, "junk": {junk}}}"#
+                )
+            };
+            let err = Error::from_response(400, &body(&deep_fragment()));
+            assert_eq!(err.kind(), "invalid_request", "tail {tail}");
+            assert_eq!(err.google_status(), None, "tail {tail}");
+            assert!(
+                err.to_string().contains("not a Places error envelope"),
+                "tail {tail}: {err}"
+            );
+            let control = Error::from_response(400, &body("0"));
+            assert_eq!(control.kind(), "invalid_request", "tail {tail}");
+            assert_eq!(control.google_status(), None, "tail {tail}");
+        }
+    }
+
+    #[test]
+    fn head_scan_non_object_tail_leaves_a_success_status_alone() {
+        // The sharpest F1 instance: on HTTP 200 the parseable
+        // form of this body returns its result, because the last
+        // `error` value is not an object and no envelope counts.
+        // The scan twin raised the first envelope instead. Both
+        // forms now report no envelope on a success status.
+        let body = |junk: &str| {
+            format!(
+                r#"{{"error": {{"code": 429, "message": "quota", "status": "RESOURCE_EXHAUSTED"}}, "error": "tail", "junk": {junk}}}"#
+            )
+        };
+        assert!(Error::from_success_body(200, &body(&deep_fragment()), None).is_none());
+        assert!(Error::from_success_body(200, &body("0"), None).is_none());
+    }
+
+    #[test]
+    fn head_scan_triple_error_key_with_a_tail_clears() {
+        // Red team extension of F1: a number first, the real
+        // envelope second, a string tail under a third `error`
+        // key. Last wins hands the reading to the tail in both
+        // engines.
+        let body = |junk: &str| {
+            format!(
+                r#"{{"error": 42, "error": {{"code": 429, "message": "quota", "status": "RESOURCE_EXHAUSTED"}}, "error": "tail", "junk": {junk}}}"#
+            )
+        };
+        let err = Error::from_response(400, &body(&deep_fragment()));
+        assert_eq!(err.kind(), "invalid_request");
+        assert_eq!(err.google_status(), None);
+        let control = Error::from_response(400, &body("0"));
+        assert_eq!(control.kind(), "invalid_request");
+        assert_eq!(control.google_status(), None);
+    }
+
+    #[test]
+    fn head_scan_non_object_between_two_envelopes_keeps_the_last() {
+        // The clearing rule does not disturb the mirror family:
+        // a non object value standing between two envelopes
+        // leaves the second envelope in charge, in both engines.
+        let body = |junk: &str| {
+            format!(
+                r#"{{"error": {{"code": 400, "message": "first", "status": "INVALID_ARGUMENT"}}, "error": "between", "error": {{"code": 404, "message": "second", "status": "NOT_FOUND"}}, "junk": {junk}}}"#
+            )
+        };
+        let err = Error::from_response(400, &body(&deep_fragment()));
+        assert_eq!(err.kind(), "not_found");
+        assert!(err.to_string().contains("second"), "{err}");
+        let control = Error::from_response(400, &body("0"));
+        assert_eq!(control.kind(), "not_found");
+        assert!(control.to_string().contains("second"), "{control}");
+    }
+
+    #[test]
+    fn head_scan_empty_object_tail_keeps_its_recorded_wording() {
+        // The message only instance of the F1 root, kept as
+        // recorded: a later empty error object replaces the
+        // found envelope in the scan and is then discarded for
+        // holding no head field, so the scan reports the body
+        // as not an envelope while the whole parse reports the
+        // same class with the carried no message wording. The
+        // classes agree; the divergence is the wording alone.
+        let body = |junk: &str| {
+            format!(
+                r#"{{"error": {{"code": 429, "message": "quota", "status": "RESOURCE_EXHAUSTED"}}, "error": {{}}, "junk": {junk}}}"#
+            )
+        };
+        let err = Error::from_response(400, &body(&deep_fragment()));
+        assert_eq!(err.kind(), "invalid_request");
+        assert!(
+            err.to_string().contains("not a Places error envelope"),
+            "{err}"
+        );
+        let control = Error::from_response(400, &body("0"));
+        assert_eq!(control.kind(), "invalid_request");
+        assert!(
+            control.to_string().contains("carried no message"),
+            "{control}"
+        );
+    }
+
+    #[test]
+    fn head_scan_repeated_status_key_takes_the_last_value() {        // Round 25 landing repair: a repeated status key whose
         // later value is mistyped clears the field in the whole
         // parse (the later value is read and skipped as mistyped,
         // leaving no status), and the scan kept the earlier
