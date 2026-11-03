@@ -895,11 +895,20 @@ async fn read_error_body(
     // capped pass (`gunzip_capped`). The cap
     // judges the decompressed form, as it does on the
     // transport decoded path: a form that runs past it is
-    // read as capped, and a stream that fails after yielding
-    // a prefix is read as the capped prefix it produced. A
-    // stream that fails before yielding anything leaves the
-    // raw bytes to the bare HTTP fallback, the same class the
-    // transport gives a corrupted stream on this path.
+    // read as capped. A stream that fails is judged by what
+    // the raw read itself did. When the raw read stopped at
+    // the cap, the stream in hand is a truncated prefix of a
+    // longer body and its failure is the cut, so the
+    // decompressed prefix it yielded is read as the capped
+    // prefix it is, and a stream that yielded nothing leaves
+    // the raw capped bytes to the capped reading below. When
+    // the whole compressed body arrived, the stream is
+    // corrupt inside it, and claiming the read stopped at
+    // the cap would be untrue (Round 41, Finding 5): the
+    // body is reported unreadable instead, the same
+    // construction the transport route gives the same body
+    // under the exact lowercase declaration its own decoder
+    // refuses.
     let gunzipped = if buf.starts_with(&GZIP_MAGIC)
         && content_encoding_names_gzip(&headers)
         && !transport_decoded_gzip(&headers)
@@ -907,8 +916,16 @@ async fn read_error_body(
         match gunzip_capped(&buf, ERROR_BODY_CAP) {
             Gunzip::Done(out) => Some((out, capped)),
             Gunzip::OverCap(out) => Some((out, true)),
-            Gunzip::Failed { partial, .. } if !partial.is_empty() => Some((partial, true)),
-            Gunzip::Failed { .. } => None,
+            Gunzip::Failed { partial, error } => {
+                if !capped && !partial.is_empty() {
+                    return Error::from_unreadable_body(status, &error, content_type);
+                }
+                if partial.is_empty() {
+                    None
+                } else {
+                    Some((partial, true))
+                }
+            }
         }
     } else {
         None
