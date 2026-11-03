@@ -1776,7 +1776,7 @@ impl<'a> HeadScan<'a> {
                         // verdict both engines give it.
                         break;
                     }
-                    if depth <= 2 {
+                    if depth == 1 || depth == 2 {
                         let is_error = std::str::from_utf8(&self.bytes[start..self.pos])
                             .ok()
                             .and_then(|text| serde_json::from_str::<String>(text).ok())
@@ -2953,6 +2953,23 @@ mod tests {
         let err = Error::from_response(400, body);
         assert_eq!(err.kind(), "rate_limit");
         assert_eq!(err.google_status(), Some("RESOURCE_EXHAUSTED"));
+    }
+
+    #[test]
+    fn recovery_pass_refuses_a_key_at_depth_zero() {
+        // Round 31 landing repair, spec Minor 2: the adoption
+        // band is depth one or two exactly, as the pass states
+        // it. Stray closers ahead of the key saturate the depth
+        // counter back to zero, so the key sits lexically
+        // outside the root object, and that key is not a
+        // candidate even on a body whose walk was defeated. An
+        // earlier form of the condition admitted depth zero
+        // alongside the band and adopted this envelope.
+        let body = r#"{"a": ]], "error": {"code": 429, "message": "Quota exceeded", "status": "RESOURCE_EXHAUSTED"}}"#;
+        let err = Error::from_response(400, body);
+        assert_eq!(err.kind(), "invalid_request");
+        assert_eq!(err.google_status(), None);
+        assert!(Error::from_success_body(200, body, None).is_none());
     }
 
     #[test]
