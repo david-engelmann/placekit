@@ -90,7 +90,27 @@ while page.next_page_token:
     page = client.text_search("cafes in Sydney", page_token=page.next_page_token)
 ```
 
+A details result carries the opening hours the API returned for the place. The hours object sits at `current_opening_hours`, which is the attribute spelling of the wire field `currentOpeningHours`, one field under two spellings, the wire spelling in a field mask and the attribute spelling on the result. Its open state sits at `current_opening_hours.open_now`, and the same object carries `weekday_descriptions`, the week's hours as one text line per day. Both levels of the path can be None on a given place, the hours object when the response carried no hours and `open_now` itself when hours arrived without a state, so the read guards the full path before anything prints.
+
+```python
+result = client.text_search("cafes in Sydney")
+details = client.place_details(result.places[0])
+if details.current_opening_hours is not None:
+    print(details.current_opening_hours.open_now)
+    for line in details.current_opening_hours.weekday_descriptions:
+        print(line)
+```
+
 Autocomplete and Place Details both accept `session_token`. One token ties a run of autocomplete calls to the details call that closes the session, and that grouping is the shape the API bills as one session, so an autocomplete flow in production should mint a fresh token for each session and pass it to both calls.
+
+An autocomplete result carries its predictions on two members, `place_predictions` and `query_predictions`. A prediction's `text` is an optional `FormattedText` rather than a plain string, so the read guards it first. The display string sits at `prediction.text.text`, and the ranges where the input matched inside that string sit at `prediction.text.matches`.
+
+```python
+result = client.autocomplete("Bianco")
+for prediction in result.place_predictions:
+    if prediction.text is not None:
+        print(prediction.text.text)
+```
 
 ## Field masks
 
@@ -133,14 +153,21 @@ The modules are snapshots of the official tables and a convenience only. The cli
 
 ## Addresses
 
-`placekit.address` reads the structured address a place already carries and answers the questions its two carrier sets raise. It looks components up by type and has a reader for the components that carry no type at all, reads the country and the postal code across both carrier sets, reads the administrative area from the components alone with its postal counterpart read by the separate `postal_administrative_area` reader, and splits plus codes from a plus code object or a compound code string. Its `postal_code` reader returns a `PostalCodeResult` that carries the value with its carrier, a present or absent status, and any competing value the other carrier set holds, and the postal address readers read the second carrier set on its own terms. Presence helpers and an `address_flags` summary answer the shape questions about a place. City resolution is the careful part, because which carrier holds the city changes by country and the carriers sometimes disagree on the same place, so `resolve_city` returns the value with the carrier it came from and a confidence grade in the open.
+`placekit.address` reads the structured address a place already carries and answers the questions its two carrier sets raise. It looks components up by type and has a reader for the components that carry no type at all, reads the country with `country_code` and the postal code with `postal_code` across both carrier sets, reads the administrative area from the components alone with its postal counterpart read by the separate `postal_administrative_area` reader, and splits plus codes from a plus code object or a compound code string. Its `postal_code` reader returns a `PostalCodeResult` that carries the value with its carrier, a present or absent status, and any competing value the other carrier set holds, and the postal address readers read the second carrier set on its own terms. `country_code` returns a plainer shape than that, the region code itself as a plain string or None when neither carrier set yields one, with no result object to unpack and no value member to read off it. Presence helpers and an `address_flags` summary answer the shape questions about a place. City resolution is the careful part, because which carrier holds the city changes by country and the carriers sometimes disagree on the same place, so `resolve_city` returns the value with the carrier it came from and a confidence grade in the open.
 
 ```python
-from placekit import address
+from placekit import Client, address
+
+client = Client("YOUR_API_KEY")
+result = client.text_search("cafes in Sydney")
+place = client.place_details(result.places[0])
 
 city = address.resolve_city(place)
 city.value, city.carrier, city.confidence
+code = address.country_code(place)
 ```
+
+The details call in that example is load bearing. These readers read the address a place carries, and a bare search result without address components gives them nothing to read, so the same calls over a search result answer quietly instead, a city resolution carrying no value and a country code of None, and no error marks the difference.
 
 `city_resolutions` returns every reading a place supports, and where the carriers disagree the reading carries its rival on the result itself, as `competing_value` and `competing_carrier`. A British place whose locality and postal town differ therefore hands back both values with the rivalry visible, instead of one value with the other hidden.
 
