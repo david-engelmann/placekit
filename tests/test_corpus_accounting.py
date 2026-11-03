@@ -197,6 +197,25 @@ def test_accounting_observation_fixtures_and_hosts_exist():
             assert digest == obs["fixture_sha256"]
 
 
+def test_accounting_observation_tests_name_their_fixtures():
+    # The linkage proof for the observation half, at the same strength
+    # as the case linkage above. The named test must exist, and its own
+    # source must name every fixture the observation claims, its own
+    # fixture and its host fixtures alike, so an observation test that
+    # silently stopped loading the fixture it pins fails here.
+    for obs in MANIFEST["observations"]:
+        claimed = ([obs["fixture"]] if obs.get("fixture") else []) + obs.get(
+            "host_fixtures", []
+        )
+        assert claimed, obs["id"]
+        assert obs["tests"], obs["id"]
+        for test_name in obs["tests"]:
+            assert test_name in RECORDED_SOURCES, test_name
+            source = RECORDED_SOURCES[test_name]
+            for name in claimed:
+                assert name in source, (test_name, name)
+
+
 def test_accounting_coverage_table_rows_match_the_manifest():
     rows = {}
     for line in TABLE.splitlines():
