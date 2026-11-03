@@ -824,9 +824,13 @@ const ENVELOPE_TEXT_CAP_CHARS: usize = 500;
 /// inside it, lost the status and message and code its head carried
 /// complete, and classification fell back to the bare HTTP code. The
 /// tolerant scan reads only the head, so neither body size nor
-/// nesting anywhere in the body can defeat it. Details are not
-/// recovered by the scan; they degrade to empty while the status,
-/// message and class survive.
+/// nesting anywhere in the body can defeat it. The scan recovers
+/// the details array entry by entry (Round 41, Finding 4): an
+/// entry the strict parse refuses degrades alone and clean
+/// siblings survive, a poisoned string elsewhere in the body
+/// costs the array nothing, and the whole array degrades to
+/// empty only when its own container is unreadable in the text,
+/// a cut off array being the standing shape.
 ///
 /// String values inside parsed details are capped at the same 500
 /// character discipline as the envelope message (Round 25, Minor
@@ -865,6 +869,46 @@ fn parse_envelope(body: &str) -> Option<EnvelopeParts> {
         details,
         partial: false,
     })
+}
+
+/// Recover the entries of one details array from its raw text,
+/// entry by entry (Round 41, Finding 4). The text is the complete
+/// array span the head scan delimited, closing bracket included.
+/// Each entry is sliced out by the scan's own value skip and
+/// parsed on its own, so an entry the strict parse refuses costs
+/// that entry alone, and the entries that parse are kept in wire
+/// order, each under the same string cap the whole parse route
+/// applies. An entry whose own nesting passes the parser limit
+/// fails its parse the same way, alone.
+fn details_from_array_text(array: &[u8]) -> Vec<serde_json::Value> {
+    let Ok(text) = std::str::from_utf8(array) else {
+        return Vec::new();
+    };
+    let mut scan = HeadScan::new(text);
+    scan.skip_ws();
+    if !scan.eat(b'[') {
+        return Vec::new();
+    }
+    let mut entries = Vec::new();
+    loop {
+        scan.skip_ws();
+        if scan.at_end() || scan.eat(b']') {
+            break;
+        }
+        let start = scan.pos;
+        if !scan.skip_value() {
+            break;
+        }
+        if let Ok(mut entry) = serde_json::from_str::<serde_json::Value>(&text[start..scan.pos]) {
+            cap_detail_strings(&mut entry);
+            entries.push(entry);
+        }
+        scan.skip_ws();
+        if !scan.eat(b',') {
+            break;
+        }
+    }
+    entries
 }
 
 /// Truncate every string value inside one parsed detail at
@@ -1645,6 +1689,42 @@ impl<'a> HeadScan<'a> {
                         }
                     }
                 }
+                "details" => {
+                    if self.peek() == Some(b'[') {
+                        // The details recover entry by entry
+                        // (Round 41, Finding 4). The scan skips
+                        // the array whole to find its span, which
+                        // the raw string skipper can do without
+                        // decoding anything inside it, and each
+                        // entry's text is then parsed on its own,
+                        // so an entry the strict parse refuses, a
+                        // lone surrogate escape is the proven
+                        // shape, costs that entry alone while
+                        // clean siblings survive. A poisoned
+                        // string elsewhere in the body never
+                        // reaches this arm, so it cannot cost the
+                        // array. An array the skip cannot complete
+                        // (cut off by the read cap) leaves the
+                        // surface empty: the whole array fallback
+                        // stands when the container itself is
+                        // unreadable. A repeated details key
+                        // resolves last wins, as the whole parse
+                        // resolves it, because each arm overwrites
+                        // what an earlier key stored.
+                        let start = self.pos;
+                        if self.skip_value() {
+                            parts.details = details_from_array_text(&self.bytes[start..self.pos]);
+                        } else {
+                            parts.details = Vec::new();
+                            return (parts, false);
+                        }
+                    } else {
+                        parts.details = Vec::new();
+                        if !self.skip_value() {
+                            return (parts, false);
+                        }
+                    }
+                }
                 "code" => match self.peek() {
                     Some(b'0'..=b'9' | b'-') => {
                         let start = self.pos;
@@ -2383,7 +2463,9 @@ mod tests {
         assert_eq!(err.details().len(), 1);
         // One level deeper the parse is guaranteed to fail, so
         // the envelope comes from the tolerant scan: status,
-        // message and class survive, the details degrade.
+        // message and class survive, and the details array, which
+        // is itself readable in the text, recovers entry by entry
+        // (Round 41, Finding 4).
         let body = format!(
             "{{\"error\": {{\"code\": 429, \"message\": \"Quota\", \"status\": \"RESOURCE_EXHAUSTED\", \"details\": [{{\"@type\": \"t\"}}]}}, \"deep\": {}}}",
             nested_arrays(127)
@@ -2392,7 +2474,7 @@ mod tests {
         assert_eq!(err.kind(), "rate_limit");
         assert_eq!(err.google_status(), Some("RESOURCE_EXHAUSTED"));
         assert!(err.to_string().contains("Quota"));
-        assert!(err.details().is_empty());
+        assert_eq!(err.details().len(), 1);
     }
 
     #[test]
@@ -2624,6 +2706,140 @@ mod tests {
         );
         // Short strings pass through untouched.
         assert_eq!(detail["@type"], "type.googleapis.com/google.rpc.DebugInfo");
+    }
+
+    #[test]
+    fn scan_recovers_details_entry_by_entry_past_a_lone_surrogate() {
+        // Round 41, Finding 4: one entry carrying a lone surrogate
+        // escape defeated the whole parse, and the scan route used
+        // to drop the whole details array with it. The poisoned
+        // entry now degrades alone and the clean siblings survive,
+        // with the classification untouched.
+        let body = concat!(
+            "{\"error\": {\"code\": 400, \"message\": \"bad\", ",
+            "\"status\": \"INVALID_ARGUMENT\", \"details\": [",
+            "{\"@type\": \"type.googleapis.com/google.rpc.BadRequest\", ",
+            "\"fieldViolations\": [{\"field\": \"a\", \"description\": \"clean\"}]}, ",
+            "{\"@type\": \"type.googleapis.com/google.rpc.DebugInfo\", ",
+            "\"detail\": \"lone \\ud800 surrogate\"}, ",
+            "{\"@type\": \"type.googleapis.com/google.rpc.DebugInfo\", ",
+            "\"detail\": \"also clean\"}]}}"
+        );
+        let err = Error::from_response(400, body);
+        assert_eq!(err.kind(), "invalid_request");
+        assert_eq!(err.google_status(), Some("INVALID_ARGUMENT"));
+        assert_eq!(err.error_code(), Some(400));
+        assert_eq!(err.details().len(), 2);
+        assert_eq!(
+            err.details()[0]["fieldViolations"][0]["description"],
+            "clean"
+        );
+        assert_eq!(err.details()[1]["detail"], "also clean");
+        // The field violations view reads the recovered entries.
+        assert_eq!(err.field_violations().len(), 1);
+        assert_eq!(err.field_violations()[0]["field"], "a");
+    }
+
+    #[test]
+    fn scan_keeps_details_when_a_head_field_carries_the_poison() {
+        // Round 41, red team extension of Finding 4: the poison
+        // sits in the status and code fields themselves, outside
+        // the details. The head field that carries it reads as
+        // absent, as the scan has always read a malformed head
+        // value, and the clean details array survives whole.
+        let body = concat!(
+            "{\"error\": {\"code\": 400, \"message\": \"bad\", ",
+            "\"status\": \"INVALID_\\ud800ARGUMENT\", \"details\": [",
+            "{\"@type\": \"t\", \"detail\": \"kept\"}]}}"
+        );
+        let err = Error::from_response(400, body);
+        assert_eq!(err.kind(), "invalid_request");
+        assert_eq!(err.google_status(), None);
+        assert_eq!(err.details().len(), 1);
+        assert_eq!(err.details()[0]["detail"], "kept");
+
+        let body = concat!(
+            "{\"error\": {\"code\": \"4\\ud8000\", \"message\": \"bad\", ",
+            "\"status\": \"INVALID_ARGUMENT\", \"details\": [",
+            "{\"@type\": \"t\", \"detail\": \"kept\"}]}}"
+        );
+        let err = Error::from_response(400, body);
+        assert_eq!(err.kind(), "invalid_request");
+        assert_eq!(err.google_status(), Some("INVALID_ARGUMENT"));
+        assert_eq!(err.error_code(), None);
+        assert_eq!(err.details().len(), 1);
+    }
+
+    #[test]
+    fn scan_drops_only_the_entry_whose_own_nesting_trips_the_parse() {
+        // An entry nested past the parser limit fails its own
+        // standalone parse and degrades alone, and the sibling
+        // beside it survives.
+        let deep_entry = format!("{{\"nest\": {}}}", nested_arrays(130));
+        let body = format!(
+            "{{\"error\": {{\"code\": 400, \"message\": \"bad\", \"status\": \"INVALID_ARGUMENT\", \"details\": [{deep_entry}, {{\"@type\": \"t\"}}]}}, \"boom\": \"\\ud800\"}}"
+        );
+        let err = Error::from_response(400, &body);
+        assert_eq!(err.kind(), "invalid_request");
+        assert_eq!(err.details().len(), 1);
+        assert_eq!(err.details()[0]["@type"], "t");
+    }
+
+    #[test]
+    fn scan_resolves_a_repeated_details_key_last_wins() {
+        // A later non array details value clears what an earlier
+        // array stored, and a later array replaces what an
+        // earlier non array cleared, the whole parse reading of a
+        // repeated key.
+        let body = concat!(
+            "{\"error\": {\"code\": 400, \"message\": \"bad\", ",
+            "\"status\": \"INVALID_ARGUMENT\", ",
+            "\"details\": [{\"@type\": \"a\"}], \"details\": {\"x\": 1}}, ",
+            "\"boom\": \"\\ud800\"}"
+        );
+        let err = Error::from_response(400, body);
+        assert_eq!(err.kind(), "invalid_request");
+        assert!(err.details().is_empty());
+
+        let body = concat!(
+            "{\"error\": {\"code\": 400, \"message\": \"bad\", ",
+            "\"status\": \"INVALID_ARGUMENT\", ",
+            "\"details\": {\"x\": 1}, \"details\": [{\"@type\": \"a\"}]}}, ",
+            "\"boom\": \"\\ud800\"}"
+        );
+        let err = Error::from_response(400, body);
+        assert_eq!(err.details().len(), 1);
+        assert_eq!(err.details()[0]["@type"], "a");
+    }
+
+    #[test]
+    fn scan_leaves_details_empty_when_the_array_never_closes() {
+        // The container itself is unreadable in the text, cut off
+        // mid array as a capped read leaves it, so the whole
+        // array fallback stands and the head still classifies.
+        let body = concat!(
+            "{\"error\": {\"code\": 400, \"message\": \"bad\", ",
+            "\"status\": \"INVALID_ARGUMENT\", \"details\": [",
+            "{\"@type\": \"a\"}, {\"@type\": \"b\""
+        );
+        let err = Error::from_response(400, body);
+        assert_eq!(err.kind(), "invalid_request");
+        assert_eq!(err.google_status(), Some("INVALID_ARGUMENT"));
+        assert!(err.details().is_empty());
+    }
+
+    #[test]
+    fn scan_recovered_detail_strings_carry_the_cap() {
+        // Entries recovered by the scan sit under the same string
+        // cap the whole parse route applies.
+        let long = "y".repeat(600);
+        let body = format!(
+            "{{\"error\": {{\"code\": 403, \"message\": \"denied\", \"status\": \"PERMISSION_DENIED\", \"details\": [{{\"detail\": \"{long}\"}}]}}, \"boom\": \"\\ud800\"}}"
+        );
+        let err = Error::from_response(200, &body);
+        assert_eq!(err.kind(), "auth");
+        assert_eq!(err.details().len(), 1);
+        assert_eq!(err.details()[0]["detail"].as_str().map(str::len), Some(500));
     }
 
     /// A value nested past the parser depth limit, as raw JSON
