@@ -2777,8 +2777,7 @@ mod tests {
         // runs behind a clearing, so every cut form below
         // answers as its completed twin does, with the bare
         // HTTP fallback.
-        const ENV: &str =
-            r#"{"code": 429, "message": "quota", "status": "RESOURCE_EXHAUSTED"}"#;
+        const ENV: &str = r#"{"code": 429, "message": "quota", "status": "RESOURCE_EXHAUSTED"}"#;
         for (cut, completed) in [
             // The body ends right after the clearing value.
             (
@@ -2840,15 +2839,19 @@ mod tests {
         // The cap scale forms of the same repair: the read cap
         // is what cuts these bodies in production, and the
         // capped prefix is all the scan ever sees.
-        const ENV: &str =
-            r#"{"code": 429, "message": "quota", "status": "RESOURCE_EXHAUSTED"}"#;
+        const ENV: &str = r#"{"code": 429, "message": "quota", "status": "RESOURCE_EXHAUSTED"}"#;
         const CAP: usize = 256 * 1024;
         // A clearing number whose digits end exactly at the
         // cap. Its completed twin answers with the bare
         // fallback, and the cut form now answers the same.
         let head = r#"{"pad": ""#;
         let tail = format!(r#"", "error": {ENV}, "error": 42"#);
-        let body = format!("{}{}{}", head, "x".repeat(CAP - head.len() - tail.len()), tail);
+        let body = format!(
+            "{}{}{}",
+            head,
+            "x".repeat(CAP - head.len() - tail.len()),
+            tail
+        );
         assert_eq!(body.len(), CAP);
         let err = Error::from_capped_error_body(400, &body, None, CAP);
         assert_eq!(err.kind(), "invalid_request");
@@ -2859,7 +2862,10 @@ mod tests {
         assert_eq!(err.google_status(), None);
         // A clearing null fully inside the cap, then a string
         // value the cap cuts in the middle.
-        let full = format!(r#"{{"error": {ENV}, "error": null, "pad": "{}"#, "x".repeat(CAP));
+        let full = format!(
+            r#"{{"error": {ENV}, "error": null, "pad": "{}"#,
+            "x".repeat(CAP)
+        );
         let err = Error::from_capped_error_body(400, &full[..CAP], None, CAP);
         assert_eq!(err.kind(), "invalid_request");
         assert_eq!(err.google_status(), None);
