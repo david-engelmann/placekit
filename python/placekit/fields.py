@@ -308,7 +308,19 @@ class FieldMask:
                 )
         # A mask is a set of paths; duplicates are dropped keeping
         # first seen order so the header is stable for a given input.
-        object.__setattr__(self, "paths", tuple(dict.fromkeys(paths)))
+        # The dedupe reads the members once more, hashing and
+        # comparing them, past the guarded path check above, and a
+        # member whose hash or equality raises used to escape here
+        # as a bare builtin (Round 34, red team Minor 1).
+        try:
+            unique = tuple(dict.fromkeys(paths))
+        except Exception as exc:
+            raise ConfigError(
+                "a field mask path raised while its duplicates "
+                "were being dropped",
+                context="FieldMask",
+            ) from exc
+        object.__setattr__(self, "paths", unique)
 
     @property
     def header_value(self) -> str:
@@ -361,7 +373,20 @@ class FieldMask:
                 exc.context = "FieldMask"
             raise
         if from_set:
-            items = sorted(items, key=_set_sort_key)
+            try:
+                items = sorted(items, key=_set_sort_key)
+            except Exception as exc:
+                # The sort key itself reads no member past its
+                # type, but comparing the keys of two string
+                # members reads the members themselves, and a
+                # member whose comparison raises used to escape
+                # here as a bare builtin (Round 34, red team
+                # Minor 1).
+                raise ConfigError(
+                    "a field mask path raised while the set of "
+                    "paths was being sorted",
+                    context="FieldMask",
+                ) from exc
         return cls(*items)
 
     @classmethod
