@@ -90,7 +90,7 @@ while page.next_page_token:
     page = client.text_search("cafes in Sydney", page_token=page.next_page_token)
 ```
 
-A details result carries the opening hours the API returned for the place. The hours object sits at `current_opening_hours`, which is the attribute spelling of the wire field `currentOpeningHours`, one field under two spellings, the wire spelling in a field mask and the attribute spelling on the result. Its open state sits at `current_opening_hours.open_now`, and the same object carries `weekday_descriptions`, the week's hours as one text line per day. Both levels of the path can be None on a given place, the hours object when the response carried no hours and `open_now` itself when hours arrived without a state, so the read guards the full path before anything prints.
+A details result carries the opening hours the API returned for the place. The hours object sits at `current_opening_hours`, which is the attribute spelling of the wire field `currentOpeningHours`, one field under two spellings, the wire spelling in a field mask and the attribute spelling on the result. Its open state sits at `current_opening_hours.open_now`, and the same object carries `weekday_descriptions`, the week's hours as one text line per day. Both levels of the path can be None on a given place, the hours object when the response carried no hours and `open_now` itself when hours arrived without a state, so the example checks the hours object before reading it, and `open_now` can still be None and prints as None.
 
 ```python
 result = client.text_search("cafes in Sydney")
