@@ -1358,12 +1358,22 @@ class _LoopPump:
     settles any other way, above all by cancellation, drops its
     entry here, and a cancellation also aborts the native call so
     the wire request dies with the task that owned it.
+
+    The loop itself is reached through a weak reference. The
+    registry keys pumps by loop in a weak key dictionary so an
+    entry dies with its loop, and a pump holding its loop strongly
+    would keep its own key alive forever and defeat that lifetime.
+    A poll only ever runs on its own loop and registration only
+    happens from a coroutine running on one, so the reference is
+    alive at every real use. The chain simply stops if it is not.
     """
 
-    __slots__ = ("loop", "pending", "timer", "step")
+    __slots__ = ("loop_ref", "pending", "timer", "step")
 
     def __init__(self, loop: asyncio.AbstractEventLoop) -> None:
-        self.loop = loop
+        self.loop_ref: weakref.ReferenceType[asyncio.AbstractEventLoop] = (
+            weakref.ref(loop)
+        )
         self.pending: dict[object, tuple[Any, asyncio.Future[Any]]] = {}
         self.timer: Optional[asyncio.TimerHandle] = None
         self.step = 0
@@ -1381,11 +1391,18 @@ class _LoopPump:
         self._kick()
 
     def _kick(self) -> None:
-        if self.timer is None and self.pending and not self.loop.is_closed():
-            self.timer = self.loop.call_soon(self._poll)
+        loop = self.loop_ref()
+        if loop is None:
+            return
+        if self.timer is None and self.pending and not loop.is_closed():
+            self.timer = loop.call_soon(self._poll)
 
     def _poll(self) -> None:
         self.timer = None
+        loop = self.loop_ref()
+        if loop is None:
+            self.step = 0
+            return
         if not self.pending:
             self.step = 0
             return
@@ -1406,10 +1423,10 @@ class _LoopPump:
                 future.set_result(value)
         if delivered:
             self.step = 0
-        if self.pending and not self.loop.is_closed():
+        if self.pending and not loop.is_closed():
             delay = _PUMP_DELAYS[min(self.step, len(_PUMP_DELAYS) - 1)]
             self.step += 1
-            self.timer = self.loop.call_later(delay, self._poll)
+            self.timer = loop.call_later(delay, self._poll)
 
 
 _PUMPS: weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, _LoopPump] = (
