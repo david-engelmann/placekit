@@ -972,7 +972,7 @@ fn parse_envelope_head(body: &str) -> Option<EnvelopeParts> {
             let (parts, closed) = scan.error_object();
             let usable = has_head(&parts);
             if closed || usable {
-                if !usable && found.as_ref().is_some_and(&has_head) {
+                if !usable && found.as_ref().is_some_and(has_head) {
                     cleared = true;
                 }
                 found = Some(parts);
@@ -988,7 +988,7 @@ fn parse_envelope_head(body: &str) -> Option<EnvelopeParts> {
             // value was read whole; a value cut off by the read
             // cap does not erase an earlier complete envelope.
             if scan.skip_value() {
-                if found.as_ref().is_some_and(&has_head) {
+                if found.as_ref().is_some_and(has_head) {
                     cleared = true;
                 }
                 found = None;
@@ -1008,7 +1008,7 @@ fn parse_envelope_head(body: &str) -> Option<EnvelopeParts> {
         completed = scan.eat(b'}');
         break;
     }
-    let found = found.filter(|parts| has_head(parts));
+    let found = found.filter(has_head);
     if found.is_some() || completed || cleared {
         return found;
     }
