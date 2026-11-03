@@ -9,23 +9,35 @@
 //! here. The Python package re-exports a friendlier exception hierarchy
 //! built on top of the `kind` attribute this layer sets.
 //!
-//! The runtime is process wide but fork aware. `pyo3-async-runtimes`
-//! keeps its own runtime in a process global that is built once and
-//! can never be replaced, and a runtime built before a fork is dead
-//! in the child because its worker threads do not survive the fork.
-//! These bindings therefore keep their own runtime, keyed by the
-//! process id it was built under, and spawn through the generic
-//! `pyo3-async-runtimes` bridge onto that runtime. The first call a
-//! forked child makes builds a fresh runtime for its own process id,
-//! and the dead parent runtime is leaked rather than dropped, so no
-//! shutdown machinery ever runs against threads that no longer exist.
+//! The runtime is process wide but fork aware. A runtime built
+//! before a fork is dead in the child because its worker threads do
+//! not survive the fork. These bindings therefore keep their own
+//! runtime, keyed by the process id it was built under. The first
+//! call a forked child makes builds a fresh runtime for its own
+//! process id, and the dead parent runtime is leaked rather than
+//! dropped, so no shutdown machinery ever runs against threads that
+//! no longer exist.
+//!
+//! An async call spawns its core future onto that runtime and hands
+//! the Python layer a call handle. The future completes into Rust
+//! state only, and the Python layer collects the stored result from
+//! its own event loop thread. No runtime worker thread ever touches
+//! a Python object. Round 30 removed the `pyo3-async-runtimes`
+//! bridge from this path after its per call completion tasks were
+//! shown to crash processes during interpreter exit. The bridge
+//! finished every call by taking the GIL on a worker thread and
+//! delivering the result through the event loop from there, and at
+//! exit that machinery was still entangled with the interpreter
+//! while finalization dismantled it.
 
 use std::future::Future;
-use std::pin::Pin;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use futures_util::FutureExt;
-use placekit_core::models::{AutocompleteRequest, NearbySearchRequest, TextSearchRequest};
+use placekit_core::models::{
+    AutocompleteRequest, NearbySearchRequest, PhotoMedia, TextSearchRequest,
+};
 use placekit_core::{Client as CoreClient, Error as CoreError, FieldMask};
 use pyo3::create_exception;
 use pyo3::exceptions::PyValueError;
@@ -142,55 +154,6 @@ where
     }
 }
 
-/// The runtime the generic `pyo3-async-runtimes` bridge spawns onto.
-/// Spawning resolves the fork aware runtime above at spawn time, so
-/// an async call made in a forked child runs on the child's runtime
-/// rather than on the dead pre-fork one.
-struct ForkAwareRuntime;
-
-impl pyo3_async_runtimes::generic::Runtime for ForkAwareRuntime {
-    type JoinError = tokio::task::JoinError;
-    type JoinHandle = tokio::task::JoinHandle<()>;
-
-    fn spawn<F>(fut: F) -> Self::JoinHandle
-    where
-        F: Future<Output = ()> + Send + 'static,
-    {
-        // Every async entry point resolves the runtime on a fallible
-        // path before the bridge reaches this call (see the async
-        // methods), so the resolution here finds the runtime cached
-        // for this process. The expect is the recorded residual of
-        // the Round 23 panic boundary: it can only fire if a fork
-        // lands between that resolution and this spawn while the
-        // operating system refuses the rebuild, and the bridge's
-        // spawn signature can neither return an error nor produce a
-        // handle without a runtime.
-        let runtime = shared_runtime().expect("Tokio runtime unavailable at spawn");
-        runtime.spawn(async move {
-            fut.await;
-        })
-    }
-}
-
-impl pyo3_async_runtimes::generic::ContextExt for ForkAwareRuntime {
-    fn scope<F, R>(
-        _locals: pyo3_async_runtimes::TaskLocals,
-        fut: F,
-    ) -> Pin<Box<dyn Future<Output = R> + Send>>
-    where
-        F: Future<Output = R> + Send + 'static,
-    {
-        // The futures crossed here call no Python awaitables and read
-        // no task locals. The bridge only needs the running loop,
-        // which it captures itself when the awaitable is created.
-        Box::pin(fut)
-    }
-
-    fn get_task_locals() -> Option<pyo3_async_runtimes::TaskLocals> {
-        None
-    }
-}
-
 /// Run a core future for an async method under a panic guard
 /// (Round 23). A panic raised while the future is polled is caught
 /// and returned as a network class error naming the panic payload,
@@ -206,12 +169,143 @@ where
     }
 }
 
-fn future_into_py_fork_aware<'py, F, T>(py: Python<'py>, fut: F) -> PyResult<Bound<'py, PyAny>>
+/// The stored output of one async call. The typed response is
+/// serialized on the runtime worker that ran the call, which is
+/// pure Rust work, and converted into Python objects later on the
+/// thread that collects the result. Photo responses carry no
+/// serialization step and move as they are.
+enum CallOutput {
+    Json(Result<(serde_json::Value, String, u16), CoreError>),
+    Photo(Result<(PhotoMedia, Option<String>, u16), CoreError>),
+}
+
+/// Serialize a JSON call result for storage in a call handle. A
+/// value that fails to serialize fails the call with the same
+/// decode error the sync path raises for it in [`result_to_py`].
+fn stored_json<T>(result: Result<(T, String, u16), CoreError>) -> CallOutput
 where
-    F: Future<Output = PyResult<T>> + Send + 'static,
-    T: for<'p> IntoPyObject<'p>,
+    T: serde::Serialize,
 {
-    pyo3_async_runtimes::generic::future_into_py::<ForkAwareRuntime, F, T>(py, fut)
+    let stored = result.and_then(|(value, body, status)| {
+        serde_json::to_value(&value)
+            .map(|json| (json, body, status))
+            .map_err(|e| CoreError::Decode {
+                detail: e.to_string(),
+                status: None,
+                source: Some(Box::new(e)),
+            })
+    });
+    CallOutput::Json(stored)
+}
+
+/// The completion slot one async call writes exactly once, on the
+/// runtime worker that ran the call. It holds only Rust state, so
+/// writing it and later dropping it are safe on any thread at any
+/// point in the life of the process, including interpreter exit.
+struct CallSlot {
+    output: Mutex<Option<CallOutput>>,
+    done: AtomicBool,
+}
+
+/// The handle an async method returns for one in flight call
+/// (Round 30). The Python layer polls `is_done` from its event loop
+/// thread and collects a finished call with `take_result`, so every
+/// Python object for the call is built and destroyed on Python
+/// threads. Dropping the handle aborts the call, which mirrors the
+/// cancellation a dropped in flight call used to get and keeps a
+/// forgotten handle from holding its request past the loop that
+/// owned it.
+#[pyclass(name = "CallHandle")]
+struct PyCallHandle {
+    slot: Arc<CallSlot>,
+    join: Mutex<Option<tokio::task::JoinHandle<()>>>,
+}
+
+impl Drop for PyCallHandle {
+    fn drop(&mut self) {
+        self.abort_join();
+    }
+}
+
+impl PyCallHandle {
+    fn abort_join(&self) {
+        let taken = match self.join.lock() {
+            Ok(mut guard) => guard.take(),
+            Err(poisoned) => poisoned.into_inner().take(),
+        };
+        if let Some(join) = taken {
+            join.abort();
+        }
+    }
+}
+
+#[pymethods]
+impl PyCallHandle {
+    /// Whether the call has finished and its output is stored.
+    fn is_done(&self) -> bool {
+        self.slot.done.load(Ordering::SeqCst)
+    }
+
+    /// Collect the stored output of a finished call, converting it
+    /// to Python objects on this thread. Runs exactly once per
+    /// finished call from the Python layer. A call with no stored
+    /// output fails with a decode class error rather than a panic.
+    fn take_result(&self, py: Python<'_>) -> PyResult<PyObject> {
+        let output = match self.slot.output.lock() {
+            Ok(mut guard) => guard.take(),
+            Err(poisoned) => poisoned.into_inner().take(),
+        };
+        match output {
+            Some(CallOutput::Json(Ok((json, body, status)))) => {
+                json_tuple_to_py(py, &json, body, status)
+            }
+            Some(CallOutput::Json(Err(err))) => Err(to_pyerr(py, err)),
+            Some(CallOutput::Photo(result)) => photo_to_py(py, result),
+            None => Err(to_pyerr(
+                py,
+                CoreError::Decode {
+                    detail: "call result is not ready or was already collected".to_string(),
+                    status: None,
+                    source: None,
+                },
+            )),
+        }
+    }
+
+    /// Abort the call if it is still running. The stored output of
+    /// a call that already finished is left in place.
+    fn abort(&self) {
+        self.abort_join();
+    }
+}
+
+/// Spawn one async call onto the shared runtime and return its
+/// handle. The runtime is resolved here on a fallible path first
+/// (Round 23), so a build failure raises as a typed error from the
+/// calling method rather than a panic inside spawn machinery that
+/// cannot return one.
+fn start_call<F>(py: Python<'_>, fut: F) -> PyResult<PyCallHandle>
+where
+    F: Future<Output = CallOutput> + Send + 'static,
+{
+    let runtime = shared_runtime().map_err(|err| to_pyerr(py, err))?;
+    let slot = Arc::new(CallSlot {
+        output: Mutex::new(None),
+        done: AtomicBool::new(false),
+    });
+    let task_slot = Arc::clone(&slot);
+    let join = runtime.spawn(async move {
+        let output = fut.await;
+        match task_slot.output.lock() {
+            Ok(mut guard) => *guard = Some(output),
+            Err(poisoned) => *poisoned.into_inner() = Some(output),
+        }
+        task_slot.done.store(true, Ordering::SeqCst);
+    });
+    Ok(PyCallHandle {
+        slot,
+        join: Mutex::new(Some(join)),
+    })
 }
 
 /// Translate a core error into a `PlacesError` with structured attributes
@@ -489,6 +583,17 @@ fn number_to_py(py: Python<'_>, n: &serde_json::Number) -> PyResult<PyObject> {
 /// makes raw the wire payload verbatim through the client. The
 /// status rides along so a Python side conversion failure can
 /// carry the status of the response it failed on.
+/// Convert one stored JSON call output into the Python result
+/// tuple. Shared by the sync path through [`result_to_py`] and by
+/// call handle collection, so both paths build the identical tuple.
+fn json_tuple_to_py(py: Python<'_>, json: &Value, body: String, status: u16) -> PyResult<PyObject> {
+    let typed = value_to_py(py, json)?;
+    let body = body.into_pyobject(py)?.unbind().into_any();
+    let status = status.into_pyobject(py)?.unbind().into_any();
+    let tuple = PyTuple::new(py, [typed, body, status])?;
+    Ok(tuple.unbind().into_any())
+}
+
 fn result_to_py<T>(
     py: Python<'_>,
     result: Result<(T, String, u16), CoreError>,
@@ -508,11 +613,7 @@ where
                     },
                 )
             })?;
-            let typed = value_to_py(py, &json)?;
-            let body = body.into_pyobject(py)?.unbind().into_any();
-            let status = status.into_pyobject(py)?.unbind().into_any();
-            let tuple = PyTuple::new(py, [typed, body, status])?;
-            Ok(tuple.unbind().into_any())
+            json_tuple_to_py(py, &json, body, status)
         }
         Err(e) => Err(to_pyerr(py, e)),
     }
@@ -715,24 +816,18 @@ impl PyClient {
     }
 
     #[pyo3(signature = (body, fields=None))]
-    fn text_search_async<'py>(
+    fn text_search_async(
         &self,
-        py: Python<'py>,
-        body: Bound<'py, PyDict>,
+        py: Python<'_>,
+        body: Bound<'_, PyDict>,
         fields: Option<Vec<String>>,
-    ) -> PyResult<Bound<'py, PyAny>> {
+    ) -> PyResult<PyCallHandle> {
         let request: TextSearchRequest = body_to_request(&body)?;
         let mask = mask_from(py, fields)?;
         let inner = self.handle(py)?;
-        // Resolve the runtime on this fallible path first (Round
-        // 23): the bridge resolves it again at spawn and finds it
-        // cached for this process, so a build failure is reported
-        // here as a typed error instead of escaping from inside the
-        // spawn machinery, whose signature cannot return one.
-        shared_runtime().map_err(|e| to_pyerr(py, e))?;
-        future_into_py_fork_aware(py, async move {
+        start_call(py, async move {
             let result = run_guarded(inner.text_search(&request, mask.as_ref())).await;
-            Python::with_gil(|py| result_to_py(py, result))
+            stored_json(result)
         })
     }
 
@@ -755,24 +850,18 @@ impl PyClient {
     }
 
     #[pyo3(signature = (body, fields=None))]
-    fn nearby_search_async<'py>(
+    fn nearby_search_async(
         &self,
-        py: Python<'py>,
-        body: Bound<'py, PyDict>,
+        py: Python<'_>,
+        body: Bound<'_, PyDict>,
         fields: Option<Vec<String>>,
-    ) -> PyResult<Bound<'py, PyAny>> {
+    ) -> PyResult<PyCallHandle> {
         let request: NearbySearchRequest = body_to_request(&body)?;
         let mask = mask_from(py, fields)?;
         let inner = self.handle(py)?;
-        // Resolve the runtime on this fallible path first (Round
-        // 23): the bridge resolves it again at spawn and finds it
-        // cached for this process, so a build failure is reported
-        // here as a typed error instead of escaping from inside the
-        // spawn machinery, whose signature cannot return one.
-        shared_runtime().map_err(|e| to_pyerr(py, e))?;
-        future_into_py_fork_aware(py, async move {
+        start_call(py, async move {
             let result = run_guarded(inner.nearby_search(&request, mask.as_ref())).await;
-            Python::with_gil(|py| result_to_py(py, result))
+            stored_json(result)
         })
     }
 
@@ -807,24 +896,18 @@ impl PyClient {
     }
 
     #[pyo3(signature = (place_id, fields=None, language_code=None, region_code=None, session_token=None))]
-    fn place_details_async<'py>(
+    fn place_details_async(
         &self,
-        py: Python<'py>,
+        py: Python<'_>,
         place_id: String,
         fields: Option<Vec<String>>,
         language_code: Option<String>,
         region_code: Option<String>,
         session_token: Option<String>,
-    ) -> PyResult<Bound<'py, PyAny>> {
+    ) -> PyResult<PyCallHandle> {
         let mask = mask_from(py, fields)?;
         let inner = self.handle(py)?;
-        // Resolve the runtime on this fallible path first (Round
-        // 23): the bridge resolves it again at spawn and finds it
-        // cached for this process, so a build failure is reported
-        // here as a typed error instead of escaping from inside the
-        // spawn machinery, whose signature cannot return one.
-        shared_runtime().map_err(|e| to_pyerr(py, e))?;
-        future_into_py_fork_aware(py, async move {
+        start_call(py, async move {
             let result = run_guarded(inner.place_details(
                 &place_id,
                 mask.as_ref(),
@@ -833,7 +916,7 @@ impl PyClient {
                 session_token.as_deref(),
             ))
             .await;
-            Python::with_gil(|py| result_to_py(py, result))
+            stored_json(result)
         })
     }
 
@@ -856,24 +939,18 @@ impl PyClient {
     }
 
     #[pyo3(signature = (body, fields=None))]
-    fn autocomplete_async<'py>(
+    fn autocomplete_async(
         &self,
-        py: Python<'py>,
-        body: Bound<'py, PyDict>,
+        py: Python<'_>,
+        body: Bound<'_, PyDict>,
         fields: Option<Vec<String>>,
-    ) -> PyResult<Bound<'py, PyAny>> {
+    ) -> PyResult<PyCallHandle> {
         let request: AutocompleteRequest = body_to_request(&body)?;
         let mask = mask_from(py, fields)?;
         let inner = self.handle(py)?;
-        // Resolve the runtime on this fallible path first (Round
-        // 23): the bridge resolves it again at spawn and finds it
-        // cached for this process, so a build failure is reported
-        // here as a typed error instead of escaping from inside the
-        // spawn machinery, whose signature cannot return one.
-        shared_runtime().map_err(|e| to_pyerr(py, e))?;
-        future_into_py_fork_aware(py, async move {
+        start_call(py, async move {
             let result = run_guarded(inner.autocomplete(&request, mask.as_ref())).await;
-            Python::with_gil(|py| result_to_py(py, result))
+            stored_json(result)
         })
     }
 
@@ -900,22 +977,16 @@ impl PyClient {
     }
 
     #[pyo3(signature = (photo_name, max_width_px=None, max_height_px=None, skip_http_redirect=false))]
-    fn place_photo_async<'py>(
+    fn place_photo_async(
         &self,
-        py: Python<'py>,
+        py: Python<'_>,
         photo_name: String,
         max_width_px: Option<u32>,
         max_height_px: Option<u32>,
         skip_http_redirect: bool,
-    ) -> PyResult<Bound<'py, PyAny>> {
+    ) -> PyResult<PyCallHandle> {
         let inner = self.handle(py)?;
-        // Resolve the runtime on this fallible path first (Round
-        // 23): the bridge resolves it again at spawn and finds it
-        // cached for this process, so a build failure is reported
-        // here as a typed error instead of escaping from inside the
-        // spawn machinery, whose signature cannot return one.
-        shared_runtime().map_err(|e| to_pyerr(py, e))?;
-        future_into_py_fork_aware(py, async move {
+        start_call(py, async move {
             let result = run_guarded(inner.place_photo(
                 &photo_name,
                 max_width_px,
@@ -923,7 +994,7 @@ impl PyClient {
                 skip_http_redirect,
             ))
             .await;
-            Python::with_gil(|py| photo_to_py(py, result))
+            CallOutput::Photo(result)
         })
     }
 }
@@ -931,6 +1002,7 @@ impl PyClient {
 #[pymodule]
 fn _placekit(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyClient>()?;
+    m.add_class::<PyCallHandle>()?;
     m.add("PlacesError", m.py().get_type::<PlacesError>())?;
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;
     Ok(())
