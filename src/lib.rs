@@ -575,14 +575,6 @@ fn number_to_py(py: Python<'_>, n: &serde_json::Number) -> PyResult<PyObject> {
         .into_any())
 }
 
-/// A JSON result crosses the boundary as a 3-tuple of the typed
-/// dict, the response body text and the HTTP status (Round 16).
-/// Attributes decode from the typed dict, exactly as they did when
-/// the dict was the only payload. The Python layer parses the body
-/// once and builds raw at every model level from it, which is what
-/// makes raw the wire payload verbatim through the client. The
-/// status rides along so a Python side conversion failure can
-/// carry the status of the response it failed on.
 /// Convert one stored JSON call output into the Python result
 /// tuple. Shared by the sync path through [`result_to_py`] and by
 /// call handle collection, so both paths build the identical tuple.
@@ -594,6 +586,14 @@ fn json_tuple_to_py(py: Python<'_>, json: &Value, body: String, status: u16) -> 
     Ok(tuple.unbind().into_any())
 }
 
+/// A JSON result crosses the boundary as a 3-tuple of the typed
+/// dict, the response body text and the HTTP status (Round 16).
+/// Attributes decode from the typed dict, exactly as they did when
+/// the dict was the only payload. The Python layer parses the body
+/// once and builds raw at every model level from it, which is what
+/// makes raw the wire payload verbatim through the client. The
+/// status rides along so a Python side conversion failure can
+/// carry the status of the response it failed on.
 fn result_to_py<T>(
     py: Python<'_>,
     result: Result<(T, String, u16), CoreError>,
