@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import ast
 import hashlib
+import importlib.util
 import json
 import re
 from pathlib import Path
@@ -54,6 +55,15 @@ def _module_sources(filename: str) -> dict[str, str]:
 
 RECORDED_SOURCES = _module_sources("test_recorded_corpus.py")
 SYNTHESIZED_SOURCES = _module_sources("test_synthesized_corpus.py")
+
+
+def _builder_module():
+    """Load the corpus builder script as a module, for its spec list."""
+    path = Path(__file__).parent.parent / "scripts" / "build_corpus_fixtures.py"
+    spec = importlib.util.spec_from_file_location("build_corpus_fixtures", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def _case_map():
@@ -214,6 +224,32 @@ def test_accounting_observation_tests_name_their_fixtures():
             source = RECORDED_SOURCES[test_name]
             for name in claimed:
                 assert name in source, (test_name, name)
+
+
+def test_accounting_builder_specs_match_the_manifest_recorded_set():
+    # The regeneration proof is only as wide as the builder spec list.
+    # The builder verify walks its own specs, so a fixture dropped from
+    # the list would narrow the proof while every other guard stayed
+    # green. The spec list is therefore pinned here against the
+    # manifest recorded set, file for file, and each spec must agree
+    # with its manifest entry on session, exchange and selector.
+    specs = _builder_module().SPECS
+    spec_files = [spec["file"] for spec in specs]
+    assert len(spec_files) == len(set(spec_files))
+    entries = {}
+    for case in MANIFEST["cases"]:
+        if case["state"] in RECORDED_STATES:
+            for entry in case["fixtures"]:
+                entries[entry["file"]] = entry
+    for obs in MANIFEST["observations"]:
+        if obs.get("fixture"):
+            entries[obs["fixture"]] = obs
+    assert set(spec_files) == set(entries)
+    for spec in specs:
+        entry = entries[spec["file"]]
+        assert spec["session"] == entry["session"], spec["file"]
+        assert spec["exchange"] == entry["exchange"], spec["file"]
+        assert list(spec["ids"]) == list(entry["selector_place_ids"]), spec["file"]
 
 
 def test_accounting_coverage_table_rows_match_the_manifest():
