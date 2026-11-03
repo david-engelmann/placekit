@@ -398,8 +398,24 @@ def _owned_decode(raw_root: dict[str, Any]) -> Iterator[None]:
 
 def _ownership() -> Optional[_DecodeOwnership]:
     ownership = _decode_ownership.get()
-    if ownership is not None and ownership.pid == os.getpid():
+    if ownership is None:
+        return None
+    if ownership.pid == os.getpid():
         return ownership
+    # The state was inherited across a fork: this process is not
+    # the process that opened the window, so the window is not
+    # its to use. The refusal now also clears the state (Round
+    # 29). The state holds the parent process's parsed body tree,
+    # and leaving it in the variable would keep that tree
+    # reachable in the child for the child's whole life even
+    # though no decode here can ever adopt it. The clear is a
+    # plain set rather than a token reset, because this process
+    # holds no token for the inherited state. A token reset
+    # arriving later from an inherited window frame can restore
+    # the stale state, and the process check above then refuses
+    # and clears it again on the next read, so no path adopts it
+    # either way.
+    _decode_ownership.set(None)
     return None
 
 

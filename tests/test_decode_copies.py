@@ -305,6 +305,176 @@ def test_forked_child_does_not_inherit_the_owned_window(tmp_path):
     }
 
 
+def test_forked_child_releases_the_inherited_state_on_first_read(tmp_path):
+    # Round 29: the refusal now clears the inherited state, so a
+    # forked child stops retaining the parent process's parsed
+    # body tree through the ownership variable after its first
+    # decode. The variable itself is the evidence: it reaches the
+    # tree before the read and holds nothing after it.
+    script = textwrap.dedent(
+        """
+        import copy, json, os, sys
+        sys.path.insert(0, sys.argv[2])
+        from placekit import models
+        from placekit.models import Place
+
+        root = {
+            "id": "ChIJx",
+            "displayName": {"text": "Cafe", "languageCode": "en"},
+            "types": ["cafe"],
+        }
+        typed = copy.deepcopy(root)
+        outcome = {}
+        with models._owned_decode(root):
+            pid = os.fork()
+            if pid == 0:
+                inherited = models._decode_ownership.get()
+                outcome["state_inherited"] = (
+                    inherited is not None and inherited.raw_root is root
+                )
+                # The first decode reads the ownership state,
+                # which refuses the inherited window and clears it.
+                place = Place.from_api(typed, raw=root)
+                outcome["decode_copied_not_adopted"] = place.raw is not root
+                outcome["state_cleared"] = (
+                    models._decode_ownership.get() is None
+                )
+                # The child's own window still works after the
+                # clear: it opens, adopts its own root, and closes.
+                own = {"id": "ChIJy"}
+                with models._owned_decode(own):
+                    own_place = Place.from_api(
+                        copy.deepcopy(own), raw=own
+                    )
+                    outcome["own_window_adopts"] = own_place.raw is own
+                outcome["own_window_closed"] = (
+                    models._decode_ownership.get() is None
+                )
+                with open(sys.argv[1], "w") as fh:
+                    json.dump(outcome, fh)
+                os._exit(0)
+            os.waitpid(pid, 0)
+            outcome["parent_window_intact"] = (
+                models._ownership() is not None
+            )
+        with open(sys.argv[3], "w") as fh:
+            json.dump(outcome, fh)
+        """
+    )
+    child_path = tmp_path / "child.json"
+    parent_path = tmp_path / "parent.json"
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            script,
+            str(child_path),
+            str(PACKAGE_PARENT),
+            str(parent_path),
+        ],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    assert completed.returncode == 0, completed.stderr
+    child = json.loads(child_path.read_text())
+    assert child == {
+        "state_inherited": True,
+        "decode_copied_not_adopted": True,
+        "state_cleared": True,
+        "own_window_adopts": True,
+        "own_window_closed": True,
+    }
+    parent = json.loads(parent_path.read_text())
+    assert parent["parent_window_intact"] is True
+
+
+def test_forked_child_token_reset_restores_then_refuses_again(tmp_path):
+    # Round 29, the named edge, pinned as documented behaviour: a
+    # token reset from an inherited window frame can restore a
+    # stale outer state after the lazy clear (the reset restores
+    # the value the variable held before the inner window opened,
+    # which in a forked child is the outer window's state). The
+    # restore is inert: the process check refuses the restored
+    # state on the next read and clears it again, so no decode
+    # adopts it either way.
+    script = textwrap.dedent(
+        """
+        import copy, json, os, sys
+        sys.path.insert(0, sys.argv[2])
+        from placekit import models
+        from placekit.models import Place
+
+        root_a = {"id": "ChIJa"}
+        root_b = {"id": "ChIJb"}
+        outcome = {}
+        state = {}
+
+        def inner():
+            with models._owned_decode(root_b):
+                pid = os.fork()
+                if pid == 0:
+                    state["child"] = True
+                    outcome["first_read_refused"] = (
+                        models._ownership() is None
+                    )
+                    outcome["cleared_after_first_read"] = (
+                        models._decode_ownership.get() is None
+                    )
+                    return
+                os.waitpid(pid, 0)
+
+        with models._owned_decode(root_a):
+            inner()
+            if state.get("child"):
+                # The inner window's frame has now exited in this
+                # child too, so its token reset restored the outer
+                # window's state into the variable.
+                restored = models._decode_ownership.get()
+                outcome["stale_state_restored"] = (
+                    restored is not None and restored.raw_root is root_a
+                )
+                outcome["second_read_refused"] = (
+                    models._ownership() is None
+                )
+                outcome["cleared_again"] = (
+                    models._decode_ownership.get() is None
+                )
+                typed = copy.deepcopy(root_a)
+                place = Place.from_api(typed, raw=root_a)
+                outcome["decode_still_copies"] = place.raw is not root_a
+                with open(sys.argv[1], "w") as fh:
+                    json.dump(outcome, fh)
+                os._exit(0)
+        """
+    )
+    outcome_path = tmp_path / "outcome.json"
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            script,
+            str(outcome_path),
+            str(PACKAGE_PARENT),
+        ],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    assert completed.returncode == 0, completed.stderr
+    outcome = json.loads(outcome_path.read_text())
+    assert outcome == {
+        "first_read_refused": True,
+        "cleared_after_first_read": True,
+        "stale_state_restored": True,
+        "second_read_refused": True,
+        "cleared_again": True,
+        "decode_still_copies": True,
+    }
+
+
 def _counted_validations(monkeypatch):
     calls = {"n": 0}
     real = address._checked_components
