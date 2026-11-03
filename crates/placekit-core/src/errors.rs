@@ -815,9 +815,15 @@ const ENVELOPE_TEXT_CAP_CHARS: usize = 500;
 /// start, so the attempt priced at roughly the open frame count
 /// times the bytes before the failure point, seconds on a multi
 /// megabyte body. The scan reads the same head either way, so the
-/// outcome is unchanged. At or below the bound the attempt's
-/// worst unwind stays in the tens of milliseconds and the parse
+/// outcome is unchanged. At or below the bound the parse
 /// keeps its own word, so ordinary bodies pay no walk at all.
+/// The worst unwind at the bound itself is not small change:
+/// a tripping body of exactly the bound size measured between
+/// 402 and 970 milliseconds across three runs on the develop
+/// (debug) build under load (Round 31, Info I2), against 92
+/// to 136 milliseconds for the same shapes one byte past the
+/// bound, where the walk replaces the attempt. The release
+/// build constant remains unmeasured from this box.
 /// Past the bound the walk itself runs only when the body's
 /// bracket census reaches the limit (see [`preflight_trip`]): a
 /// large body of few brackets, a long string or a flat list,
