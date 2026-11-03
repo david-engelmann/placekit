@@ -921,6 +921,12 @@ fn cap_detail_strings(value: &mut serde_json::Value) {
 /// verdicts include the last wins clearing a later non object
 /// value performs, and a recovery that re-read the body
 /// behind the walk would resurrect what the walk cleared.
+/// The clearing is authoritative on its own as well. A walk
+/// that cleared an envelope and was then cut short carries
+/// the cleared fact beside its result, distinct from having
+/// found nothing, and no pass runs behind a clearing either,
+/// so a cut clearing answers exactly as its completed twin
+/// does (Round 31 landing repair).
 fn parse_envelope_head(body: &str) -> Option<EnvelopeParts> {
     let mut scan = HeadScan::new(body);
     scan.skip_ws();
@@ -934,6 +940,20 @@ fn parse_envelope_head(body: &str) -> Option<EnvelopeParts> {
     // value it could not skip, a key it could not read, an
     // error object that never closed) leaves this false.
     let mut completed = false;
+    // Whether the walk cleared an envelope it had found: a
+    // later `error` value read whole, an object holding no
+    // head field or one that is not an object at all, displaced
+    // a usable envelope and left no envelope in its place. The
+    // fact is carried on its own because the state it leaves
+    // behind, no envelope found and the walk incomplete, is
+    // otherwise indistinguishable from having found nothing,
+    // and a walk cut short after a clearing must stay as
+    // authoritative as a completed one (Round 31 landing
+    // repair, red team Minor 2).
+    let mut cleared = false;
+    let has_head = |parts: &EnvelopeParts| {
+        parts.status.is_some() || parts.message.is_some() || parts.code.is_some()
+    };
     loop {
         scan.skip_ws();
         if scan.at_end() || scan.eat(b'}') {
@@ -950,8 +970,11 @@ fn parse_envelope_head(body: &str) -> Option<EnvelopeParts> {
         scan.skip_ws();
         if key == "error" && scan.peek() == Some(b'{') {
             let (parts, closed) = scan.error_object();
-            let usable = parts.status.is_some() || parts.message.is_some() || parts.code.is_some();
+            let usable = has_head(&parts);
             if closed || usable {
+                if !usable && found.as_ref().is_some_and(&has_head) {
+                    cleared = true;
+                }
                 found = Some(parts);
             }
             if !closed {
@@ -965,6 +988,9 @@ fn parse_envelope_head(body: &str) -> Option<EnvelopeParts> {
             // value was read whole; a value cut off by the read
             // cap does not erase an earlier complete envelope.
             if scan.skip_value() {
+                if found.as_ref().is_some_and(&has_head) {
+                    cleared = true;
+                }
                 found = None;
             } else {
                 break;
@@ -982,9 +1008,8 @@ fn parse_envelope_head(body: &str) -> Option<EnvelopeParts> {
         completed = scan.eat(b'}');
         break;
     }
-    let found = found
-        .filter(|parts| parts.status.is_some() || parts.message.is_some() || parts.code.is_some());
-    if found.is_some() || completed {
+    let found = found.filter(|parts| has_head(parts));
+    if found.is_some() || completed || cleared {
         return found;
     }
     let mut recovery = HeadScan::new(body);
@@ -2739,6 +2764,109 @@ mod tests {
             control.to_string().contains("carried no message"),
             "{control}"
         );
+    }
+
+    #[test]
+    fn head_scan_cut_clearing_answers_as_its_completed_twin() {
+        // Round 31 landing repair, red team Minor 2: a walk
+        // that cleared the envelope it found and was then cut
+        // short left a state indistinguishable from having
+        // found nothing, so the recovery pass ran behind the
+        // clearing and resurrected the discarded envelope. The
+        // walk now carries the cleared fact itself, and no pass
+        // runs behind a clearing, so every cut form below
+        // answers as its completed twin does, with the bare
+        // HTTP fallback.
+        const ENV: &str =
+            r#"{"code": 429, "message": "quota", "status": "RESOURCE_EXHAUSTED"}"#;
+        for (cut, completed) in [
+            // The body ends right after the clearing value.
+            (
+                format!(r#"{{"error": {ENV}, "error": null"#),
+                format!(r#"{{"error": {ENV}, "error": null}}"#),
+            ),
+            // The body is cut inside a string value after the
+            // clearing.
+            (
+                format!(r#"{{"error": {ENV}, "error": null, "pad": "aaaa"#),
+                format!(r#"{{"error": {ENV}, "error": null, "pad": "aaaa"}}"#),
+            ),
+            // The body is cut inside a key after the clearing.
+            (
+                format!(r#"{{"error": {ENV}, "error": null, "pa"#),
+                format!(r#"{{"error": {ENV}, "error": null, "pad": 0}}"#),
+            ),
+            // The body ends after a partial literal clearing
+            // token.
+            (
+                format!(r#"{{"error": {ENV}, "error": tru"#),
+                format!(r#"{{"error": {ENV}, "error": true}}"#),
+            ),
+            // The body is cut inside a key after an array
+            // clearing that read whole.
+            (
+                format!(r#"{{"error": {ENV}, "error": [1, 2], "x"#),
+                format!(r#"{{"error": {ENV}, "error": [1, 2], "x": 0}}"#),
+            ),
+            // The body ends after an empty object tail that
+            // replaced the envelope.
+            (
+                format!(r#"{{"error": {ENV}, "error": {{}}"#),
+                format!(r#"{{"error": {ENV}, "error": {{}}}}"#),
+            ),
+        ] {
+            for body in [&cut, &completed] {
+                let err = Error::from_response(400, body);
+                assert_eq!(err.kind(), "invalid_request", "{body}");
+                assert_eq!(err.google_status(), None, "{body}");
+            }
+        }
+        // The success status form of the family: the cut body
+        // raised the discarded envelope as an error where its
+        // completed twin returns its result.
+        let cut = format!(r#"{{"error": {ENV}, "error": null"#);
+        assert!(Error::from_success_body(200, &cut, None).is_none());
+        let completed = format!(r#"{{"error": {ENV}, "error": null}}"#);
+        assert!(Error::from_success_body(200, &completed, None).is_none());
+        // The uncut envelope alone still classifies, so the
+        // family above is the clearing and not the envelope.
+        let plain = format!(r#"{{"error": {ENV}}}"#);
+        let err = Error::from_response(400, &plain);
+        assert_eq!(err.kind(), "rate_limit");
+    }
+
+    #[test]
+    fn head_scan_cut_clearing_at_the_read_cap_answers_as_its_twin() {
+        // The cap scale forms of the same repair: the read cap
+        // is what cuts these bodies in production, and the
+        // capped prefix is all the scan ever sees.
+        const ENV: &str =
+            r#"{"code": 429, "message": "quota", "status": "RESOURCE_EXHAUSTED"}"#;
+        const CAP: usize = 256 * 1024;
+        // A clearing number whose digits end exactly at the
+        // cap. Its completed twin answers with the bare
+        // fallback, and the cut form now answers the same.
+        let head = r#"{"pad": ""#;
+        let tail = format!(r#"", "error": {ENV}, "error": 42"#);
+        let body = format!("{}{}{}", head, "x".repeat(CAP - head.len() - tail.len()), tail);
+        assert_eq!(body.len(), CAP);
+        let err = Error::from_capped_error_body(400, &body, None, CAP);
+        assert_eq!(err.kind(), "invalid_request");
+        assert_eq!(err.google_status(), None);
+        let completed = format!("{body}}}");
+        let err = Error::from_response(400, &completed);
+        assert_eq!(err.kind(), "invalid_request");
+        assert_eq!(err.google_status(), None);
+        // A clearing null fully inside the cap, then a string
+        // value the cap cuts in the middle.
+        let full = format!(r#"{{"error": {ENV}, "error": null, "pad": "{}"#, "x".repeat(CAP));
+        let err = Error::from_capped_error_body(400, &full[..CAP], None, CAP);
+        assert_eq!(err.kind(), "invalid_request");
+        assert_eq!(err.google_status(), None);
+        let closed = format!("{full}\"}}");
+        let err = Error::from_response(400, &closed);
+        assert_eq!(err.kind(), "invalid_request");
+        assert_eq!(err.google_status(), None);
     }
 
     #[test]
