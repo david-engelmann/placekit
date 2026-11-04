@@ -211,6 +211,36 @@ statement calls and a class no statement constructs
 refuse nothing. The pins below cover those forms and
 the reachability boundaries that keep the refusal
 honest.
+
+The landing red team then evaded the pass eleven
+analysis in one more family, in repair pass twelve,
+inside the call collection of the execution reading.
+That collection returned whole at every definition
+and every lambda it met, and the stop discarded more
+than bodies, because a definition statement performs
+its decorator expressions and its default values and
+its annotations as it runs, and a lambda a statement
+invokes on the spot runs its body as part of that
+statement, so an installer call standing in any of
+those places was never collected, while the same
+decorator expression standing on a class was already
+read. Two construction shapes stood beside the
+family at the same distance, a dunder new method
+that assigns the name under a global declaration and
+a constructor inherited from a module level base
+class, each one step past a construction reading
+that consulted the dunder init method defined in the
+class itself alone. The call collection now reads
+the header of a definition standing in an executing
+position, without entering its body, and reads the
+body of a lambda a call invokes where it stands,
+while a lambda no statement invokes contributes only
+its defaults, and the construction write set of a
+class gathers from its dunder new method beside its
+dunder init method and through the module level base
+classes it names. The pins below cover those forms,
+plus the control that keeps the uninvoked lambda
+honest.
 """
 
 from __future__ import annotations
@@ -1767,6 +1797,242 @@ def test_loader_derivation_admits_a_helper_beside_a_class_never_constructed(tmp_
             def __init__(self):
                 global shadow_search
                 shadow_search = lambda client, raw_response, name: None
+        """,
+    )
+    assert loaders == {"reader", "shadow_search"}
+
+
+def test_loader_derivation_refuses_a_helper_rewritten_through_a_decorator_call(tmp_path):
+    # Repair pass twelve, red team form 19a. The helper
+    # is faithful, and a definition standing after it
+    # carries the installer call in its decorator
+    # expression, which the definition statement
+    # evaluates as the module loads, so the name a test
+    # calls denotes the lambda the installer leaves
+    # behind. The pass eleven call collection returned
+    # whole at the definition node and never visited
+    # its decorator list, while the same expression
+    # standing on a class was already read. The
+    # collection now reads the header of a definition
+    # standing in an executing position, its decorator
+    # expressions, its default values, and its
+    # annotations, without entering its body.
+    loaders = _derived_loaders(
+        tmp_path,
+        """
+        ROOT = None
+
+
+        def reader(name):
+            return (ROOT / name).read_bytes()
+
+
+        def shadow_search(client, raw_response, name):
+            return reader(name)
+
+
+        def _install_shadow():
+            global shadow_search
+            shadow_search = lambda client, raw_response, name: None
+
+
+        def _wrap(value):
+            return lambda function: function
+
+
+        @_wrap(_install_shadow())
+        def _decoy():
+            pass
+        """,
+    )
+    assert loaders == {"reader"}
+
+
+def test_loader_derivation_refuses_a_helper_rewritten_through_a_default_value_call(tmp_path):
+    # Repair pass twelve, red team form 19b. A default
+    # value is evaluated when its definition statement
+    # executes, as the module loads, so a definition
+    # standing after the helper and carrying the
+    # installer call as a default value runs the
+    # installer as it is defined, and the name denotes
+    # the lambda before any test is collected. The pass
+    # eleven call collection returned whole at the
+    # definition node, and the arguments standing on
+    # that node, where the default value lives, were
+    # never visited. The header reading the repair adds
+    # covers the default values beside the decorators.
+    loaders = _derived_loaders(
+        tmp_path,
+        """
+        ROOT = None
+
+
+        def reader(name):
+            return (ROOT / name).read_bytes()
+
+
+        def shadow_search(client, raw_response, name):
+            return reader(name)
+
+
+        def _install_shadow():
+            global shadow_search
+            shadow_search = lambda client, raw_response, name: None
+
+
+        def _decoy(marker=_install_shadow()):
+            pass
+        """,
+    )
+    assert loaders == {"reader"}
+
+
+def test_loader_derivation_refuses_a_helper_rewritten_through_an_on_the_spot_lambda(tmp_path):
+    # Repair pass twelve, red team form 19c. A module
+    # level statement invokes a lambda on the spot, and
+    # the lambda body runs the installer as part of
+    # that very statement, on the module's own time.
+    # The pass eleven call collection returned whole at
+    # the lambda node, so the one body the statement
+    # actually runs was never read, and the outer call
+    # names no definition, so nothing entered the reach
+    # at all. A call whose callee is a lambda now reads
+    # as a call into that lambda body.
+    loaders = _derived_loaders(
+        tmp_path,
+        """
+        ROOT = None
+
+
+        def reader(name):
+            return (ROOT / name).read_bytes()
+
+
+        def shadow_search(client, raw_response, name):
+            return reader(name)
+
+
+        def _install_shadow():
+            global shadow_search
+            shadow_search = lambda client, raw_response, name: None
+
+
+        (lambda: _install_shadow())()
+        """,
+    )
+    assert loaders == {"reader"}
+
+
+def test_loader_derivation_refuses_a_helper_rewritten_through_a_dunder_new_method(tmp_path):
+    # Repair pass twelve, the spec review sibling of
+    # form 18c. The rewriting method of the constructed
+    # class is its dunder new method, which a
+    # construction runs beside its dunder init method,
+    # and the pass eleven gathering consulted the
+    # dunder init method defined in the class itself
+    # alone, so the write set of the class stood empty
+    # and the helper was certified. The construction
+    # write set of a class now gathers from both
+    # methods.
+    loaders = _derived_loaders(
+        tmp_path,
+        """
+        ROOT = None
+
+
+        def reader(name):
+            return (ROOT / name).read_bytes()
+
+
+        def shadow_search(client, raw_response, name):
+            return reader(name)
+
+
+        class _ShadowInstaller:
+            def __new__(cls):
+                global shadow_search
+                shadow_search = lambda client, raw_response, name: None
+
+
+        _ShadowInstaller()
+        """,
+    )
+    assert loaders == {"reader"}
+
+
+def test_loader_derivation_refuses_a_helper_rewritten_through_an_inherited_constructor(tmp_path):
+    # Repair pass twelve, the spec review sibling of
+    # form 18c. The constructed class defines no
+    # construction method of its own and inherits its
+    # constructor from a module level base class whose
+    # method assigns the helper name under a global
+    # declaration, and a construction runs the inherited
+    # method all the same. The pass eleven gathering
+    # read the methods defined in the class itself
+    # alone, so the write set of the constructed class
+    # stood empty. The construction write set now
+    # resolves the module level base classes a class
+    # names, by plain name and to the end of the chain.
+    loaders = _derived_loaders(
+        tmp_path,
+        """
+        ROOT = None
+
+
+        def reader(name):
+            return (ROOT / name).read_bytes()
+
+
+        def shadow_search(client, raw_response, name):
+            return reader(name)
+
+
+        class _ShadowBase:
+            def __init__(self):
+                global shadow_search
+                shadow_search = lambda client, raw_response, name: None
+
+
+        class _ShadowInstaller(_ShadowBase):
+            pass
+
+
+        _ShadowInstaller()
+        """,
+    )
+    assert loaders == {"reader"}
+
+
+def test_loader_derivation_admits_a_helper_beside_an_uninvoked_lambda(tmp_path):
+    # Repair pass twelve, the boundary. A lambda whose
+    # body holds the installer call stands bound to a
+    # name at module level and no statement invokes it,
+    # so its body never runs and the name still denotes
+    # the faithful body. The invoked lambda reading
+    # keys on the invocation and not on the presence of
+    # the lambda, and an uninvoked lambda contributes
+    # nothing past its defaults, so the helper derives
+    # beside the reader it loads through.
+    loaders = _derived_loaders(
+        tmp_path,
+        """
+        ROOT = None
+
+
+        def reader(name):
+            return (ROOT / name).read_bytes()
+
+
+        def shadow_search(client, raw_response, name):
+            return reader(name)
+
+
+        def _install_shadow():
+            global shadow_search
+            shadow_search = lambda client, raw_response, name: None
+
+
+        _trigger = lambda: _install_shadow()
         """,
     )
     assert loaders == {"reader", "shadow_search"}
