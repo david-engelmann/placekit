@@ -300,6 +300,28 @@ def _body_holds_a_yield(statements) -> bool:
     return any(visit(statement) for statement in statements)
 
 
+def _pattern_names(pattern) -> list:
+    """The names a match pattern binds.
+
+    A capture pattern names the value it takes, a star
+    pattern names the rest of a sequence it gathers, and
+    a mapping pattern names the rest of the mapping it
+    keeps. Each may stand nested inside a sequence
+    pattern, an or pattern, a class pattern, or a
+    mapping pattern, so the whole pattern is read. A
+    value pattern and a singleton bind nothing.
+    """
+    names = []
+    for node in ast.walk(pattern):
+        if isinstance(node, ast.MatchAs) and node.name is not None:
+            names.append(node.name)
+        elif isinstance(node, ast.MatchStar) and node.name is not None:
+            names.append(node.name)
+        elif isinstance(node, ast.MatchMapping) and node.rest is not None:
+            names.append(node.rest)
+    return names
+
+
 def _later_statement_rebinds(statements, name) -> bool:
     """Whether any of the statements binds the name at module level.
 
@@ -308,13 +330,20 @@ def _later_statement_rebinds(statements, name) -> bool:
     binding, and a loop target standing in the statements
     or in the arms of a compound statement among them bind
     the name in the module scope exactly as the collector
-    reads derivations inside a body. A definition or a
-    class standing among the statements, or in an arm of
-    one, binds its own name where it stands, and an import
-    binds the names it carries. A star import may bind any
-    name at all, so it rebinds every name it follows. The
-    search never enters a nested definition or a class
-    body, whose assignments bind in their own scopes.
+    reads derivations inside a body. A binding standing in
+    the head of a compound statement binds in the same
+    scope, so the target of a with item and the names a
+    match pattern captures, its captures, its stars, and
+    its mapping rests, standing in the statements or in
+    the arms of a compound statement among them, are read
+    beside the assignments the collector gathers inside
+    those arms. A definition or a class standing among
+    the statements, or in an arm of one, binds its own
+    name where it stands, and an import binds the names
+    it carries. A star import may bind any name at all,
+    so it rebinds every name it follows. The search never
+    enters a nested definition or a class body, whose
+    assignments bind in their own scopes.
     """
     if any(name in targets for targets, _value in _assignment_pairs(statements)):
         return True
@@ -334,6 +363,16 @@ def _later_statement_rebinds(statements, name) -> bool:
                 alias.name == "*" or (alias.asname or alias.name) == name
                 for alias in node.names
             )
+        if isinstance(node, (ast.With, ast.AsyncWith)):
+            if any(
+                name in _target_names(item.optional_vars)
+                for item in node.items
+                if item.optional_vars is not None
+            ):
+                return True
+        if isinstance(node, ast.Match):
+            if any(name in _pattern_names(case.pattern) for case in node.cases):
+                return True
         return any(visit(child) for child in ast.iter_child_nodes(node))
 
     return any(visit(statement) for statement in statements)
@@ -452,12 +491,14 @@ def _loader_function_names(filename: str) -> set[str]:
     replace the function at definition time with a callable
     the walk cannot see. And a candidate whose name a
     later module level statement rebinds, by a plain or
-    annotated assignment, by a further definition or class
-    of the same name, or by an import, is refused, because
-    the name a test calls then denotes the later binding
-    and not the body the proof would judge. Each refusal
-    stands in the admission step, before any proof runs,
-    and fails closed.
+    annotated assignment, by a binding standing in the
+    head of a compound statement, the target of a with
+    item or a name a match pattern captures, by a further
+    definition or class of the same name, or by an import,
+    is refused, because the name a test calls then denotes
+    the later binding and not the body the proof would
+    judge. Each refusal stands in the admission step,
+    before any proof runs, and fails closed.
     """
     return set(_derive_loaders(filename))
 
