@@ -416,57 +416,112 @@ def _global_write_set(node) -> set:
     return declared & assigned
 
 
-def _later_call_rewrites(statements, name) -> bool:
-    """Whether a later statement calls a definition that rewrites the name.
+def _later_call_rewrites(module_body, position, name) -> bool:
+    """Whether an execution after the candidate rewrites the name.
 
-    A definition standing among the statements, or in
-    an arm of a compound statement among them, is an
-    installer for the name when its global write set
-    holds the name, and the name is rewritten when a
-    statement standing among the statements, bare or in
-    an arm of one, calls such a definition, because the
-    call runs the definition as the module loads and
-    the name then denotes what the call leaves behind
-    rather than the body a proof would judge. The
-    refusal keys on the call, so an installer that is
-    never called refuses nothing. An asynchronous
-    definition is no installer, because calling it runs
-    none of its body. The search never enters a nested
-    definition or a class body, at the reach the rebind
-    reading gives the statements it is handed, since a
-    call standing in one runs in its own scope and on
-    its own time.
+    The names a body can rewrite are gathered from the
+    whole module, from every module level definition and
+    from the constructor method of every module level
+    class, wherever they stand, a name counting when
+    the body assigns it under a global declaration. A
+    call naming a class runs its constructor as the
+    class is constructed, so the write set of the
+    constructor method stands for the class name beside
+    the write sets of the plain definitions, and the
+    bodies a call into either can run stand beside them
+    for the reach to read their calls from.
+
+    The executions that can reach such a write are the
+    ones the module level performs after the candidate's
+    own definition, the statements standing after it,
+    bare or in an arm of a compound statement among
+    them, and the bodies of the classes standing at
+    module level among them, which run as their
+    definitions run. The reach closes over plain name
+    calls, so the body of a definition the reach calls
+    is read for the calls it makes in turn, and a class
+    the reach constructs brings the calls of its
+    constructor into the reach beside its write set.
+    The candidate is refused when the reach calls a
+    definition or a constructor whose write set holds
+    the name.
+
+    The refusal keys on the execution, so an installer
+    no call reaches refuses nothing, and a call standing
+    before the candidate refuses nothing, because the
+    candidate's own definition binds the name after it.
+    An asynchronous definition is no installer and the
+    reach never enters its body, because calling it
+    runs none of it. Inside a body the reach has
+    entered, the search stops at a further definition
+    and at a class body, whose calls run on their own
+    time and not on the module's.
     """
-    installers = {}
+    writes = {}
+    callees = {}
 
-    def definitions(node):
+    def gather(node):
         if isinstance(node, ast.FunctionDef):
-            writes = _global_write_set(node)
-            if writes:
-                installers.setdefault(node.name, set()).update(writes)
+            write_set = _global_write_set(node)
+            if write_set:
+                writes.setdefault(node.name, set()).update(write_set)
+            callees.setdefault(node.name, []).append(node.body)
             return
-        if isinstance(node, (ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda)):
+        if isinstance(node, ast.AsyncFunctionDef):
+            return
+        if isinstance(node, ast.ClassDef):
+            for member in node.body:
+                if isinstance(member, ast.FunctionDef) and member.name == "__init__":
+                    write_set = _global_write_set(member)
+                    if write_set:
+                        writes.setdefault(node.name, set()).update(write_set)
+                    callees.setdefault(node.name, []).append(member.body)
+            return
+        if isinstance(node, ast.Lambda):
             return
         for child in ast.iter_child_nodes(node):
-            definitions(child)
+            gather(child)
 
-    for statement in statements:
-        definitions(statement)
-    targets = {key for key, writes in installers.items() if name in writes}
-    if not targets:
-        return False
+    for statement in module_body:
+        gather(statement)
+    targets = {key for key, write_set in writes.items() if name in write_set}
 
-    def calls(node):
-        if isinstance(
-            node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda)
-        ):
-            return False
-        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
-            if node.func.id in targets:
+    def calls(statements, enter_class_bodies):
+        found = []
+
+        def visit(node):
+            if isinstance(
+                node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)
+            ):
+                return
+            if isinstance(node, ast.ClassDef):
+                if enter_class_bodies:
+                    for part in (*node.decorator_list, *node.bases, *node.keywords):
+                        visit(part)
+                    for member in node.body:
+                        visit(member)
+                return
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+                found.append(node.func.id)
+            for child in ast.iter_child_nodes(node):
+                visit(child)
+
+        for statement in statements:
+            visit(statement)
+        return found
+
+    seen = set()
+    queue = [calls(module_body[position + 1 :], True)]
+    while queue:
+        for called in queue.pop():
+            if called in targets:
                 return True
-        return any(calls(child) for child in ast.iter_child_nodes(node))
-
-    return any(calls(statement) for statement in statements)
+            if called in seen:
+                continue
+            seen.add(called)
+            for body in callees.get(called, []):
+                queue.append(calls(body, False))
+    return False
 
 
 def _derive_loaders(filename: str) -> dict:
@@ -490,12 +545,15 @@ def _derive_loaders(filename: str) -> dict:
     refuses a definition whose body holds a yield outside a
     nested definition, a definition carrying a decorator,
     a definition whose name a later module level
-    statement rebinds, and a definition whose name a
-    later module level statement rewrites by calling a
-    definition that assigns the name under a global
-    declaration, because the proofs judge one body and
-    each of those shapes can leave the name denoting a
-    callable that body never runs in.
+    statement rebinds, and a definition whose name an
+    execution the module level reaches after it
+    rewrites, the write sets gathered from every module
+    level definition and from the constructor methods
+    of module level classes wherever they stand and
+    the reach closing over the calls the statements
+    after it make, because the proofs judge one body
+    and each of those shapes can leave the name
+    denoting a callable that body never runs in.
     """
     path = Path(__file__).parent / filename
     source = path.read_text()
@@ -510,7 +568,7 @@ def _derive_loaders(filename: str) -> dict:
             continue
         if _later_statement_rebinds(tree.body[position + 1 :], node.name):
             continue
-        if _later_call_rewrites(tree.body[position + 1 :], node.name):
+        if _later_call_rewrites(tree.body, position, node.name):
             continue
         helpers[node.name] = node
     seeds = {}
@@ -593,18 +651,28 @@ def _loader_function_names(filename: str) -> set[str]:
     definition or class of the same name, or by an import,
     is refused, because the name a test calls then denotes
     the later binding and not the body the proof would
-    judge. And a candidate whose name a definition
-    standing after it assigns under a global declaration
-    is refused when a later module level statement calls
-    that definition, standing bare or in an arm of a
-    compound statement among the later statements,
-    because the call runs the definition as the module
-    loads and the name then denotes what the call leaves
-    behind, while an installer that is never called
+    judge. And a candidate whose name an execution
+    the module level reaches after it assigns under a
+    global declaration is refused. The write sets are
+    gathered from every module level definition and
+    from the constructor method of every module level
+    class, wherever they stand, a call naming a class
+    counting as a call into its constructor, and the
+    reach is read from the statements standing after
+    the candidate, bare or in an arm of a compound
+    statement among them, counting the bodies of the
+    classes standing at module level among them, which
+    run as their definitions run, and closing over the
+    calls those statements make into the bodies of the
+    definitions they call and the constructors of the
+    classes they construct, because the name then
+    denotes what the execution leaves behind rather
+    than the body under proof. The refusal keys on the
+    execution, so an installer no execution reaches
     refuses nothing, since the name still denotes the
-    body it was certified on. Each refusal stands in the
-    admission step, before any proof runs, and fails
-    closed.
+    body it was certified on. Each refusal stands in
+    the admission step, before any proof runs, and
+    fails closed.
     """
     return set(_derive_loaders(filename))
 
