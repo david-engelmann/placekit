@@ -63,13 +63,36 @@ the statement walk, and a class body walks in a forked
 environment whose bindings are discarded when the
 definition ends. The pins below cover those forms, plus
 the positive controls that keep the new rules honest.
+
+The landing red team then evaded the pass four analysis in
+three more families, in repair pass five. A loop target
+bound to the whole literal set outlived its loop, so a call
+after the loop collected every element while loading only
+the last one, and a name the body derived from the target
+inherited the whole set the same way. The loader set the
+guard derives could be poisoned by a helper that calls a
+loader without handing over the name it was given, openly
+or behind a branch that routes the claimed name elsewhere.
+And a suppressing with body could be abandoned by an
+exception raised inside an expression, a shape that turns
+on data the test source does not carry, so it stands as a
+named residual outside the guard's static contract rather
+than a repair. The analysis now ends a loop in the state
+the interpreter leaves behind, and a helper joins the
+loader set only when it provably loads the fixture name it
+is handed. The pins below cover the repaired forms, plus
+the positive controls that keep the new rules honest.
 """
 
 from __future__ import annotations
 
 import textwrap
 
-from test_corpus_accounting import RECORDED_LOADERS, _fixtures_a_test_loads
+from test_corpus_accounting import (
+    RECORDED_LOADERS,
+    _fixtures_a_test_loads,
+    _loader_function_names,
+)
 
 CLAIMED = "recorded_OBS1_requested_field_vanishes.json"
 OTHER = "recorded_P1_no_address_natural_feature.json"
@@ -637,3 +660,156 @@ def test_linkage_call_in_a_class_body_still_credits():
         """
     )
     assert loaded == {CLAIMED, OTHER}
+
+
+def test_linkage_call_after_the_loop_through_the_target_earns_no_false_credit():
+    # Repair pass five, red team form 9a. Inside the body the
+    # target resolves to every element, because the body runs
+    # once per element, but the loop ends holding the last
+    # element alone, so the call after the loop loads only
+    # that one. The claimed fixture is an earlier element the
+    # call never opens, and the set binding the walked body
+    # pass held earns it nothing after the loop.
+    loaded = _loads(
+        f"""
+        def test_shape(client, raw_response):
+            for fixture_name in ("{CLAIMED}", "{OTHER}"):
+                pass
+            result = search(client, raw_response, fixture_name)
+        """
+    )
+    assert loaded == {OTHER}
+
+
+def test_linkage_call_after_the_loop_through_a_derived_name_earns_no_false_credit():
+    # Repair pass five, red team form 9b. The body derives a
+    # name from the loop target on every pass, and the loop
+    # ends holding the value the last pass left in it, so the
+    # call after the loop loads only the last element. The
+    # claimed fixture earns nothing through the derived name,
+    # which inherits the narrowed end state, not the set the
+    # walked body pass carried.
+    loaded = _loads(
+        f"""
+        def test_shape(client, raw_response):
+            for fixture_name in ("{CLAIMED}", "{OTHER}"):
+                chosen = fixture_name
+            result = search(client, raw_response, chosen)
+        """
+    )
+    assert loaded == {OTHER}
+
+
+def test_linkage_post_loop_call_credits_exactly_the_last_element():
+    # Positive control for the loop end state. The claim sits
+    # in the last element of the iterable, so the call after
+    # the loop, reading the target the interpreter leaves
+    # behind, credits exactly it and no other element. A
+    # repair that refused the target after every loop would
+    # fail this pin, and so would the set binding it replaces.
+    loaded = _loads(
+        f"""
+        def test_shape(client, raw_response):
+            for fixture_name in ("{OTHER}", "{CLAIMED}"):
+                pass
+            result = search(client, raw_response, fixture_name)
+        """
+    )
+    assert loaded == {CLAIMED}
+
+
+def _derived_loaders(tmp_path, source: str) -> set[str]:
+    # The derivation reads a module file from the tests
+    # folder, and an absolute path stands in for it under the
+    # joining rules of pathlib, so a synthetic module written
+    # to the test's own scratch folder derives its loader set
+    # exactly as the shipped module derives its own.
+    module = tmp_path / "synthetic_corpus.py"
+    module.write_text(textwrap.dedent(source))
+    return _loader_function_names(str(module))
+
+
+def test_loader_derivation_refuses_a_helper_that_drops_its_argument(tmp_path):
+    # Repair pass five, red team form 11a. The helper calls a
+    # loader on a fixed name of its own and never hands over
+    # the name it was given, so it is not a helper that loads
+    # a fixture by name. Admitting it would credit a test
+    # calling it with the claimed fixture while the helper
+    # opens another one.
+    loaders = _derived_loaders(
+        tmp_path,
+        """
+        ROOT = None
+
+
+        def reader(name):
+            return (ROOT / name).read_bytes()
+
+
+        def shadow_search(client, raw_response, name):
+            return reader("recorded_P1_no_address_natural_feature.json")
+        """,
+    )
+    assert loaders == {"reader"}
+
+
+def test_loader_derivation_refuses_a_helper_that_passes_its_argument_on_one_branch(
+    tmp_path,
+):
+    # Repair pass five, red team form 11b. The helper hands
+    # its argument to a loader on a branch the claimed name
+    # never takes and loads a fixed name on the path it does
+    # take, so the name it loads is not the name it is handed
+    # on every path, and the derivation refuses it the same
+    # way. Passing a name through somewhere is not enough.
+    loaders = _derived_loaders(
+        tmp_path,
+        """
+        ROOT = None
+
+
+        def reader(name):
+            return (ROOT / name).read_bytes()
+
+
+        def shadow_search(client, raw_response, name):
+            if name == "recorded_P1_no_address_natural_feature.json":
+                return reader(name)
+            return reader("recorded_P1_no_address_natural_feature.json")
+        """,
+    )
+    assert loaders == {"reader"}
+
+
+def test_loader_derivation_admits_a_faithful_helper_and_credits_through_it(tmp_path):
+    # Positive control for the derivation. A helper that
+    # hands the name it was given to a loader joins the set,
+    # and a test calling it with a fixture name earns the
+    # credit for that name through it, so the faithfulness
+    # proof refuses dishonest helpers without refusing the
+    # honest shape the shipped helpers all carry.
+    loaders = _derived_loaders(
+        tmp_path,
+        """
+        ROOT = None
+
+
+        def reader(name):
+            return (ROOT / name).read_bytes()
+
+
+        def faithful_search(client, raw_response, name):
+            return reader(name)
+        """,
+    )
+    assert loaders == {"reader", "faithful_search"}
+    loaded = _fixtures_a_test_loads(
+        textwrap.dedent(
+            f"""
+            def test_shape(client, raw_response):
+                result = faithful_search(client, raw_response, "{CLAIMED}")
+            """
+        ),
+        loaders,
+    )
+    assert loaded == {CLAIMED}
