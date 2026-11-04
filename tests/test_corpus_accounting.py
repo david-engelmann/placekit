@@ -66,51 +66,194 @@ def _builder_module():
     return module
 
 
+_SYMBOLIC_NAME = "the symbolic fixture name the loader derivation binds"
+
+
+def _seed_parameter(node) -> str | None:
+    """The parameter a disk reading helper reads through.
+
+    A helper whose own body reads a file from disk seeds the
+    loader set, and the read is faithful only when the path it
+    reads is built from a name the helper was handed. The names
+    a value depends on are tracked through the body assignments
+    as a safe over reading, never entering a nested definition,
+    whose assignments bind in its own scope, and the helper is
+    a seed through a parameter when the target expression of
+    one of its reads depends on that parameter.
+    """
+    parameters = [
+        argument.arg
+        for argument in (
+            *node.args.posonlyargs,
+            *node.args.args,
+            *node.args.kwonlyargs,
+        )
+    ]
+    pairs = []
+
+    def collect(current):
+        if isinstance(
+            current, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda)
+        ):
+            return
+        if isinstance(current, ast.Assign):
+            targets = []
+            for target in current.targets:
+                targets.extend(
+                    sub.id for sub in ast.walk(target) if isinstance(sub, ast.Name)
+                )
+            pairs.append((targets, current.value))
+        elif isinstance(current, ast.AnnAssign) and current.value is not None:
+            pairs.append(
+                (
+                    [
+                        sub.id
+                        for sub in ast.walk(current.target)
+                        if isinstance(sub, ast.Name)
+                    ],
+                    current.value,
+                )
+            )
+        elif isinstance(current, ast.NamedExpr):
+            pairs.append(([current.target.id], current.value))
+        elif isinstance(current, (ast.For, ast.AsyncFor)):
+            pairs.append(
+                (
+                    [
+                        sub.id
+                        for sub in ast.walk(current.target)
+                        if isinstance(sub, ast.Name)
+                    ],
+                    current.iter,
+                )
+            )
+        for child in ast.iter_child_nodes(current):
+            collect(child)
+
+    for statement in node.body:
+        collect(statement)
+    reads = [
+        sub.func.value
+        for sub in ast.walk(node)
+        if isinstance(sub, ast.Call)
+        and isinstance(sub.func, ast.Attribute)
+        and sub.func.attr in ("read_bytes", "read_text")
+    ]
+    if not reads:
+        return None
+
+    def mentions(expression, names):
+        return any(
+            isinstance(sub, ast.Name) and sub.id in names for sub in ast.walk(expression)
+        )
+
+    for parameter in parameters:
+        depends = {parameter}
+        growing = True
+        while growing:
+            growing = False
+            for targets, value in pairs:
+                if mentions(value, depends):
+                    for name in targets:
+                        if name not in depends:
+                            depends.add(name)
+                            growing = True
+        if any(mentions(target, depends) for target in reads):
+            return parameter
+    return None
+
+
+def _helper_passes_name_through(node, source, loaders) -> bool:
+    """Whether a helper loads exactly the fixture name it is handed.
+
+    The helper body is analysed with each of its parameters in
+    turn bound to a symbolic fixture name, against the loader
+    set as it stands, and the helper passes only when the
+    credited set of one such analysis is exactly the symbolic
+    name. A helper that drops its argument and loads a fixed
+    name of its own earns that fixed name instead, a helper
+    that hands its argument over on only some of its paths
+    earns the intersection of its paths, and a helper that
+    loads its argument beside a fixed name earns both, so
+    each differs from the symbolic name alone and is refused.
+    """
+    segment = ast.get_source_segment(source, node)
+    if segment is None:
+        return False
+    parameters = [
+        argument.arg
+        for argument in (
+            *node.args.posonlyargs,
+            *node.args.args,
+            *node.args.kwonlyargs,
+        )
+    ]
+    for parameter in parameters:
+        credited = _fixtures_a_test_loads(
+            segment, loaders, {parameter: frozenset([_SYMBOLIC_NAME])}
+        )
+        if credited == {_SYMBOLIC_NAME}:
+            return True
+    return False
+
+
 def _loader_function_names(filename: str) -> set[str]:
     """Names of the module level helpers that load a fixture by name.
 
-    The set is derived from the module itself. The reader at the
-    bottom is the helper whose own body reads a file from disk, and a
-    helper joins the set when it calls a helper already in the set,
-    so the payload helper and the search and details replayers join
-    through the readers they call. Test functions never join, because
-    nothing loads a fixture through a test.
+    The set is derived from the module itself, and membership
+    is a claim about faithfulness as much as about
+    reachability. The reader at the bottom is the helper whose
+    own body reads a file from disk, and it joins only when
+    the read is of a path built from a name it was handed,
+    tracked through its assignments. A helper that calls a
+    loader joins only when it hands over the name it was
+    given on every path, proven by analysing its body with a
+    symbolic fixture name bound to its parameter, so the
+    payload helper and the search and details replayers join
+    through the readers they call, while a helper that drops
+    its argument, loads a fixed name of its own, or passes
+    its argument on only some paths is refused. Admission is
+    iterated to a fixed point and then verified against the
+    finished set, so every member still provably loads the
+    fixture it is handed beside the other members. Test
+    functions never join, because nothing loads a fixture
+    through a test.
     """
     path = Path(__file__).parent / filename
-    tree = ast.parse(path.read_text())
+    source = path.read_text()
+    tree = ast.parse(source)
     helpers = {
         node.name: node
         for node in tree.body
         if isinstance(node, ast.FunctionDef) and not node.name.startswith("test_")
     }
-    calls = {}
-    loaders = set()
-    for name, node in helpers.items():
-        called = set()
-        for sub in ast.walk(node):
-            if isinstance(sub, ast.Call) and isinstance(sub.func, ast.Name):
-                called.add(sub.func.id)
-            if (
-                isinstance(sub, ast.Call)
-                and isinstance(sub.func, ast.Attribute)
-                and sub.func.attr in ("read_bytes", "read_text")
-            ):
-                loaders.add(name)
-        calls[name] = called
-    growing = True
-    while growing:
-        growing = False
-        for name, called in calls.items():
-            if name not in loaders and called & loaders:
-                loaders.add(name)
-                growing = True
-    return loaders
+    seeds = {
+        name for name, node in helpers.items() if _seed_parameter(node) is not None
+    }
+    loaders = set(seeds)
+    while True:
+        growing = True
+        while growing:
+            growing = False
+            for name, node in helpers.items():
+                if name not in loaders and _helper_passes_name_through(
+                    node, source, loaders
+                ):
+                    loaders.add(name)
+                    growing = True
+        refused = {
+            name
+            for name in loaders - seeds
+            if not _helper_passes_name_through(helpers[name], source, loaders - {name})
+        }
+        if not refused:
+            return loaders
+        loaders -= refused
 
 
-RECORDED_LOADERS = _loader_function_names("test_recorded_corpus.py")
-
-
-def _fixtures_a_test_loads(source: str, loaders: set[str]) -> set[str]:
+def _fixtures_a_test_loads(
+    source: str, loaders: set[str], initial_bindings: dict | None = None
+) -> set[str]:
     """Fixture file names one test hands to a loading helper.
 
     The test body is walked in program order, tracking the fixture
@@ -160,7 +303,25 @@ def _fixtures_a_test_loads(source: str, loaders: set[str]) -> set[str]:
     return, or raise that could carry control past its calls
     runs its body on every path, so credit recorded in such a
     body survives the join, and the shipped loop variable loads
-    run through exactly that shape. Credit in a finally arm is
+    run through exactly that shape.
+
+    The state a loop leaves behind is modelled as the
+    interpreter leaves it. Inside the body the target resolves
+    to every element of its literal iterable, because the body
+    runs once per element and loads each in turn. The loop
+    ends holding the last element alone, and a name the body
+    derived from the target ends holding the value the last
+    pass left in it, so the fall through end of a loop over a
+    literal sequence is taken from a final pass over the body
+    with the target narrowed to its last element, and a
+    loading call after the loop resolves the target, and any
+    name derived from it, to that element and no other. A loop
+    whose body carries a bypass can stop at any pass, and a
+    loop whose iterable is not an ordered literal has no last
+    element the walk can name, so the target and the names
+    derived from it read as unresolvable in the end state of
+    such a loop instead, while the credit the body itself
+    recorded stands either way. Credit in a finally arm is
     ordinary straight line credit, because the finally arm runs
     on every path. A loading call inside a nested function
     definition or a lambda earns no credit at all, because such
@@ -187,7 +348,17 @@ def _fixtures_a_test_loads(source: str, loaders: set[str]) -> set[str]:
     raise, because a context manager may suppress the
     exception. A raise nothing catches ends the test in
     failure rather than in completion, so the walk counts
-    only the paths that complete.
+    only the paths that complete. The with model covers
+    abandonment by a raise statement, which is the
+    abandonment the walk can see. An exception raised while
+    an expression inside a with body evaluates abandons the
+    body in the same way at runtime, silently under a
+    suppressing manager, and whether such an expression
+    raises can turn on data no static reading of the test
+    source carries, so that abandonment stands as a named
+    residual outside the guard's static contract, and a
+    loading call standing after an expression in a with
+    body is credited as the fall through path credits it.
 
     The expression scan carries the same discipline. A
     comprehension body earns credit only under the loop
@@ -208,14 +379,19 @@ def _fixtures_a_test_loads(source: str, loaders: set[str]) -> set[str]:
     interpreter gives them, while a loading call written
     in the body still earns credit, because the body runs
     when the class is defined. Every construct the walk
-    touches is modelled in these terms or refused, and a
-    shape it cannot model resolves to no credit and fails
-    the accounting check closed.
+    touches is modelled in these terms or refused, apart
+    from the one named residual above, and a shape it
+    cannot model resolves to no credit and fails the
+    accounting check closed.
     """
     function = ast.parse(source).body[0]
     loaded = set()
-    env = {}
+    env = dict(initial_bindings) if initial_bindings else {}
     unbound = object()
+    # The walk state record holds whether the path being
+    # walked is still alive, the credit frozen by the paths
+    # that have already returned, and the depth of credit
+    # suppression in force, one record every branch shares.
     flow = {"alive": True, "finished": None, "suppress": 0}
     try_types = (ast.Try,)
     if hasattr(ast, "TryStar"):
@@ -315,6 +491,61 @@ def _fixtures_a_test_loads(source: str, loaders: set[str]) -> set[str]:
 
         return any(visit(statement, 0) for statement in statements)
 
+    def target_derived_names(statements, seed):
+        """The names a loop body derives from the loop target.
+
+        A name is derived when some assignment in the body
+        binds it from a value that mentions a derived name,
+        read syntactically over the whole body, so the set is
+        a safe over reading that also covers derivations on
+        paths the walked pass may not take. It serves the loop
+        end state, where a value left by a pass the walk
+        cannot name must read as unresolvable. Nested
+        definitions are not entered, because their assignments
+        bind in their own scope and the walk never enters them
+        either.
+        """
+        pairs = []
+
+        def collect(node):
+            if isinstance(
+                node,
+                (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda),
+            ):
+                return
+            if isinstance(node, ast.Assign):
+                targets = []
+                for target in node.targets:
+                    targets.extend(target_names(target))
+                pairs.append((targets, node.value))
+            elif isinstance(node, ast.AnnAssign) and node.value is not None:
+                pairs.append((target_names(node.target), node.value))
+            elif isinstance(node, ast.AugAssign):
+                pairs.append((target_names(node.target), node.value))
+            elif isinstance(node, ast.NamedExpr):
+                pairs.append((target_names(node.target), node.value))
+            elif isinstance(node, (ast.For, ast.AsyncFor)):
+                pairs.append((target_names(node.target), node.iter))
+            for child in ast.iter_child_nodes(node):
+                collect(child)
+
+        for statement in statements:
+            collect(statement)
+        derived = {seed}
+        growing = True
+        while growing:
+            growing = False
+            for targets, value in pairs:
+                if any(
+                    isinstance(sub, ast.Name) and sub.id in derived
+                    for sub in ast.walk(value)
+                ):
+                    for name in targets:
+                        if name not in derived:
+                            derived.add(name)
+                            growing = True
+        return derived
+
     def record_call(call):
         if flow["suppress"]:
             # The call sits where the interpreter may skip its
@@ -363,26 +594,22 @@ def _fixtures_a_test_loads(source: str, loaders: set[str]) -> set[str]:
             else:
                 env[name] = value
 
-    def join_paths(path_states):
-        """Fold the path states of a region into the live state.
+    def merge_envs(path_envs):
+        """Join path environments under the identical binding rule.
 
-        Each path state is the environment and the credited set
-        one path through the region ends holding. A name keeps a
-        binding only when every path ends holding the identical
-        binding for it. A name bound on some paths only, or bound
-        to different values on different paths, becomes
-        unresolvable, so a fixture name bound inside a region
-        that may not run earns no credit after the region. The
-        credited set becomes the intersection of the path sets,
-        so a fixture counts as loaded only when a loading call
-        resolving to it ran on every path.
+        A name keeps a binding only when every path ends
+        holding the identical binding for it. A name bound on
+        some paths only, or bound to different values on
+        different paths, becomes unresolvable, so a fixture
+        name bound inside a region that may not run earns no
+        credit after the region.
         """
         names = set()
-        for path_env, _path_loaded in path_states:
+        for path_env in path_envs:
             names.update(path_env)
         merged = {}
         for name in names:
-            outcomes = [path_env.get(name, unbound) for path_env, _ in path_states]
+            outcomes = [path_env.get(name, unbound) for path_env in path_envs]
             first = outcomes[0]
             if all(
                 outcome is first or (first is not unbound and outcome == first)
@@ -392,8 +619,20 @@ def _fixtures_a_test_loads(source: str, loaders: set[str]) -> set[str]:
                     merged[name] = first
             else:
                 merged[name] = None
+        return merged
+
+    def join_paths(path_states):
+        """Fold the path states of a region into the live state.
+
+        Each path state is the environment and the credited set
+        one path through the region ends holding. The
+        environments merge under the identical binding rule of
+        merge_envs. The credited set becomes the intersection
+        of the path sets, so a fixture counts as loaded only
+        when a loading call resolving to it ran on every path.
+        """
         env.clear()
-        env.update(merged)
+        env.update(merge_envs([path_env for path_env, _ in path_states]))
         credited = set(path_states[0][1])
         for _path_env, path_loaded in path_states[1:]:
             credited.intersection_update(path_loaded)
@@ -490,7 +729,9 @@ def _fixtures_a_test_loads(source: str, loaders: set[str]) -> set[str]:
         else:
             flow["alive"] = False
 
-    def walk_loop(body, orelse, guaranteed, prepare, completed):
+    def walk_loop(
+        body, orelse, guaranteed, prepare, completed, end_prepare=None, poison=()
+    ):
         """Walk one loop body and its else arm as forked paths.
 
         The path ends feeding the join are the ends of the
@@ -504,18 +745,56 @@ def _fixtures_a_test_loads(source: str, loaders: set[str]) -> set[str]:
         its body at least once, so credit recorded in a body
         that may never run earns nothing, while credit in a
         proven body pass survives the join.
+
+        The environment a body end carries into the join is
+        the state the interpreter leaves behind, not the state
+        the walked pass ends holding. When the caller supplies
+        an end prepare step, every body end takes its
+        environment from a final pass walked with that step
+        and joined on its own, which is how a loop target
+        narrowed to its last element, and the names derived
+        from it at their last pass values, reach the code
+        after the loop. When the caller names bindings to
+        poison, those names read as unresolvable in every
+        body end instead, because the pass that left them
+        cannot be named. The credited sets are untouched
+        either way, because every pass of the body genuinely
+        runs the calls it holds.
         """
         pre_env = dict(env)
         pre_loaded = set(loaded)
+        narrowed = None
+        if end_prepare is not None:
+            end_envs = [
+                end_env
+                for end_env, _end_loaded, kind in walk_paths(
+                    body, pre_env, pre_loaded, end_prepare
+                )
+                if kind in ("fall", "continue")
+            ]
+            if end_envs:
+                narrowed = merge_envs(end_envs)
+
+        def end_state(end_env):
+            if narrowed is not None:
+                return dict(narrowed)
+            if poison:
+                return {
+                    name: (None if name in poison else value)
+                    for name, value in end_env.items()
+                }
+            return end_env
+
         path_ends = []
         for end_env, end_loaded, kind in walk_paths(
             body, pre_env, pre_loaded, prepare
         ):
             if kind in ("fall", "continue"):
+                end_env = end_state(end_env)
                 path_ends.append((end_env, end_loaded, "fall"))
                 path_ends.extend(walk_paths(orelse, end_env, end_loaded))
             elif kind == "break":
-                path_ends.append((end_env, end_loaded, "fall"))
+                path_ends.append((end_state(end_env), end_loaded, "fall"))
         if not guaranteed:
             path_ends.extend(walk_paths(orelse, pre_env, pre_loaded))
         join_ends(path_ends, completed)
@@ -752,12 +1031,52 @@ def _fixtures_a_test_loads(source: str, loaders: set[str]) -> set[str]:
             def prepare(target=statement.target, value=iter_value):
                 bind(target, value)
 
+            bypass = body_has_bypass(statement.body)
             guaranteed = (
                 isinstance(statement.iter, (ast.Tuple, ast.List))
                 and len(statement.iter.elts) >= 1
-                and not body_has_bypass(statement.body)
+                and not bypass
             )
-            walk_loop(statement.body, statement.orelse, guaranteed, prepare, completed)
+            # The end state of the loop is settled here. A loop
+            # over an ordered literal whose body carries no
+            # bypass ends holding its last element, so its body
+            # ends take their environment from a final pass with
+            # the target narrowed to that element. Any other
+            # loop whose iterable resolves leaves the target at
+            # a pass the walk cannot name, so the target and
+            # the names the body derived from it are poisoned in
+            # its ends instead.
+            end_prepare = None
+            poison = ()
+            if isinstance(statement.target, ast.Name) and iter_value is not None:
+                if guaranteed:
+                    last = statement.iter.elts[-1]
+                    if isinstance(last, ast.Constant) and isinstance(last.value, str):
+                        last_value = frozenset([last.value])
+                    elif isinstance(last, ast.Name):
+                        held = env.get(last.id)
+                        last_value = (
+                            held if held is not None and len(held) == 1 else None
+                        )
+                    else:
+                        last_value = None
+
+                    def end_prepare(target=statement.target, value=last_value):
+                        bind(target, value)
+
+                else:
+                    poison = target_derived_names(
+                        statement.body, statement.target.id
+                    )
+            walk_loop(
+                statement.body,
+                statement.orelse,
+                guaranteed,
+                prepare,
+                completed,
+                end_prepare,
+                poison,
+            )
             return
         if isinstance(statement, ast.While):
             scan(statement.test)
@@ -893,6 +1212,9 @@ def _fixtures_a_test_loads(source: str, loaders: set[str]) -> set[str]:
         else:
             result.intersection_update(flow["finished"])
     return result if result is not None else set()
+
+
+RECORDED_LOADERS = _loader_function_names("test_recorded_corpus.py")
 
 
 def _case_map():
