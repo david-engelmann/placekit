@@ -145,6 +145,27 @@ rebinds, and a pin holds the neighbouring async shape,
 which the candidate collection has never gathered, so its
 door cannot open in silence either. The pins below cover
 those forms.
+
+The landing red team then evaded the pass eight analysis
+in one more family, in repair pass nine, inside the
+admission step the pass built. Admission reads a later
+module level rebinding two ways, the assignment family
+through the shared pair collector and definitions and
+imports through a scan, and a binding standing in the
+head of a compound statement is read by neither, because
+a pattern and a with target are parts of a statement
+rather than statements. A faithful helper rebound by a
+match capture pattern, or by the target of a with item,
+kept its certification while the name denoted a lambda
+that loads nothing, where the same rebind as a plain
+assignment inside the match arm or the with body was
+already refused. The rebind reading now gathers the with
+item targets and the match pattern names standing among
+the later statements, at the same reach it gives the
+assignments inside their arms. The pins below cover
+those forms, plus the boundary control that keeps the
+line between a head binding and a body assignment
+honest.
 """
 
 from __future__ import annotations
@@ -1305,6 +1326,116 @@ def test_loader_derivation_refuses_an_async_helper(tmp_path):
 
         async def shadow_search(client, raw_response, name):
             return reader(name)
+        """,
+    )
+    assert loaders == {"reader"}
+
+
+def test_loader_derivation_refuses_a_helper_rebound_by_a_match_capture(tmp_path):
+    # Repair pass nine, red team form 16a. The helper's
+    # body is faithful, and a module level match statement
+    # standing after the definition captures its name onto
+    # a lambda that loads nothing, so the name a test calls
+    # denotes the lambda and never the certified body. The
+    # rebind reading gathered the assignment family and the
+    # definitions and imports standing in a statement, and
+    # a pattern is neither, so the capture standing in the
+    # head of the match was never read. Admission now reads
+    # the names a match pattern captures beside the
+    # assignments inside its arms.
+    loaders = _derived_loaders(
+        tmp_path,
+        """
+        ROOT = None
+
+
+        def reader(name):
+            return (ROOT / name).read_bytes()
+
+
+        def shadow_search(client, raw_response, name):
+            return reader(name)
+
+
+        match (lambda client, raw_response, name: None,):
+            case (shadow_search,):
+                pass
+        """,
+    )
+    assert loaders == {"reader"}
+
+
+def test_loader_derivation_refuses_a_helper_rebound_by_a_with_item_target(tmp_path):
+    # Repair pass nine, red team form 16b. The same
+    # unexamined binding through the other compound head.
+    # The with statement enters its box as the module
+    # loads, and its item target binds the helper name to
+    # the lambda the enter method returns, so the name
+    # denotes that lambda from load time onward. The pair
+    # collector has no with case among the assignment
+    # shapes it gathers, and the definition and import scan
+    # finds nothing it counts in a with, so the target
+    # standing in the head of the statement was never read.
+    # Admission now reads the target of a with item beside
+    # the assignments inside its body.
+    loaders = _derived_loaders(
+        tmp_path,
+        """
+        ROOT = None
+
+
+        def reader(name):
+            return (ROOT / name).read_bytes()
+
+
+        def shadow_search(client, raw_response, name):
+            return reader(name)
+
+
+        class _ShadowBox:
+            def __enter__(self):
+                return lambda client, raw_response, name: None
+
+            def __exit__(self, *exc):
+                return False
+
+
+        with _ShadowBox() as shadow_search:
+            pass
+        """,
+    )
+    assert loaders == {"reader"}
+
+
+def test_loader_derivation_refuses_a_helper_rebound_inside_a_with_body(tmp_path):
+    # Repair pass nine, the boundary control, red team
+    # form 16d. The same rebind as a plain assignment
+    # standing inside the with body rather than in its
+    # head. The pair collector has always read the
+    # assignments standing in the arms of a compound
+    # statement, so this shape refused before the head
+    # reading existed, and the pin holds the line the
+    # family turned on, between the binding in the head,
+    # which the new reading gathers, and the assignment in
+    # the body, which the collector already gathered.
+    loaders = _derived_loaders(
+        tmp_path,
+        """
+        ROOT = None
+
+
+        def reader(name):
+            return (ROOT / name).read_bytes()
+
+
+        def shadow_search(client, raw_response, name):
+            return reader(name)
+
+
+        from contextlib import suppress
+
+        with suppress(RuntimeError):
+            shadow_search = lambda client, raw_response, name: None
         """,
     )
     assert loaders == {"reader"}
