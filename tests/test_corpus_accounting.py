@@ -274,6 +274,71 @@ def _helper_name_parameter(node, source, slots) -> str | None:
     return None
 
 
+def _body_holds_a_yield(statements) -> bool:
+    """Whether a body yields outside any nested definition.
+
+    A yield or a yield from standing in a body's own scope
+    makes the function a generator function, and calling a
+    generator function runs none of its body, so the body
+    is deferred code of the kind the guard refuses
+    everywhere else, in a lambda body, in a generator
+    expression body, and in a nested definition. A yield
+    inside a nested definition belongs to that definition's
+    own scope and says nothing about the body holding it,
+    so the search never enters one.
+    """
+
+    def visit(node):
+        if isinstance(
+            node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda)
+        ):
+            return False
+        if isinstance(node, (ast.Yield, ast.YieldFrom)):
+            return True
+        return any(visit(child) for child in ast.iter_child_nodes(node))
+
+    return any(visit(statement) for statement in statements)
+
+
+def _later_statement_rebinds(statements, name) -> bool:
+    """Whether any of the statements binds the name at module level.
+
+    The assignment family is read through the shared pair
+    collector, so a plain or annotated assignment, a walrus
+    binding, and a loop target standing in the statements
+    or in the arms of a compound statement among them bind
+    the name in the module scope exactly as the collector
+    reads derivations inside a body. A definition or a
+    class standing among the statements, or in an arm of
+    one, binds its own name where it stands, and an import
+    binds the names it carries. A star import may bind any
+    name at all, so it rebinds every name it follows. The
+    search never enters a nested definition or a class
+    body, whose assignments bind in their own scopes.
+    """
+    if any(name in targets for targets, _value in _assignment_pairs(statements)):
+        return True
+
+    def visit(node):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            return node.name == name
+        if isinstance(node, ast.Lambda):
+            return False
+        if isinstance(node, ast.Import):
+            return any(
+                (alias.asname or alias.name.split(".")[0]) == name
+                for alias in node.names
+            )
+        if isinstance(node, ast.ImportFrom):
+            return any(
+                alias.name == "*" or (alias.asname or alias.name) == name
+                for alias in node.names
+            )
+        return any(visit(child) for child in ast.iter_child_nodes(node))
+
+    return any(visit(statement) for statement in statements)
+
+
 def _derive_loaders(filename: str) -> dict:
     """The loader name slots derived from a module, by name.
 
@@ -290,16 +355,29 @@ def _derive_loaders(filename: str) -> dict:
     without their own, so every member still provably loads
     the fixture it is handed beside the other members, and a
     member whose proof depended on a member the verification
-    refused is refused in turn.
+    refused is refused in turn. Before any of that, a
+    candidate passes an admission step of its own, which
+    refuses a definition whose body holds a yield outside a
+    nested definition, a definition carrying a decorator,
+    and a definition whose name a later module level
+    statement rebinds, because the proofs judge one body and
+    each of those shapes can leave the name denoting a
+    callable that body never runs in.
     """
     path = Path(__file__).parent / filename
     source = path.read_text()
     tree = ast.parse(source)
-    helpers = {
-        node.name: node
-        for node in tree.body
-        if isinstance(node, ast.FunctionDef) and not node.name.startswith("test_")
-    }
+    helpers = {}
+    for position, node in enumerate(tree.body):
+        if not isinstance(node, ast.FunctionDef) or node.name.startswith("test_"):
+            continue
+        if node.decorator_list:
+            continue
+        if _body_holds_a_yield(node.body):
+            continue
+        if _later_statement_rebinds(tree.body[position + 1 :], node.name):
+            continue
+        helpers[node.name] = node
     seeds = {}
     for name, node in helpers.items():
         parameter = _seed_name_parameter(node, source)
@@ -361,6 +439,25 @@ def _loader_function_names(filename: str) -> set[str]:
     loads the fixture it is handed beside the other members.
     Test functions never join, because nothing loads a fixture
     through a test.
+
+    Admission to the proofs is itself guarded, because a
+    proof judges the body of one definition and two things
+    can leave a call into the name running something else.
+    A candidate whose own body holds a yield or a yield
+    from outside any nested definition is a generator
+    function, and calling it runs none of its body, so it
+    is refused as deferred code of the kind the guard
+    refuses everywhere else. A candidate carrying a
+    decorator is refused, because the decorator may
+    replace the function at definition time with a callable
+    the walk cannot see. And a candidate whose name a
+    later module level statement rebinds, by a plain or
+    annotated assignment, by a further definition or class
+    of the same name, or by an import, is refused, because
+    the name a test calls then denotes the later binding
+    and not the body the proof would judge. Each refusal
+    stands in the admission step, before any proof runs,
+    and fails closed.
     """
     return set(_derive_loaders(filename))
 
