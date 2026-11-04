@@ -113,85 +113,231 @@ RECORDED_LOADERS = _loader_function_names("test_recorded_corpus.py")
 def _fixtures_a_test_loads(source: str, loaders: set[str]) -> set[str]:
     """Fixture file names one test hands to a loading helper.
 
-    A name counts when the test hands the literal itself to a call of
-    one of the loading helpers, or binds the literal to a local name,
-    alone or inside a tuple or list, and hands that local name to
-    such a call, either directly or as the value a loop variable
-    takes from the binding. A name that only sits in a comment, in a
-    docstring, or in an assignment no loading call consumes is not
-    in the returned set, and neither is a name bound to a local name
-    the test never hands to a loading helper.
+    The test body is walked in program order, tracking the fixture
+    names each local name is bound to as the walk reaches each
+    statement. A name counts when a loading call hands over the
+    literal itself, or hands over a local name whose binding in
+    effect at that call carries the literal, alone or inside a
+    tuple or list, or hands over a loop variable whose binding in
+    effect at the call carries it. A name bound and then rebound
+    before the call earns credit only for the binding the call
+    actually reads, so a shadowed binding earns nothing. A name
+    that only sits in a comment, in a docstring, or in an
+    assignment no loading call consumes is not in the returned
+    set, and neither is a value the walk cannot resolve to fixture
+    name literals, such as the return of a call into another
+    module. Unresolvable shapes earn no credit, so a test shaped
+    that way fails the accounting check rather than passing it.
     """
     function = ast.parse(source).body[0]
-    fed = set()
     loaded = set()
-    for sub in ast.walk(function):
+    env = {}
+    unbound = object()
+    try_types = (ast.Try,)
+    if hasattr(ast, "TryStar"):
+        try_types = try_types + (ast.TryStar,)
+
+    def value_of(expression):
+        """The fixture names an expression may evaluate to.
+
+        The result is a frozenset of names, or None when the walk
+        cannot resolve the expression to fixture name literals. A
+        name with no binding in effect, a call, and every other
+        expression form resolve to None, so a loading call fed
+        such a value earns no fixture name.
+        """
+        if isinstance(expression, ast.Constant) and isinstance(expression.value, str):
+            return frozenset([expression.value])
+        if isinstance(expression, (ast.Tuple, ast.List)):
+            names = set()
+            for element in expression.elts:
+                part = value_of(element)
+                if part is None:
+                    return None
+                names.update(part)
+            return frozenset(names)
+        if isinstance(expression, ast.Name):
+            return env.get(expression.id)
+        if isinstance(expression, ast.Starred):
+            return value_of(expression.value)
+        return None
+
+    def target_names(target):
+        if isinstance(target, ast.Name):
+            return [target.id]
+        if isinstance(target, ast.Starred):
+            return target_names(target.value)
+        if isinstance(target, (ast.Tuple, ast.List)):
+            names = []
+            for element in target.elts:
+                names.extend(target_names(element))
+            return names
+        return []
+
+    def bind(target, value):
+        """Record one binding, with value a name set or None."""
+        if isinstance(target, ast.Name):
+            env[target.id] = value
+        elif isinstance(target, ast.Starred):
+            bind(target.value, value)
+        elif isinstance(target, (ast.Tuple, ast.List)):
+            for element in target.elts:
+                bind(element, None)
+
+    def record_call(call):
+        arguments = [*call.args, *(keyword.value for keyword in call.keywords)]
+        for argument in arguments:
+            names = value_of(argument)
+            if names:
+                loaded.update(names)
+
+    def save(names):
+        return {name: env.get(name, unbound) for name in names}
+
+    def restore(saved):
+        for name, value in saved.items():
+            if value is unbound:
+                env.pop(name, None)
+            else:
+                env[name] = value
+
+    def scan(node):
+        """Walk one expression in source order.
+
+        Loading calls are recorded as they are met, and the
+        bindings a comprehension or a lambda performs are applied
+        for the span of its body and then restored, matching the
+        scoping the interpreter itself gives them.
+        """
+        if isinstance(
+            node, (ast.ListComp, ast.SetComp, ast.GeneratorExp, ast.DictComp)
+        ):
+            names = []
+            for generator in node.generators:
+                names.extend(target_names(generator.target))
+            saved = save(names)
+            for generator in node.generators:
+                scan(generator.iter)
+                bind(generator.target, value_of(generator.iter))
+                for condition in generator.ifs:
+                    scan(condition)
+            if isinstance(node, ast.DictComp):
+                scan(node.key)
+                scan(node.value)
+            else:
+                scan(node.elt)
+            restore(saved)
+            return
+        if isinstance(node, ast.Lambda):
+            arguments = node.args
+            params = [
+                argument.arg
+                for argument in (
+                    *arguments.posonlyargs,
+                    *arguments.args,
+                    *arguments.kwonlyargs,
+                )
+            ]
+            if arguments.vararg is not None:
+                params.append(arguments.vararg.arg)
+            if arguments.kwarg is not None:
+                params.append(arguments.kwarg.arg)
+            saved = save(params)
+            for param in params:
+                env[param] = None
+            scan(node.body)
+            restore(saved)
+            return
         if (
-            isinstance(sub, ast.Call)
-            and isinstance(sub.func, ast.Name)
-            and sub.func.id in loaders
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id in loaders
         ):
-            arguments = [*sub.args, *(kw.value for kw in sub.keywords)]
-            for argument in arguments:
-                if isinstance(argument, ast.Name):
-                    fed.add(argument.id)
-                elif isinstance(argument, ast.Starred) and isinstance(
-                    argument.value, ast.Name
-                ):
-                    fed.add(argument.value.id)
-                elif isinstance(argument, ast.Constant) and isinstance(
-                    argument.value, str
-                ):
-                    loaded.add(argument.value)
-    growing = True
-    while growing:
-        growing = False
-        for sub in ast.walk(function):
-            feeder = None
-            if isinstance(sub, ast.Assign) and isinstance(sub.value, ast.Name):
-                if any(
-                    isinstance(target, ast.Name) and target.id in fed
-                    for target in sub.targets
-                ):
-                    feeder = sub.value.id
-            if (
-                isinstance(sub, ast.For)
-                and isinstance(sub.target, ast.Name)
-                and sub.target.id in fed
-                and isinstance(sub.iter, ast.Name)
-            ):
-                feeder = sub.iter.id
-            if feeder is not None and feeder not in fed:
-                fed.add(feeder)
-                growing = True
-    for sub in ast.walk(function):
-        bound = []
-        if isinstance(sub, ast.Assign) and any(
-            isinstance(target, ast.Name) and target.id in fed for target in sub.targets
-        ):
-            bound.append(sub.value)
-        if (
-            isinstance(sub, ast.AnnAssign)
-            and isinstance(sub.target, ast.Name)
-            and sub.target.id in fed
-            and sub.value is not None
-        ):
-            bound.append(sub.value)
-        if (
-            isinstance(sub, ast.For)
-            and isinstance(sub.target, ast.Name)
-            and sub.target.id in fed
-        ):
-            bound.append(sub.iter)
-        for value in bound:
-            if isinstance(value, ast.Constant) and isinstance(value.value, str):
-                loaded.add(value.value)
-            elif isinstance(value, (ast.Tuple, ast.List)):
-                for element in value.elts:
-                    if isinstance(element, ast.Constant) and isinstance(
-                        element.value, str
-                    ):
-                        loaded.add(element.value)
+            record_call(node)
+        for child in ast.iter_child_nodes(node):
+            scan(child)
+
+    def walk_stmt(statement):
+        if isinstance(statement, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            for sub in statement.body:
+                walk_stmt(sub)
+            return
+        if isinstance(statement, ast.ClassDef):
+            for sub in statement.body:
+                walk_stmt(sub)
+            return
+        if isinstance(statement, ast.Assign):
+            scan(statement.value)
+            value = value_of(statement.value)
+            for target in statement.targets:
+                bind(target, value)
+            return
+        if isinstance(statement, ast.AnnAssign):
+            if statement.value is not None:
+                scan(statement.value)
+                bind(statement.target, value_of(statement.value))
+            return
+        if isinstance(statement, ast.AugAssign):
+            scan(statement.value)
+            if isinstance(statement.target, ast.Name):
+                env[statement.target.id] = None
+            return
+        if isinstance(statement, (ast.For, ast.AsyncFor)):
+            scan(statement.iter)
+            bind(statement.target, value_of(statement.iter))
+            for sub in statement.body:
+                walk_stmt(sub)
+            for sub in statement.orelse:
+                walk_stmt(sub)
+            return
+        if isinstance(statement, ast.While):
+            scan(statement.test)
+            for sub in statement.body:
+                walk_stmt(sub)
+            for sub in statement.orelse:
+                walk_stmt(sub)
+            return
+        if isinstance(statement, ast.If):
+            scan(statement.test)
+            for sub in statement.body:
+                walk_stmt(sub)
+            for sub in statement.orelse:
+                walk_stmt(sub)
+            return
+        if isinstance(statement, (ast.With, ast.AsyncWith)):
+            for item in statement.items:
+                scan(item.context_expr)
+                if item.optional_vars is not None:
+                    bind(item.optional_vars, None)
+            for sub in statement.body:
+                walk_stmt(sub)
+            return
+        if isinstance(statement, try_types):
+            for sub in statement.body:
+                walk_stmt(sub)
+            for handler in statement.handlers:
+                if handler.type is not None:
+                    scan(handler.type)
+                if handler.name is not None:
+                    env[handler.name] = None
+                for sub in handler.body:
+                    walk_stmt(sub)
+            for sub in statement.orelse:
+                walk_stmt(sub)
+            for sub in statement.finalbody:
+                walk_stmt(sub)
+            return
+        if isinstance(statement, ast.Delete):
+            for target in statement.targets:
+                if isinstance(target, ast.Name):
+                    env.pop(target.id, None)
+                else:
+                    scan(target)
+            return
+        scan(statement)
+
+    for statement in function.body:
+        walk_stmt(statement)
     return loaded
 
 
@@ -253,8 +399,9 @@ def test_accounting_named_tests_exist_and_load_their_fixtures():
     # The linkage proof. The named test must exist, and the test must
     # hand every fixture file the case claims to one of the recorded
     # module loading helpers, as the literal argument of the call or
-    # through a local name bound to the literal, so a test that
-    # silently stopped loading its fixture fails here. A fixture name
+    # through a local name whose binding in effect at the call
+    # carries the literal, so a test that silently stopped loading
+    # its fixture fails here. A fixture name
     # resting in a comment, a docstring, or an assignment no loading
     # call consumes does not satisfy the proof.
     for case in MANIFEST["cases"]:
