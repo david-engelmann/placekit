@@ -125,6 +125,26 @@ path holds credit for anything but the one symbolic name
 its completing paths proved. The pins below cover both
 forms, plus the positive control that keeps the raised
 counting honest.
+
+The landing red team then evaded the pass seven analysis
+in one more family, in repair pass eight, at the
+derivation's own premise about what a certified name is.
+The proofs judged a candidate by the body of one function
+definition, and never asked whether calling the name runs
+that body, or whether the module level name still denotes
+it. A generator function helper loads nothing when it is
+called, because its body is deferred entire, and a helper
+rebound by a later module level assignment, or displaced
+by a decorator at definition time, leaves the certified
+body dead code under a live name. Admission to the proofs
+now refuses all three shapes before any proof runs, a
+candidate whose own body holds a yield outside a nested
+definition, a candidate carrying a decorator, and a
+candidate whose name a later module level statement
+rebinds, and a pin holds the neighbouring async shape,
+which the candidate collection has never gathered, so its
+door cannot open in silence either. The pins below cover
+those forms.
 """
 
 from __future__ import annotations
@@ -1168,3 +1188,123 @@ def test_loader_derivation_admits_a_helper_whose_raised_path_loads_the_handed_na
         loaders,
     )
     assert loaded == {CLAIMED}
+
+
+def test_loader_derivation_refuses_a_generator_function_helper(tmp_path):
+    # Repair pass eight, red team form 15a. The helper's
+    # whole body is a yield wrapping the loading call, so
+    # the definition is a generator function and calling it
+    # runs none of its body, returning a generator nothing
+    # iterates. The proof credited the wrapped call as
+    # straight line code and adopted the helper, so a test
+    # calling it with the claimed name earned credit for a
+    # fixture no call ever opens. Admission now refuses a
+    # candidate whose own body holds a yield outside a
+    # nested definition, deferred code of the kind the
+    # guard refuses everywhere else.
+    loaders = _derived_loaders(
+        tmp_path,
+        """
+        ROOT = None
+
+
+        def reader(name):
+            return (ROOT / name).read_bytes()
+
+
+        def shadow_search(client, raw_response, name):
+            yield reader(name)
+        """,
+    )
+    assert loaders == {"reader"}
+
+
+def test_loader_derivation_refuses_a_helper_rebound_at_module_level(tmp_path):
+    # Repair pass eight, red team form 15c. The helper's
+    # body is faithful, and a module level assignment
+    # standing after the definition hands its name to a
+    # lambda that loads nothing, so the name a test calls
+    # denotes the lambda and never the certified body. The
+    # derivation collected its candidates from the
+    # definitions alone and never reconciled the name
+    # against the module's later statements. Admission now
+    # refuses a candidate whose name any later module
+    # level statement rebinds.
+    loaders = _derived_loaders(
+        tmp_path,
+        """
+        ROOT = None
+
+
+        def reader(name):
+            return (ROOT / name).read_bytes()
+
+
+        def shadow_search(client, raw_response, name):
+            return reader(name)
+
+
+        shadow_search = lambda client, raw_response, name: None
+        """,
+    )
+    assert loaders == {"reader"}
+
+
+def test_loader_derivation_refuses_a_decorated_helper(tmp_path):
+    # Repair pass eight, red team form 15d. The same
+    # unexamined binding through the definition time door.
+    # The decorator replaces the function with a lambda
+    # that loads nothing when the definition runs, and the
+    # proof judged the undecorated body alone, because a
+    # decorator is no part of the body it walks. Admission
+    # now refuses a candidate carrying any decorator, whose
+    # return the walk cannot see.
+    loaders = _derived_loaders(
+        tmp_path,
+        """
+        ROOT = None
+
+
+        def reader(name):
+            return (ROOT / name).read_bytes()
+
+
+        def swallower(function):
+            return lambda client, raw_response, name: None
+
+
+        @swallower
+        def shadow_search(client, raw_response, name):
+            return reader(name)
+        """,
+    )
+    assert loaders == {"reader"}
+
+
+def test_loader_derivation_refuses_an_async_helper(tmp_path):
+    # Repair pass eight, red team form 15b, the boundary
+    # of the family. An async helper's body is deferred in
+    # the same way, a call returning a coroutine nothing
+    # awaits, and it is refused today because the candidate
+    # collection gathers plain function definitions alone
+    # and never hands an async definition to a proof. The
+    # proof handed the node directly would admit the body,
+    # so the refusal rests on the collection and nowhere
+    # else. This pin names the shape, so a widening of the
+    # collection made for any innocent reason fails here
+    # instead of opening the door in silence.
+    loaders = _derived_loaders(
+        tmp_path,
+        """
+        ROOT = None
+
+
+        def reader(name):
+            return (ROOT / name).read_bytes()
+
+
+        async def shadow_search(client, raw_response, name):
+            return reader(name)
+        """,
+    )
+    assert loaders == {"reader"}
