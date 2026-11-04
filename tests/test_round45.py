@@ -122,7 +122,7 @@ def _squeezed(text):
 
 def test_save_docstring_states_the_leftover_behaviour():
     doc = _squeezed(PhotoMedia.save.__doc__ or "")
-    assert "non atomic" in doc
+    assert "non-atomic" in doc
     assert "zero byte" in doc
     assert "truncated before the write begins" in doc
     assert "shorter than the file it replaced" in doc

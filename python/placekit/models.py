@@ -2436,7 +2436,7 @@ class PhotoMedia:
         An existing file at ``path`` is overwritten. The parent
         directory must already exist.
 
-        The write is a single non atomic write. A save refused
+        The write is a single non-atomic write. A save refused
         part way leaves what was written at ``path``, so a write
         refused before any bytes land leaves a zero byte file and
         a write refused part way through leaves the bytes written
