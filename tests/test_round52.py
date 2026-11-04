@@ -185,6 +185,32 @@ on the call, so an installer that is never called
 refuses nothing and the name keeps the body it was
 certified on. The pins below cover the form and the
 boundary that keeps the refusal honest.
+
+The landing red team then evaded the pass ten analysis
+in one more family, in repair pass eleven, inside the
+execution reading the pass added. That reading followed
+a module level call exactly one body deep and only
+into the plain definitions standing after a candidate,
+so a faithful helper whose name an installer rewrote
+through a second called definition, or through a call
+standing in the body of a class at module level, or
+through the constructor of a class the module level
+constructed, or from an installer standing before it
+and called after it, kept its certification while the
+name denoted a lambda that loads nothing. Admission
+now gathers the write sets from every module level
+definition and from the constructor method of every
+module level class, wherever they stand, and reads
+the executions standing after a candidate as a reach
+that closes over the calls those executions make,
+counting the bodies of classes standing at module
+level among the executing statements and a call
+naming a class as a call into its constructor. The
+refusal still keys on the execution, so a chain no
+statement calls and a class no statement constructs
+refuse nothing. The pins below cover those forms and
+the reachability boundaries that keep the refusal
+honest.
 """
 
 from __future__ import annotations
@@ -1527,6 +1553,220 @@ def test_loader_derivation_admits_a_helper_beside_an_uncalled_installer(tmp_path
         def _install_shadow():
             global shadow_search
             shadow_search = lambda client, raw_response, name: None
+        """,
+    )
+    assert loaders == {"reader", "shadow_search"}
+
+
+def test_loader_derivation_refuses_a_helper_rewritten_through_an_intermediary(tmp_path):
+    # Repair pass eleven, red team form 18a. The module
+    # level calls a second definition whose body calls
+    # the installer, so the execution reaches the global
+    # write through two bodies. The pass ten reading
+    # followed a module level call exactly one body deep,
+    # and the call that names the installer stands inside
+    # the intermediary, behind the definition boundary
+    # its call gathering would not cross. The reach now
+    # closes over the calls a called body makes in turn.
+    loaders = _derived_loaders(
+        tmp_path,
+        """
+        ROOT = None
+
+
+        def reader(name):
+            return (ROOT / name).read_bytes()
+
+
+        def shadow_search(client, raw_response, name):
+            return reader(name)
+
+
+        def _install_shadow():
+            global shadow_search
+            shadow_search = lambda client, raw_response, name: None
+
+
+        def _run_installer():
+            _install_shadow()
+
+
+        _run_installer()
+        """,
+    )
+    assert loaders == {"reader"}
+
+
+def test_loader_derivation_refuses_a_helper_rewritten_from_a_class_body(tmp_path):
+    # Repair pass eleven, red team form 18b. A class
+    # standing at module level holds the installer call
+    # in its body, and a class body executes as the
+    # module loads, in source order, exactly as a bare
+    # statement does. The pass ten call gathering
+    # returned at the class definition without entering
+    # its body. The bodies of classes standing at module
+    # level now count among the executing statements the
+    # reach is read from.
+    loaders = _derived_loaders(
+        tmp_path,
+        """
+        ROOT = None
+
+
+        def reader(name):
+            return (ROOT / name).read_bytes()
+
+
+        def shadow_search(client, raw_response, name):
+            return reader(name)
+
+
+        def _install_shadow():
+            global shadow_search
+            shadow_search = lambda client, raw_response, name: None
+
+
+        class _LoadTrigger:
+            _install_shadow()
+        """,
+    )
+    assert loaders == {"reader"}
+
+
+def test_loader_derivation_refuses_a_helper_rewritten_through_a_constructor(tmp_path):
+    # Repair pass eleven, red team form 18c. The
+    # rewriting definition is the constructor method of
+    # a class the module level constructs, and the pass
+    # ten installer gathering consulted the write sets
+    # of plain definitions alone, so the constructor
+    # write set was never gathered. The write set of the
+    # constructor method now stands for the class name,
+    # and a call naming the class counts as a call into
+    # it.
+    loaders = _derived_loaders(
+        tmp_path,
+        """
+        ROOT = None
+
+
+        def reader(name):
+            return (ROOT / name).read_bytes()
+
+
+        def shadow_search(client, raw_response, name):
+            return reader(name)
+
+
+        class _ShadowInstaller:
+            def __init__(self):
+                global shadow_search
+                shadow_search = lambda client, raw_response, name: None
+
+
+        _ShadowInstaller()
+        """,
+    )
+    assert loaders == {"reader"}
+
+
+def test_loader_derivation_refuses_a_helper_rewritten_by_an_installer_standing_before_it(tmp_path):
+    # Repair pass eleven, the spec review sibling of
+    # form 17a. The installer stands before the helper
+    # in the module and the call stands after it, and
+    # the pass ten gathering was scoped to definitions
+    # standing after the candidate, so the installer was
+    # never gathered even though the call runs after the
+    # helper is defined and leaves the name denoting the
+    # lambda. The write sets are now gathered from the
+    # whole module, wherever a definition stands, while
+    # the reach is still read from the executions
+    # standing after the candidate alone.
+    loaders = _derived_loaders(
+        tmp_path,
+        """
+        ROOT = None
+
+
+        def reader(name):
+            return (ROOT / name).read_bytes()
+
+
+        def _install_shadow():
+            global shadow_search
+            shadow_search = lambda client, raw_response, name: None
+
+
+        def shadow_search(client, raw_response, name):
+            return reader(name)
+
+
+        _install_shadow()
+        """,
+    )
+    assert loaders == {"reader"}
+
+
+def test_loader_derivation_admits_a_helper_beside_a_chain_never_called(tmp_path):
+    # Repair pass eleven, the boundary. The intermediary
+    # and the installer of form 18a stand in the module
+    # and no statement calls the intermediary, so nothing
+    # executes the installer and the name still denotes
+    # the faithful body. The reach begins at a statement
+    # that executes and not at the presence of the chain,
+    # so the helper derives beside the reader it loads
+    # through.
+    loaders = _derived_loaders(
+        tmp_path,
+        """
+        ROOT = None
+
+
+        def reader(name):
+            return (ROOT / name).read_bytes()
+
+
+        def shadow_search(client, raw_response, name):
+            return reader(name)
+
+
+        def _install_shadow():
+            global shadow_search
+            shadow_search = lambda client, raw_response, name: None
+
+
+        def _run_installer():
+            _install_shadow()
+        """,
+    )
+    assert loaders == {"reader", "shadow_search"}
+
+
+def test_loader_derivation_admits_a_helper_beside_a_class_never_constructed(tmp_path):
+    # Repair pass eleven, the boundary. The class of
+    # form 18c stands in the module and no statement
+    # constructs it, so its constructor never runs and
+    # the name still denotes the faithful body. The
+    # refusal keys on the execution and not on the
+    # presence of the class, so the helper derives
+    # beside the reader it loads through.
+    loaders = _derived_loaders(
+        tmp_path,
+        """
+        ROOT = None
+
+
+        def reader(name):
+            return (ROOT / name).read_bytes()
+
+
+        def shadow_search(client, raw_response, name):
+            return reader(name)
+
+
+        class _ShadowInstaller:
+            def __init__(self):
+                global shadow_search
+                shadow_search = lambda client, raw_response, name: None
         """,
     )
     assert loaders == {"reader", "shadow_search"}
