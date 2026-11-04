@@ -433,7 +433,16 @@ def _later_call_rewrites(module_body, position, name) -> bool:
     the class name beside the write sets of the plain
     definitions, and the bodies a call into either can
     run stand beside them for the reach to read their
-    calls from.
+    calls from. The subclass hooks of a class stand
+    beside its construction methods for the reach.
+    Defining a subclass calls the dunder init subclass
+    method of each base the subclass names, so the hooks
+    a class definition can run gather from the module
+    level base classes it names, resolved by plain name
+    through the base chain to its end, each hook
+    counting the names its body assigns under a global
+    declaration and its body standing as a body the
+    reach can read calls from.
 
     The executions that can reach such a write are the
     ones the module level performs after the candidate's
@@ -446,7 +455,17 @@ def _later_call_rewrites(module_body, position, name) -> bool:
     is read for the calls it makes in turn, and a class
     the reach constructs brings the calls of its
     construction methods into the reach beside its
-    write set. The parts of a statement that evaluate
+    write set. A class definition standing in an
+    executing position performs two executions more
+    that wear no call shape in the source. It calls the
+    subclass hooks of the bases it names, whose bodies
+    join the reach as the body of a called definition
+    does, and when its metaclass keyword names a module
+    level class it calls that class to construct it, so
+    the reach counts the keyword as a call into the
+    construction write set gathered for that name,
+    whose method bodies join the reach the same way.
+    The parts of a statement that evaluate
     as the statement itself runs are read beside the
     calls standing in it. A definition standing in an
     executing position, at the module level, in a class
@@ -460,10 +479,17 @@ def _later_call_rewrites(module_body, position, name) -> bool:
     call whose callee is a lambda runs that lambda body
     as the call runs, so the reach reads the body
     beside the call, while a lambda no statement
-    invokes contributes nothing past its defaults. The
-    candidate is refused when the reach calls a
-    definition or a construction whose write set holds
-    the name.
+    invokes contributes nothing past its defaults. A
+    class standing in an executing position performs
+    its header the same way, its decorator expressions,
+    its base expressions, and its keyword values, at
+    the module level and inside a body the reach has
+    entered alike, while its body inside such a body
+    stays deferred on the same terms as a definition's
+    body. The candidate is refused when the reach calls
+    a definition or a construction whose write set
+    holds the name, or runs a subclass hook whose write
+    set holds it.
 
     The refusal keys on the execution, so an installer
     no call reaches refuses nothing, and a call standing
@@ -477,9 +503,11 @@ def _later_call_rewrites(module_body, position, name) -> bool:
     body of a further definition and at a class body,
     whose calls run on their own time and not on the
     module's, while the header of the further definition
-    is read beside the calls around it, because the
-    enclosing body performs those evaluations itself
-    when it runs the statement.
+    and the header of a class in the same position are
+    read beside the calls around it, and the executions
+    the class creation performs are counted with them,
+    because the enclosing body performs those
+    evaluations itself when it runs the statement.
     """
     writes = {}
     callees = {}
@@ -527,10 +555,36 @@ def _later_call_rewrites(module_body, position, name) -> bool:
     for class_name, nodes in class_nodes.items():
         for class_node in nodes:
             gather_construction(class_name, class_node, {class_name})
+
+    def subclass_hooks(node, seen):
+        bodies = []
+        write_set = set()
+        for base in node.bases:
+            if (
+                isinstance(base, ast.Name)
+                and base.id in class_nodes
+                and base.id not in seen
+            ):
+                for base_node in class_nodes[base.id]:
+                    for member in base_node.body:
+                        if (
+                            isinstance(member, ast.FunctionDef)
+                            and member.name == "__init_subclass__"
+                        ):
+                            bodies.append(member.body)
+                            write_set.update(_global_write_set(member))
+                    child_bodies, child_writes = subclass_hooks(
+                        base_node, seen | {base.id}
+                    )
+                    bodies.extend(child_bodies)
+                    write_set.update(child_writes)
+        return bodies, write_set
+
     targets = {key for key, write_set in writes.items() if name in write_set}
 
     def calls(statements, enter_class_bodies):
         found = []
+        created = []
 
         def visit_arguments(arguments):
             for default in arguments.defaults:
@@ -567,9 +621,10 @@ def _later_call_rewrites(module_body, position, name) -> bool:
                         visit(default)
                 return
             if isinstance(node, ast.ClassDef):
+                created.append(node)
+                for part in (*node.decorator_list, *node.bases, *node.keywords):
+                    visit(part)
                 if enter_class_bodies:
-                    for part in (*node.decorator_list, *node.bases, *node.keywords):
-                        visit(part)
                     for member in node.body:
                         visit(member)
                 return
@@ -591,12 +646,26 @@ def _later_call_rewrites(module_body, position, name) -> bool:
 
         for statement in statements:
             visit(statement)
-        return found
+        return found, created
 
     seen = set()
     queue = [calls(module_body[position + 1 :], True)]
     while queue:
-        for called in queue.pop():
+        found, created = queue.pop()
+        for node in created:
+            hook_bodies, hook_writes = subclass_hooks(node, frozenset())
+            if name in hook_writes:
+                return True
+            for body in hook_bodies:
+                queue.append(calls(body, False))
+            for keyword in node.keywords:
+                if (
+                    keyword.arg == "metaclass"
+                    and isinstance(keyword.value, ast.Name)
+                    and keyword.value.id in class_nodes
+                ):
+                    queue.append(([keyword.value.id], []))
+        for called in found:
             if called in targets:
                 return True
             if called in seen:
@@ -638,7 +707,11 @@ def _derive_loaders(filename: str) -> dict:
     a class names, and the reach closing over the calls
     the statements after it make, through the bodies
     those calls run, the headers a definition statement
-    performs as it runs, and the bodies of the lambdas
+    performs as it runs, the headers a class statement
+    performs as it runs, the executions a class creation
+    performs through the subclass hooks of the bases it
+    names and through the construction of the metaclass
+    its keyword names, and the bodies of the lambdas
     a statement invokes, because the proofs judge one
     body and each of those shapes can leave the name
     denoting a callable that body never runs in.
@@ -760,7 +833,15 @@ def _loader_function_names(filename: str) -> set[str]:
     classes they construct, reading beside those calls
     the parts of a definition that evaluate as its
     statement runs, its decorator expressions and its
-    default values and its annotations, and the body
+    default values and its annotations, the parts of
+    a class that evaluate as its statement runs, its
+    decorator expressions and its base expressions and
+    its keyword values, in any executing position, and
+    the executions a class creation performs, a call
+    into the subclass hooks of the module level bases
+    the class names, resolved by plain name through
+    the base chain, and a call into the construction
+    of the metaclass its keyword names, and the body
     of a lambda a call invokes where it stands, because
     the name then denotes what the execution leaves
     behind rather than the body under proof. The refusal
