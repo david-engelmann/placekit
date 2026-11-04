@@ -27,6 +27,22 @@ the region ends holding the identical binding, and it applies
 walrus bindings at their position in the walk. The pins below
 cover those forms, plus the positive controls that keep the
 join honest.
+
+The landing red team then evaded the pass two analysis six
+more ways, in repair pass three, by placing the loading call
+itself where the interpreter never takes it. The fork and the
+join governed bindings only, and the credited set was a single
+shared set any walked call could write into, so a call in an
+untaken conditional arm, a zero trip loop body, an exception
+handler, or an unmatched match arm earned full credit, and so
+did a call inside a nested function or a lambda that was never
+invoked. The analysis now forks the credited set with the
+environment at every region and joins it by intersection, so
+a fixture counts only when a loading call resolving to it runs
+on every path, it never walks a deferred body, and it keeps
+loop body credit only for the loops it can prove run at least
+once. The pins below cover those forms, plus the positive
+controls that keep the intersection honest.
 """
 
 from __future__ import annotations
@@ -228,6 +244,168 @@ def test_linkage_walrus_handing_the_name_to_the_call_still_credits():
         f"""
         def test_shape(client, raw_response):
             result = search(client, raw_response, (fixture_name := "{CLAIMED}"))
+        """
+    )
+    assert loaded == {CLAIMED}
+
+
+def test_linkage_call_in_an_untaken_conditional_arm_earns_no_credit():
+    # Repair pass three, red team form 5a. The claimed name is
+    # handed to the loader only inside a conditional arm the
+    # runtime never takes, while the live call loads the other
+    # fixture. The arm is one path through the region and the
+    # untouched path is the other, so the intersection of the
+    # credited sets holds nothing from the arm.
+    loaded = _loads(
+        f"""
+        def test_shape(client, raw_response):
+            fixture_name = "{OTHER}"
+            if client is None:
+                dead = search(client, raw_response, "{CLAIMED}")
+            result = search(client, raw_response, fixture_name)
+        """
+    )
+    assert loaded == {OTHER}
+
+
+def test_linkage_call_in_a_zero_trip_loop_body_earns_no_credit():
+    # Repair pass three, red team form 5b. The claimed name is
+    # handed to the loader only inside a loop body that iterates
+    # over an empty tuple, so the body never runs. The zero trip
+    # path joins the intersection, so the body credit earns
+    # nothing and only the live call after the loop counts.
+    loaded = _loads(
+        f"""
+        def test_shape(client, raw_response):
+            fixture_name = "{OTHER}"
+            for _unused in ():
+                dead = search(client, raw_response, "{CLAIMED}")
+            result = search(client, raw_response, fixture_name)
+        """
+    )
+    assert loaded == {OTHER}
+
+
+def test_linkage_call_in_an_exception_handler_earns_no_credit():
+    # Repair pass three, red team form 5c. The claimed name is
+    # handed to the loader only inside an exception handler, and
+    # the try body completes without raising, so the handler
+    # never runs. The handler path and the body path join by
+    # intersection, so the handler credit earns nothing.
+    loaded = _loads(
+        f"""
+        def test_shape(client, raw_response):
+            fixture_name = "{OTHER}"
+            try:
+                pass
+            except Exception:
+                dead = search(client, raw_response, "{CLAIMED}")
+            result = search(client, raw_response, fixture_name)
+        """
+    )
+    assert loaded == {OTHER}
+
+
+def test_linkage_call_in_an_uncalled_nested_function_earns_no_credit():
+    # Repair pass three, red team form 5d. The claimed name is
+    # handed to the loader only inside a nested function the
+    # test defines and never calls. A deferred body is never
+    # walked, so its calls earn no credit, the same helper
+    # treatment a call into another module receives.
+    loaded = _loads(
+        f"""
+        def test_shape(client, raw_response):
+            fixture_name = "{OTHER}"
+            def deferred():
+                return search(client, raw_response, "{CLAIMED}")
+            result = search(client, raw_response, fixture_name)
+        """
+    )
+    assert loaded == {OTHER}
+
+
+def test_linkage_call_in_an_unmatched_match_arm_earns_no_credit():
+    # Repair pass three, red team form 5e. The claimed name is
+    # handed to the loader only inside a match arm whose pattern
+    # the subject never fits. The path where no arm fits joins
+    # the intersection beside each arm, so the arm credit earns
+    # nothing.
+    loaded = _loads(
+        f"""
+        def test_shape(client, raw_response):
+            fixture_name = "{OTHER}"
+            match 1:
+                case 2:
+                    dead = search(client, raw_response, "{CLAIMED}")
+                case _:
+                    pass
+            result = search(client, raw_response, fixture_name)
+        """
+    )
+    assert loaded == {OTHER}
+
+
+def test_linkage_call_in_an_uninvoked_lambda_earns_no_credit():
+    # Repair pass three, red team form 5f. The claimed name is
+    # handed to the loader only inside a lambda the test binds
+    # and never invokes. A lambda body is deferred code and is
+    # never walked, so the call inside it earns no credit.
+    loaded = _loads(
+        f"""
+        def test_shape(client, raw_response):
+            fixture_name = "{OTHER}"
+            deferred = lambda: search(client, raw_response, "{CLAIMED}")
+            result = search(client, raw_response, fixture_name)
+        """
+    )
+    assert loaded == {OTHER}
+
+
+def test_linkage_call_in_both_conditional_arms_still_credits():
+    # Positive control for the intersection. Both arms of the
+    # conditional hand the claimed name to the loader, so the
+    # call runs on every path and the credit survives the join.
+    # The intersection refuses credit a path skips, not credit
+    # every path records.
+    loaded = _loads(
+        f"""
+        def test_shape(client, raw_response):
+            if client is not None:
+                result = search(client, raw_response, "{CLAIMED}")
+            else:
+                result = search(client, raw_response, "{CLAIMED}")
+        """
+    )
+    assert loaded == {CLAIMED}
+
+
+def test_linkage_call_in_a_finally_arm_still_credits():
+    # Positive control for the try join. The finally arm runs on
+    # every path, so it walks as straight line code after the
+    # join and a loading call inside it earns ordinary credit.
+    loaded = _loads(
+        f"""
+        def test_shape(client, raw_response):
+            try:
+                pass
+            finally:
+                result = search(client, raw_response, "{CLAIMED}")
+        """
+    )
+    assert loaded == {CLAIMED}
+
+
+def test_linkage_call_in_a_nonempty_literal_loop_still_credits():
+    # Positive control for the loop exemption. The loop runs
+    # over a literal tuple with two elements and its body
+    # carries no break, continue, return, or raise, so the body
+    # is proven to run and the credit its call records survives
+    # the join without a zero trip path in the intersection.
+    loaded = _loads(
+        f"""
+        def test_shape(client, raw_response):
+            for _unused in ("one", "two"):
+                result = search(client, raw_response, "{CLAIMED}")
         """
     )
     assert loaded == {CLAIMED}
