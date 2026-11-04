@@ -343,7 +343,11 @@ def _later_statement_rebinds(statements, name) -> bool:
     it carries. A star import may bind any name at all,
     so it rebinds every name it follows. The search never
     enters a nested definition or a class body, whose
-    assignments bind in their own scopes.
+    assignments bind in their own scopes. A rewrite
+    executed through a definition the module level calls
+    is read by a separate reading beside this one, since
+    it turns on an execution standing in a statement
+    rather than on a binding standing in one.
     """
     if any(name in targets for targets, _value in _assignment_pairs(statements)):
         return True
@@ -378,6 +382,93 @@ def _later_statement_rebinds(statements, name) -> bool:
     return any(visit(statement) for statement in statements)
 
 
+def _global_write_set(node) -> set:
+    """The names a definition assigns under a global declaration.
+
+    A global declaration standing anywhere in the
+    definition's subtree counts, at any depth, and a
+    name counts only when the subtree also assigns it,
+    through a plain or valued annotated assignment, a
+    walrus binding, a loop target, or an augmented
+    assignment. The reading is the over reading the
+    walk takes for the write backs it poisons, since a
+    reading cannot see which nested body a call into
+    the definition reaches, and a missed write back
+    could only certify a body the name no longer
+    denotes once the definition has run.
+    """
+    declared = set()
+    assigned = set()
+    for sub in ast.walk(node):
+        if isinstance(sub, ast.Global):
+            declared.update(sub.names)
+        elif isinstance(sub, ast.Assign):
+            for target in sub.targets:
+                assigned.update(_target_names(target))
+        elif isinstance(sub, ast.AnnAssign) and sub.value is not None:
+            assigned.update(_target_names(sub.target))
+        elif isinstance(sub, ast.AugAssign):
+            assigned.update(_target_names(sub.target))
+        elif isinstance(sub, ast.NamedExpr):
+            assigned.update(_target_names(sub.target))
+        elif isinstance(sub, (ast.For, ast.AsyncFor)):
+            assigned.update(_target_names(sub.target))
+    return declared & assigned
+
+
+def _later_call_rewrites(statements, name) -> bool:
+    """Whether a later statement calls a definition that rewrites the name.
+
+    A definition standing among the statements, or in
+    an arm of a compound statement among them, is an
+    installer for the name when its global write set
+    holds the name, and the name is rewritten when a
+    statement standing among the statements, bare or in
+    an arm of one, calls such a definition, because the
+    call runs the definition as the module loads and
+    the name then denotes what the call leaves behind
+    rather than the body a proof would judge. The
+    refusal keys on the call, so an installer that is
+    never called refuses nothing. An asynchronous
+    definition is no installer, because calling it runs
+    none of its body. The search never enters a nested
+    definition or a class body, at the reach the rebind
+    reading gives the statements it is handed, since a
+    call standing in one runs in its own scope and on
+    its own time.
+    """
+    installers = {}
+
+    def definitions(node):
+        if isinstance(node, ast.FunctionDef):
+            writes = _global_write_set(node)
+            if writes:
+                installers.setdefault(node.name, set()).update(writes)
+            return
+        if isinstance(node, (ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda)):
+            return
+        for child in ast.iter_child_nodes(node):
+            definitions(child)
+
+    for statement in statements:
+        definitions(statement)
+    targets = {key for key, writes in installers.items() if name in writes}
+    if not targets:
+        return False
+
+    def calls(node):
+        if isinstance(
+            node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda)
+        ):
+            return False
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+            if node.func.id in targets:
+                return True
+        return any(calls(child) for child in ast.iter_child_nodes(node))
+
+    return any(calls(statement) for statement in statements)
+
+
 def _derive_loaders(filename: str) -> dict:
     """The loader name slots derived from a module, by name.
 
@@ -398,8 +489,11 @@ def _derive_loaders(filename: str) -> dict:
     candidate passes an admission step of its own, which
     refuses a definition whose body holds a yield outside a
     nested definition, a definition carrying a decorator,
-    and a definition whose name a later module level
-    statement rebinds, because the proofs judge one body and
+    a definition whose name a later module level
+    statement rebinds, and a definition whose name a
+    later module level statement rewrites by calling a
+    definition that assigns the name under a global
+    declaration, because the proofs judge one body and
     each of those shapes can leave the name denoting a
     callable that body never runs in.
     """
@@ -415,6 +509,8 @@ def _derive_loaders(filename: str) -> dict:
         if _body_holds_a_yield(node.body):
             continue
         if _later_statement_rebinds(tree.body[position + 1 :], node.name):
+            continue
+        if _later_call_rewrites(tree.body[position + 1 :], node.name):
             continue
         helpers[node.name] = node
     seeds = {}
@@ -497,8 +593,18 @@ def _loader_function_names(filename: str) -> set[str]:
     definition or class of the same name, or by an import,
     is refused, because the name a test calls then denotes
     the later binding and not the body the proof would
-    judge. Each refusal stands in the admission step,
-    before any proof runs, and fails closed.
+    judge. And a candidate whose name a definition
+    standing after it assigns under a global declaration
+    is refused when a later module level statement calls
+    that definition, standing bare or in an arm of a
+    compound statement among the later statements,
+    because the call runs the definition as the module
+    loads and the name then denotes what the call leaves
+    behind, while an installer that is never called
+    refuses nothing, since the name still denotes the
+    body it was certified on. Each refusal stands in the
+    admission step, before any proof runs, and fails
+    closed.
     """
     return set(_derive_loaders(filename))
 
