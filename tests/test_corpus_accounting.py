@@ -421,15 +421,19 @@ def _later_call_rewrites(module_body, position, name) -> bool:
 
     The names a body can rewrite are gathered from the
     whole module, from every module level definition and
-    from the constructor method of every module level
+    from the construction methods of every module level
     class, wherever they stand, a name counting when
     the body assigns it under a global declaration. A
-    call naming a class runs its constructor as the
-    class is constructed, so the write set of the
-    constructor method stands for the class name beside
-    the write sets of the plain definitions, and the
-    bodies a call into either can run stand beside them
-    for the reach to read their calls from.
+    call naming a class runs its construction as the
+    class is constructed, so the write set of a class
+    gathers from its dunder new method beside its
+    dunder init method and from the same methods of the
+    module level base classes it names, resolved by
+    plain name to the end of the chain, and stands for
+    the class name beside the write sets of the plain
+    definitions, and the bodies a call into either can
+    run stand beside them for the reach to read their
+    calls from.
 
     The executions that can reach such a write are the
     ones the module level performs after the candidate's
@@ -441,9 +445,24 @@ def _later_call_rewrites(module_body, position, name) -> bool:
     calls, so the body of a definition the reach calls
     is read for the calls it makes in turn, and a class
     the reach constructs brings the calls of its
-    constructor into the reach beside its write set.
-    The candidate is refused when the reach calls a
-    definition or a constructor whose write set holds
+    construction methods into the reach beside its
+    write set. The parts of a statement that evaluate
+    as the statement itself runs are read beside the
+    calls standing in it. A definition standing in an
+    executing position, at the module level, in a class
+    body the reach reads, or inside a body the reach
+    has entered, performs its header as its statement
+    runs, so its decorator expressions, its default
+    values, and its annotations are read as executions
+    while its body stays deferred until a call reaches
+    it. A lambda standing in an executing position
+    performs its default values the same way, and a
+    call whose callee is a lambda runs that lambda body
+    as the call runs, so the reach reads the body
+    beside the call, while a lambda no statement
+    invokes contributes nothing past its defaults. The
+    candidate is refused when the reach calls a
+    definition or a construction whose write set holds
     the name.
 
     The refusal keys on the execution, so an installer
@@ -452,13 +471,19 @@ def _later_call_rewrites(module_body, position, name) -> bool:
     candidate's own definition binds the name after it.
     An asynchronous definition is no installer and the
     reach never enters its body, because calling it
-    runs none of it. Inside a body the reach has
-    entered, the search stops at a further definition
-    and at a class body, whose calls run on their own
-    time and not on the module's.
+    runs none of it, though its header performs at its
+    definition exactly as a plain one does. Inside a
+    body the reach has entered, the search stops at the
+    body of a further definition and at a class body,
+    whose calls run on their own time and not on the
+    module's, while the header of the further definition
+    is read beside the calls around it, because the
+    enclosing body performs those evaluations itself
+    when it runs the statement.
     """
     writes = {}
     callees = {}
+    class_nodes = {}
 
     def gather(node):
         if isinstance(node, ast.FunctionDef):
@@ -470,12 +495,7 @@ def _later_call_rewrites(module_body, position, name) -> bool:
         if isinstance(node, ast.AsyncFunctionDef):
             return
         if isinstance(node, ast.ClassDef):
-            for member in node.body:
-                if isinstance(member, ast.FunctionDef) and member.name == "__init__":
-                    write_set = _global_write_set(member)
-                    if write_set:
-                        writes.setdefault(node.name, set()).update(write_set)
-                    callees.setdefault(node.name, []).append(member.body)
+            class_nodes.setdefault(node.name, []).append(node)
             return
         if isinstance(node, ast.Lambda):
             return
@@ -484,15 +504,67 @@ def _later_call_rewrites(module_body, position, name) -> bool:
 
     for statement in module_body:
         gather(statement)
+
+    def gather_construction(class_name, node, seen):
+        for member in node.body:
+            if isinstance(member, ast.FunctionDef) and member.name in (
+                "__init__",
+                "__new__",
+            ):
+                write_set = _global_write_set(member)
+                if write_set:
+                    writes.setdefault(class_name, set()).update(write_set)
+                callees.setdefault(class_name, []).append(member.body)
+        for base in node.bases:
+            if (
+                isinstance(base, ast.Name)
+                and base.id in class_nodes
+                and base.id not in seen
+            ):
+                for base_node in class_nodes[base.id]:
+                    gather_construction(class_name, base_node, seen | {base.id})
+
+    for class_name, nodes in class_nodes.items():
+        for class_node in nodes:
+            gather_construction(class_name, class_node, {class_name})
     targets = {key for key, write_set in writes.items() if name in write_set}
 
     def calls(statements, enter_class_bodies):
         found = []
 
+        def visit_arguments(arguments):
+            for default in arguments.defaults:
+                visit(default)
+            for default in arguments.kw_defaults:
+                if default is not None:
+                    visit(default)
+            parameters = [
+                *arguments.posonlyargs,
+                *arguments.args,
+                *arguments.kwonlyargs,
+            ]
+            if arguments.vararg is not None:
+                parameters.append(arguments.vararg)
+            if arguments.kwarg is not None:
+                parameters.append(arguments.kwarg)
+            for parameter in parameters:
+                if parameter.annotation is not None:
+                    visit(parameter.annotation)
+
         def visit(node):
-            if isinstance(
-                node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)
-            ):
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                for decorator in node.decorator_list:
+                    visit(decorator)
+                visit_arguments(node.args)
+                if node.returns is not None:
+                    visit(node.returns)
+                return
+            if isinstance(node, ast.Lambda):
+                for default in node.args.defaults:
+                    visit(default)
+                for default in node.args.kw_defaults:
+                    if default is not None:
+                        visit(default)
                 return
             if isinstance(node, ast.ClassDef):
                 if enter_class_bodies:
@@ -501,8 +573,19 @@ def _later_call_rewrites(module_body, position, name) -> bool:
                     for member in node.body:
                         visit(member)
                 return
-            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
-                found.append(node.func.id)
+            if isinstance(node, ast.Call):
+                if isinstance(node.func, ast.Name):
+                    found.append(node.func.id)
+                elif isinstance(node.func, ast.Lambda):
+                    visit(node.func)
+                    visit(node.func.body)
+                else:
+                    visit(node.func)
+                for argument in node.args:
+                    visit(argument)
+                for keyword in node.keywords:
+                    visit(keyword)
+                return
             for child in ast.iter_child_nodes(node):
                 visit(child)
 
@@ -548,11 +631,16 @@ def _derive_loaders(filename: str) -> dict:
     statement rebinds, and a definition whose name an
     execution the module level reaches after it
     rewrites, the write sets gathered from every module
-    level definition and from the constructor methods
-    of module level classes wherever they stand and
-    the reach closing over the calls the statements
-    after it make, because the proofs judge one body
-    and each of those shapes can leave the name
+    level definition and from the construction methods
+    of module level classes wherever they stand, the
+    dunder new method beside the dunder init method and
+    both inherited through the module level base classes
+    a class names, and the reach closing over the calls
+    the statements after it make, through the bodies
+    those calls run, the headers a definition statement
+    performs as it runs, and the bodies of the lambdas
+    a statement invokes, because the proofs judge one
+    body and each of those shapes can leave the name
     denoting a callable that body never runs in.
     """
     path = Path(__file__).parent / filename
@@ -655,24 +743,32 @@ def _loader_function_names(filename: str) -> set[str]:
     the module level reaches after it assigns under a
     global declaration is refused. The write sets are
     gathered from every module level definition and
-    from the constructor method of every module level
-    class, wherever they stand, a call naming a class
-    counting as a call into its constructor, and the
-    reach is read from the statements standing after
-    the candidate, bare or in an arm of a compound
-    statement among them, counting the bodies of the
-    classes standing at module level among them, which
-    run as their definitions run, and closing over the
-    calls those statements make into the bodies of the
-    definitions they call and the constructors of the
-    classes they construct, because the name then
-    denotes what the execution leaves behind rather
-    than the body under proof. The refusal keys on the
-    execution, so an installer no execution reaches
-    refuses nothing, since the name still denotes the
-    body it was certified on. Each refusal stands in
-    the admission step, before any proof runs, and
-    fails closed.
+    from the construction methods of every module level
+    class, wherever they stand, the dunder new method
+    beside the dunder init method and both gathered
+    through the module level base classes a class
+    names, resolved by plain name to the end of the
+    chain, a call naming a class counting as a call
+    into its construction, and the reach is read from
+    the statements standing after the candidate, bare
+    or in an arm of a compound statement among them,
+    counting the bodies of the classes standing at
+    module level among them, which run as their
+    definitions run, and closing over the calls those
+    statements make into the bodies of the definitions
+    they call and the construction methods of the
+    classes they construct, reading beside those calls
+    the parts of a definition that evaluate as its
+    statement runs, its decorator expressions and its
+    default values and its annotations, and the body
+    of a lambda a call invokes where it stands, because
+    the name then denotes what the execution leaves
+    behind rather than the body under proof. The refusal
+    keys on the execution, so an installer no execution
+    reaches refuses nothing, since the name still
+    denotes the body it was certified on. Each refusal
+    stands in the admission step, before any proof runs,
+    and fails closed.
     """
     return set(_derive_loaders(filename))
 
