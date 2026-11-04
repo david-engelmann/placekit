@@ -2436,6 +2436,14 @@ class PhotoMedia:
         An existing file at ``path`` is overwritten. The parent
         directory must already exist.
 
+        The write is a single non atomic write. A save refused
+        part way leaves what was written at ``path``, so a write
+        refused before any bytes land leaves a zero byte file and
+        a write refused part way through leaves the bytes written
+        so far. An existing file is truncated before the write
+        begins, so a refused save can leave the target shorter
+        than the file it replaced.
+
         Filesystem failures raise the ``OSError`` family, by
         design. Saving is a local file operation rather than an
         API call, so it sits outside the ``PlacesError``
