@@ -106,6 +106,25 @@ unresolvable from the definition onward, and the seed is
 proven in the same terms with its reads standing in for
 loading calls. The pins below cover those forms, plus the
 positive control that keeps the stronger proof honest.
+
+The landing red team then evaded the pass six analysis in
+one more family, in repair pass seven, through the proofs
+themselves. Both proofs judged a candidate on the credit
+of the paths that complete alone, and a path that ends in
+a raise contributed no entry at all, so a helper that
+loaded a fixed name on a branch and then raised off it
+was judged on its honest paths, and the seed reader could
+hide the same load in the same way at the root of the
+derivation. A caller wrapping the certified helper in a
+suppressing with survives the raise and asserts on a
+fixture it loaded honestly, so the claimed name borrowed
+credit for a fixture the test never opened. The proofs
+now count the paths that end in a raise beside the paths
+that complete, and a candidate is refused when a raised
+path holds credit for anything but the one symbolic name
+its completing paths proved. The pins below cover both
+forms, plus the positive control that keeps the raised
+counting honest.
 """
 
 from __future__ import annotations
@@ -1017,6 +1036,124 @@ def test_loader_derivation_admits_a_faithful_multi_argument_helper(tmp_path):
 
 
         def faithful_search(client, raw_response, name):
+            return replay(client, raw_response, name)
+        """,
+    )
+    assert loaders == {"reader", "replay", "faithful_search"}
+    loaded = _fixtures_a_test_loads(
+        textwrap.dedent(
+            f"""
+            def test_shape(client, raw_response):
+                result = faithful_search(client, raw_response, "{CLAIMED}")
+            """
+        ),
+        loaders,
+    )
+    assert loaded == {CLAIMED}
+
+
+def test_loader_derivation_refuses_a_helper_that_loads_a_fixed_name_on_a_raised_path(
+    tmp_path,
+):
+    # Repair pass seven, red team form 14a. The helper loads
+    # a fixed name on the branch written for the claimed name
+    # and raises off that branch, returning the handed name
+    # on the fall through. The proof judged the completing
+    # paths alone, and the raised path contributed no entry,
+    # so the helper was adopted and a suppressing caller
+    # could lend the claimed name its credit. The proof now
+    # counts the raised paths beside the completing ones,
+    # and the raised path here holds the fixed name, which
+    # is not the symbolic name of the proven parameter, so
+    # the helper is refused.
+    loaders = _derived_loaders(
+        tmp_path,
+        f"""
+        ROOT = None
+
+
+        def reader(name):
+            return (ROOT / name).read_bytes()
+
+
+        def replay(client, raw_response, name):
+            return reader(name)
+
+
+        def shadow_search(client, raw_response, name):
+            if name == "{CLAIMED}":
+                replay(client, raw_response, "{OTHER}")
+                raise RuntimeError("boom")
+            return replay(client, raw_response, name)
+        """,
+    )
+    assert loaders == {"reader", "replay"}
+
+
+def test_loader_derivation_refuses_a_seed_reader_that_reads_a_fixed_name_on_a_raised_path(
+    tmp_path,
+):
+    # Repair pass seven, red team form 14b. The same shape
+    # at the root of the derivation. The reader reads a
+    # fixed name into a value nothing returns on the branch
+    # written for the claimed name and raises, reading the
+    # handed name faithfully on the completing path, so the
+    # seed proof, judging the completing paths alone, seeded
+    # the set with a poisoned reader every faithful helper
+    # above it derived through. The seed proof counts the
+    # raised paths beside the completing ones, the raised
+    # path holds the fixed name, and the reader is refused,
+    # so the helper above it derives nothing without it.
+    loaders = _derived_loaders(
+        tmp_path,
+        f"""
+        ROOT = None
+
+
+        def fixture_bytes(name):
+            if name == "{CLAIMED}":
+                (ROOT / "{OTHER}").read_bytes()
+                raise RuntimeError("boom")
+            return (ROOT / name).read_bytes()
+
+
+        def fixture_payload(name):
+            return fixture_bytes(name)
+        """,
+    )
+    assert loaders == set()
+
+
+def test_loader_derivation_admits_a_helper_whose_raised_path_loads_the_handed_name(
+    tmp_path,
+):
+    # Positive control for the raised counting. The helper
+    # loads the name it was handed on the branch it abandons
+    # with a raise and returns the handed name on the fall
+    # through, so its raised path holds credit for the
+    # handed name alone, which the counting allows, and the
+    # helper derives and credits a test that calls it. A
+    # repair that refused every candidate carrying a raised
+    # path would fail this pin, and so would one that
+    # refused the raise's own load.
+    loaders = _derived_loaders(
+        tmp_path,
+        f"""
+        ROOT = None
+
+
+        def reader(name):
+            return (ROOT / name).read_bytes()
+
+
+        def replay(client, raw_response, name):
+            return reader(name)
+
+
+        def faithful_search(client, raw_response, name):
+            if name == "{CLAIMED}":
+                replay(client, raw_response, name)
+                raise RuntimeError("boom")
             return replay(client, raw_response, name)
         """,
     )
