@@ -130,7 +130,7 @@ def _fixtures_a_test_loads(source: str, loaders: set[str]) -> set[str]:
     that way fails the accounting check rather than passing it.
 
     Control flow regions combine by a conservative join. At a
-    conditional, a loop, a try, or a match, the walk forks the
+    conditional, a loop, a try, a with, or a match, the walk forks the
     environment and the credited set together, walks each arm
     or body from the fork, and joins the results. A name keeps
     a resolved binding after the region only when every path
@@ -169,11 +169,54 @@ def _fixtures_a_test_loads(source: str, loaders: set[str]) -> set[str]:
     into another module receives, though the decorators and
     default values of a definition are scanned because they
     evaluate when the definition does.
+
+    The walk also models a path ending. A return ends its
+    path where it stands, and the credit it holds stands
+    frozen toward the whole test, because a returned test has
+    run to completion and the code after the return runs on
+    no path at all. A raise, a break, or a continue ends the
+    path of the block holding it in the same way, and the
+    statements after any of them in the same block are dead
+    code, earning no credit and no binding effects. Code
+    after a region extends only the paths that fell through
+    it, so when every path through a region ends, the rest
+    of the block holding it is dead too. A try carries a
+    raised path onward through its handlers, and a with
+    body forks like any other region, its raised paths
+    resuming after the with holding their state at the
+    raise, because a context manager may suppress the
+    exception. A raise nothing catches ends the test in
+    failure rather than in completion, so the walk counts
+    only the paths that complete.
+
+    The expression scan carries the same discipline. A
+    comprehension body earns credit only under the loop
+    exemption, on a provably nonempty literal sequence,
+    and the body of a generator expression earns nothing
+    at all, because whether it is ever consumed is
+    unprovable and its body is deferred code. The right
+    operand of a boolean operation earns credit only when
+    every operand before it is a constant that guarantees
+    its evaluation. A conditional expression forks its two
+    branches and joins them by intersection, with a name
+    resolving differently across them reading as
+    unresolvable. The message of an assert evaluates only
+    on the path where the test fails, so it earns nothing.
+    A class body walks in a forked environment whose
+    bindings are discarded when the definition ends, so
+    its assignments stay in the class namespace the
+    interpreter gives them, while a loading call written
+    in the body still earns credit, because the body runs
+    when the class is defined. Every construct the walk
+    touches is modelled in these terms or refused, and a
+    shape it cannot model resolves to no credit and fails
+    the accounting check closed.
     """
     function = ast.parse(source).body[0]
     loaded = set()
     env = {}
     unbound = object()
+    flow = {"alive": True, "finished": None, "suppress": 0}
     try_types = (ast.Try,)
     if hasattr(ast, "TryStar"):
         try_types = try_types + (ast.TryStar,)
@@ -273,11 +316,42 @@ def _fixtures_a_test_loads(source: str, loaders: set[str]) -> set[str]:
         return any(visit(statement, 0) for statement in statements)
 
     def record_call(call):
+        if flow["suppress"]:
+            # The call sits where the interpreter may skip its
+            # evaluation, so it earns no credit.
+            return
         arguments = [*call.args, *(keyword.value for keyword in call.keywords)]
         for argument in arguments:
             names = value_of(argument)
             if names:
                 loaded.update(names)
+
+    def fold_returned(credit):
+        """Freeze the credit of a path that returned.
+
+        A returned test has run to completion, so the fixtures
+        the path loaded are one of the sets the whole test is
+        intersected against, and a fixture it never loaded can
+        earn no credit from code it never reaches.
+        """
+        if flow["finished"] is None:
+            flow["finished"] = set(credit)
+        else:
+            flow["finished"].intersection_update(credit)
+
+    def scan_suppressed(node):
+        """Scan an expression whose calls earn no credit.
+
+        The expression is still walked, so the names it binds
+        are accounted for, and a walrus met under suppression
+        leaves its name unresolvable, because the binding may
+        never happen.
+        """
+        flow["suppress"] += 1
+        try:
+            scan(node)
+        finally:
+            flow["suppress"] -= 1
 
     def save(names):
         return {name: env.get(name, unbound) for name in names}
@@ -326,15 +400,53 @@ def _fixtures_a_test_loads(source: str, loaders: set[str]) -> set[str]:
         loaded.clear()
         loaded.update(credited)
 
-    def fork(statements, base_env, base_loaded, prepare=None):
-        """Walk statements along one path, returning its end state.
+    def walk_paths(statements, base_env, base_loaded, prepare=None):
+        """Walk statements along one forked path, returning its ends.
 
         The walk starts from the given environment and credited
         set, and the optional prepare step runs once that state
         is installed, before the first statement, which is how a
         loop binds its target and a try handler binds its
-        exception name. The state in force is restored before
-        returning, so the caller joins the path results itself.
+        exception name. Each end is the environment, the
+        credited set, and the way the path ended, one of falling
+        through, returning, raising, breaking, or continuing,
+        and a block that meets a statement ending its path
+        walks no further statements on it. The state in force
+        is restored before returning, so the caller joins the
+        path results itself.
+        """
+        saved_env = dict(env)
+        saved_loaded = set(loaded)
+        saved_alive = flow["alive"]
+        env.clear()
+        env.update(base_env)
+        loaded.clear()
+        loaded.update(base_loaded)
+        flow["alive"] = True
+        if prepare is not None:
+            prepare()
+        completed = []
+        for sub in statements:
+            if not flow["alive"]:
+                break
+            walk_stmt(sub, completed)
+        ends = list(completed)
+        if flow["alive"]:
+            ends.append((dict(env), set(loaded), "fall"))
+        env.clear()
+        env.update(saved_env)
+        loaded.clear()
+        loaded.update(saved_loaded)
+        flow["alive"] = saved_alive
+        return ends
+
+    def fork_scan(expression, base_env, base_loaded):
+        """Scan one expression from a forked state, returning its end.
+
+        The end is the environment and the credited set the
+        expression leaves behind, and the state in force is
+        restored before returning, so the caller joins the
+        branch results itself.
         """
         saved_env = dict(env)
         saved_loaded = set(loaded)
@@ -342,10 +454,7 @@ def _fixtures_a_test_loads(source: str, loaders: set[str]) -> set[str]:
         env.update(base_env)
         loaded.clear()
         loaded.update(base_loaded)
-        if prepare is not None:
-            prepare()
-        for sub in statements:
-            walk_stmt(sub)
+        scan(expression)
         result = (dict(env), set(loaded))
         env.clear()
         env.update(saved_env)
@@ -353,25 +462,63 @@ def _fixtures_a_test_loads(source: str, loaders: set[str]) -> set[str]:
         loaded.update(saved_loaded)
         return result
 
-    def walk_loop(body, orelse, guaranteed, prepare=None):
+    def join_ends(ends, completed):
+        """Join the path ends of a region into the live state.
+
+        The paths that fell through the region merge by the
+        binding and credit rules of join_paths, and the merged
+        state is live for the code after the region. A path
+        that broke or continued out of the region is handed to
+        the enclosing block as an ended path of its own, and a
+        path that returned was already frozen toward the whole
+        test when it ended, while a path that raised is one
+        the region itself carries onward or drops. When no
+        path fell through, the live state is dead and the
+        rest of the enclosing block walks nothing.
+        """
+        fall = [
+            (path_env, path_loaded)
+            for path_env, path_loaded, kind in ends
+            if kind == "fall"
+        ]
+        for end in ends:
+            if end[2] in ("break", "continue"):
+                completed.append(end)
+        if fall:
+            join_paths(fall)
+            flow["alive"] = True
+        else:
+            flow["alive"] = False
+
+    def walk_loop(body, orelse, guaranteed, prepare, completed):
         """Walk one loop body and its else arm as forked paths.
 
-        The path ends feeding the join are the end of the body
-        pass, the end of the else arm walked from the body end,
-        and the end of the else arm walked from the state before
-        the loop. The third end is the zero trip path, and it
-        joins only when the loop is not proven to run its body
-        at least once, so credit recorded in a body that may
-        never run earns nothing, while credit in a proven body
-        pass survives the join.
+        The path ends feeding the join are the ends of the
+        body passes that fall through or continue, each beside
+        the end of the else arm walked from it, the ends of
+        the body passes that break out of the loop, which
+        reach the code after the loop without the else arm,
+        and the end of the else arm walked from the state
+        before the loop. The last end is the zero trip path,
+        and it joins only when the loop is not proven to run
+        its body at least once, so credit recorded in a body
+        that may never run earns nothing, while credit in a
+        proven body pass survives the join.
         """
         pre_env = dict(env)
         pre_loaded = set(loaded)
-        body_end = fork(body, pre_env, pre_loaded, prepare)
-        path_states = [body_end, fork(orelse, *body_end)]
+        path_ends = []
+        for end_env, end_loaded, kind in walk_paths(
+            body, pre_env, pre_loaded, prepare
+        ):
+            if kind in ("fall", "continue"):
+                path_ends.append((end_env, end_loaded, "fall"))
+                path_ends.extend(walk_paths(orelse, end_env, end_loaded))
+            elif kind == "break":
+                path_ends.append((end_env, end_loaded, "fall"))
         if not guaranteed:
-            path_states.append(fork(orelse, pre_env, pre_loaded))
-        join_paths(path_states)
+            path_ends.extend(walk_paths(orelse, pre_env, pre_loaded))
+        join_ends(path_ends, completed)
 
     def scan(node):
         """Walk one expression in source order.
@@ -380,26 +527,100 @@ def _fixtures_a_test_loads(source: str, loaders: set[str]) -> set[str]:
         bindings a comprehension performs are applied for the
         span of its body and then restored, matching the scoping
         the interpreter itself gives them. A lambda body is
-        deferred code and is never walked.
+        deferred code and is never walked. The parts of an
+        expression the interpreter may skip are scanned with
+        credit suppressed, so a call inside them earns nothing.
         """
-        if isinstance(
-            node, (ast.ListComp, ast.SetComp, ast.GeneratorExp, ast.DictComp)
-        ):
+        if isinstance(node, (ast.ListComp, ast.SetComp, ast.DictComp)):
+            generators = node.generators
             names = []
-            for generator in node.generators:
+            for generator in generators:
                 names.extend(target_names(generator.target))
             saved = save(names)
-            for generator in node.generators:
-                scan(generator.iter)
+            exempt = isinstance(
+                generators[0].iter, (ast.Tuple, ast.List, ast.Set)
+            ) and len(generators[0].iter.elts) >= 1
+            for index, generator in enumerate(generators):
+                if index == 0 or exempt:
+                    scan(generator.iter)
+                else:
+                    scan_suppressed(generator.iter)
                 bind(generator.target, value_of(generator.iter))
                 for condition in generator.ifs:
-                    scan(condition)
+                    if exempt:
+                        scan(condition)
+                    else:
+                        scan_suppressed(condition)
             if isinstance(node, ast.DictComp):
-                scan(node.key)
-                scan(node.value)
+                parts = (node.key, node.value)
             else:
-                scan(node.elt)
+                parts = (node.elt,)
+            for part in parts:
+                if exempt:
+                    scan(part)
+                else:
+                    scan_suppressed(part)
             restore(saved)
+            return
+        if isinstance(node, ast.GeneratorExp):
+            # A generator expression is lazy, and only the
+            # outermost iterable evaluates when the expression
+            # is created. The rest is deferred code, scanned
+            # with credit suppressed, so a loading call in its
+            # body earns nothing, as a call in a lambda body
+            # earns nothing.
+            generators = node.generators
+            names = []
+            for generator in generators:
+                names.extend(target_names(generator.target))
+            saved = save(names)
+            scan(generators[0].iter)
+            for index, generator in enumerate(generators):
+                if index > 0:
+                    scan_suppressed(generator.iter)
+                bind(generator.target, value_of(generator.iter))
+                for condition in generator.ifs:
+                    scan_suppressed(condition)
+            scan_suppressed(node.elt)
+            restore(saved)
+            return
+        if isinstance(node, ast.BoolOp):
+            # An operand after the first evaluates only when
+            # every operand before it holds the truth the
+            # operation needs, so it earns credit only when
+            # every one of them is a constant guaranteeing
+            # exactly that, and is otherwise scanned with
+            # credit suppressed.
+            guaranteed = True
+            for index, value in enumerate(node.values):
+                if index == 0 or guaranteed:
+                    scan(value)
+                else:
+                    scan_suppressed(value)
+                if isinstance(node.op, ast.And):
+                    guaranteed = (
+                        guaranteed
+                        and isinstance(value, ast.Constant)
+                        and bool(value.value)
+                    )
+                else:
+                    guaranteed = (
+                        guaranteed
+                        and isinstance(value, ast.Constant)
+                        and not bool(value.value)
+                    )
+            return
+        if isinstance(node, ast.IfExp):
+            # A conditional expression evaluates its test and
+            # then exactly one of its branches, so the branches
+            # fork and join by intersection, and a name bound
+            # differently across them reads as unresolvable.
+            scan(node.test)
+            base_env = dict(env)
+            base_loaded = set(loaded)
+            body_end = fork_scan(node.body, base_env, base_loaded)
+            else_end = fork_scan(node.orelse, base_env, base_loaded)
+            join_paths([body_end, else_end])
             return
         if isinstance(node, ast.Lambda):
             # A lambda body is deferred code and is never walked,
@@ -414,7 +635,10 @@ def _fixtures_a_test_loads(source: str, loaders: set[str]) -> set[str]:
             return
         if isinstance(node, ast.NamedExpr):
             scan(node.value)
-            bind(node.target, value_of(node.value))
+            if flow["suppress"]:
+                bind(node.target, None)
+            else:
+                bind(node.target, value_of(node.value))
             return
         if (
             isinstance(node, ast.Call)
@@ -425,7 +649,7 @@ def _fixtures_a_test_loads(source: str, loaders: set[str]) -> set[str]:
         for child in ast.iter_child_nodes(node):
             scan(child)
 
-    def walk_stmt(statement):
+    def walk_stmt(statement, completed):
         if isinstance(statement, (ast.FunctionDef, ast.AsyncFunctionDef)):
             # A nested definition is deferred code. Its body runs
             # only if the test calls it, and a call into it is one
@@ -443,8 +667,67 @@ def _fixtures_a_test_loads(source: str, loaders: set[str]) -> set[str]:
                     scan(default)
             return
         if isinstance(statement, ast.ClassDef):
+            # A class body runs when the definition does, so a
+            # loading call written in it earns credit, but its
+            # assignments land in the class namespace and never
+            # bind in the enclosing scope, so the body walks in
+            # the live environment and the environment is
+            # restored when the definition ends. A raise inside
+            # the body abandons the definition and ends the
+            # enclosing path with it.
+            for decorator in statement.decorator_list:
+                scan(decorator)
+            for base in statement.bases:
+                scan(base)
+            for keyword in statement.keywords:
+                scan(keyword.value)
+            saved_env = dict(env)
+            saved_alive = flow["alive"]
+            inner_completed = []
             for sub in statement.body:
-                walk_stmt(sub)
+                if not flow["alive"]:
+                    break
+                walk_stmt(sub, inner_completed)
+            raised = any(end[2] == "raise" for end in inner_completed)
+            env.clear()
+            env.update(saved_env)
+            flow["alive"] = False if raised else saved_alive
+            return
+        if isinstance(statement, ast.Return):
+            # The value of a return evaluates before the path
+            # ends, so it is scanned first. The path then ends
+            # and its credit stands frozen toward the whole
+            # test, and the statements after it in the block
+            # are dead, so the block walk stops before them.
+            if statement.value is not None:
+                scan(statement.value)
+            fold_returned(loaded)
+            completed.append((dict(env), set(loaded), "return"))
+            flow["alive"] = False
+            return
+        if isinstance(statement, ast.Raise):
+            if statement.exc is not None:
+                scan(statement.exc)
+            if statement.cause is not None:
+                scan(statement.cause)
+            completed.append((dict(env), set(loaded), "raise"))
+            flow["alive"] = False
+            return
+        if isinstance(statement, ast.Break):
+            completed.append((dict(env), set(loaded), "break"))
+            flow["alive"] = False
+            return
+        if isinstance(statement, ast.Continue):
+            completed.append((dict(env), set(loaded), "continue"))
+            flow["alive"] = False
+            return
+        if isinstance(statement, ast.Assert):
+            # The message of an assert evaluates only on the
+            # path where the test fails, so it is scanned with
+            # credit suppressed.
+            scan(statement.test)
+            if statement.msg is not None:
+                scan_suppressed(statement.msg)
             return
         if isinstance(statement, ast.Assign):
             scan(statement.value)
@@ -474,7 +757,7 @@ def _fixtures_a_test_loads(source: str, loaders: set[str]) -> set[str]:
                 and len(statement.iter.elts) >= 1
                 and not body_has_bypass(statement.body)
             )
-            walk_loop(statement.body, statement.orelse, guaranteed, prepare)
+            walk_loop(statement.body, statement.orelse, guaranteed, prepare, completed)
             return
         if isinstance(statement, ast.While):
             scan(statement.test)
@@ -483,75 +766,111 @@ def _fixtures_a_test_loads(source: str, loaders: set[str]) -> set[str]:
                 and bool(statement.test.value)
                 and not body_has_bypass(statement.body)
             )
-            walk_loop(statement.body, statement.orelse, guaranteed)
+            walk_loop(statement.body, statement.orelse, guaranteed, None, completed)
             return
         if isinstance(statement, ast.If):
             scan(statement.test)
             base_env = dict(env)
             base_loaded = set(loaded)
-            then_end = fork(statement.body, base_env, base_loaded)
-            else_end = fork(statement.orelse, base_env, base_loaded)
-            # The path ends feeding the join are the end of the
-            # arm the test selects and the end of the arm it
-            # rejects, with the untouched state standing in for
-            # an else arm the statement does not write.
-            join_paths([then_end, else_end])
+            ends = walk_paths(statement.body, base_env, base_loaded)
+            ends.extend(walk_paths(statement.orelse, base_env, base_loaded))
+            # The path ends feeding the join are the ends of
+            # the arm the test selects and the ends of the arm
+            # it rejects, with the untouched state standing in
+            # for an else arm the statement does not write.
+            # Only the ends that fell through merge into the
+            # live state, so when both arms end their paths
+            # the code after the conditional is dead.
+            join_ends(ends, completed)
             return
         if isinstance(statement, (ast.With, ast.AsyncWith)):
             for item in statement.items:
                 scan(item.context_expr)
                 if item.optional_vars is not None:
                     bind(item.optional_vars, None)
-            for sub in statement.body:
-                walk_stmt(sub)
+            base_env = dict(env)
+            base_loaded = set(loaded)
+            ends = []
+            for end_env, end_loaded, kind in walk_paths(
+                statement.body, base_env, base_loaded
+            ):
+                if kind == "raise":
+                    # A context manager may suppress the
+                    # exception, so the abandoned path resumes
+                    # after the with holding its state at the
+                    # raise. The statements after the raise
+                    # inside the body are dead on every path,
+                    # which is what the fork buys here.
+                    ends.append((end_env, end_loaded, "fall"))
+                else:
+                    ends.append((end_env, end_loaded, kind))
+            # The path ends feeding the join are the ends of
+            # the body that fell through and the resumed ends
+            # of the body paths a raise abandoned, while an
+            # end that breaks or continues out of an enclosing
+            # loop is handed on unchanged.
+            join_ends(ends, completed)
             return
         if isinstance(statement, try_types):
             pre_env = dict(env)
             pre_loaded = set(loaded)
-            body_end = fork(statement.body, pre_env, pre_loaded)
+            ends = []
+            for end_env, end_loaded, kind in walk_paths(
+                statement.body, pre_env, pre_loaded
+            ):
+                if kind == "fall":
+                    if statement.orelse:
+                        ends.extend(
+                            walk_paths(statement.orelse, end_env, end_loaded)
+                        )
+                    else:
+                        ends.append((end_env, end_loaded, "fall"))
+                elif kind in ("break", "continue"):
+                    ends.append((end_env, end_loaded, kind))
+                # An end that returned was frozen toward the
+                # whole test when it ended. An end that raised
+                # is carried onward by the handlers below, and
+                # the statements after the raise in the body
+                # were dead on it.
+            for handler in statement.handlers:
 
-            def fork_handler(handler):
-                def prepare():
+                def prepare(handler=handler):
                     if handler.type is not None:
                         scan(handler.type)
                     if handler.name is not None:
                         env[handler.name] = None
 
-                return fork(handler.body, pre_env, pre_loaded, prepare)
-
-            path_states = [fork_handler(handler) for handler in statement.handlers]
-            if statement.orelse:
-                path_states.append(fork(statement.orelse, *body_end))
-            else:
-                path_states.append(body_end)
-            # The path ends feeding the join are the end of the
-            # try body, or of its else arm, which runs from the
-            # body end, beside the end of each handler, and each
-            # handler is walked from the state before the try.
-            join_paths(path_states)
+                ends.extend(walk_paths(handler.body, pre_env, pre_loaded, prepare))
+            # The path ends feeding the join are the ends of
+            # the try body that fell through, or of its else
+            # arm, which runs from a body end, beside the ends
+            # of each handler, and each handler is walked from
+            # the state before the try.
+            join_ends(ends, completed)
             for sub in statement.finalbody:
-                walk_stmt(sub)
+                if not flow["alive"]:
+                    break
+                walk_stmt(sub, completed)
             return
         if isinstance(statement, ast.Match):
             scan(statement.subject)
             base_env = dict(env)
             base_loaded = set(loaded)
-            path_states = [(base_env, base_loaded)]
+            ends = [(base_env, base_loaded, "fall")]
 
-            def fork_case(case):
-                def prepare():
+            for case in statement.cases:
+
+                def prepare(case=case):
                     for name in pattern_names(case.pattern):
                         env[name] = None
                     if case.guard is not None:
                         scan(case.guard)
 
-                return fork(case.body, base_env, base_loaded, prepare)
-
-            path_states.extend(fork_case(case) for case in statement.cases)
+                ends.extend(walk_paths(case.body, base_env, base_loaded, prepare))
             # The path ends feeding the join are the state before
             # the match, standing in for the path where no arm
-            # fits, beside the end of each arm.
-            join_paths(path_states)
+            # fits, beside the ends of each arm.
+            join_ends(ends, completed)
             return
         if isinstance(statement, ast.Delete):
             for target in statement.targets:
@@ -562,9 +881,18 @@ def _fixtures_a_test_loads(source: str, loaders: set[str]) -> set[str]:
             return
         scan(statement)
 
+    completed = []
     for statement in function.body:
-        walk_stmt(statement)
-    return loaded
+        if not flow["alive"]:
+            break
+        walk_stmt(statement, completed)
+    result = set(loaded) if flow["alive"] else None
+    if flow["finished"] is not None:
+        if result is None:
+            result = flow["finished"]
+        else:
+            result.intersection_update(flow["finished"])
+    return result if result is not None else set()
 
 
 def _case_map():
