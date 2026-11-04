@@ -82,6 +82,30 @@ the interpreter leaves behind, and a helper joins the
 loader set only when it provably loads the fixture name it
 is handed. The pins below cover the repaired forms, plus
 the positive controls that keep the new rules honest.
+
+The landing red team then evaded the pass five analysis in
+three more families, in repair pass six, every one inside
+the fenced contract. The faithfulness proof tried the
+parameters of a helper in turn, and a helper that handed
+its client or raw response parameter to a multi argument
+loader in a non name slot passed the proof through a
+parameter carrying no fixture name, while the name slot
+itself was fed a fixed name on the fall through path. A
+nested definition declaring a name nonlocal rewrote the
+binding the walk was tracking, in a test body and inside a
+helper under the proof, while the walk treated the call as
+inert. And the disk reading seed of the derivation joined
+on a dependence check and was never proven, so a seed that
+diverted one name, or read its argument as a decoy and
+returned a fixed name, lent the whole derived set its
+trust. The proof now runs once with every parameter bound
+to its own distinct symbolic name and credits only the
+argument in a loader's name slot, a name any nested
+definition declares nonlocal or global reads as
+unresolvable from the definition onward, and the seed is
+proven in the same terms with its reads standing in for
+loading calls. The pins below cover those forms, plus the
+positive control that keeps the stronger proof honest.
 """
 
 from __future__ import annotations
@@ -803,6 +827,200 @@ def test_loader_derivation_admits_a_faithful_helper_and_credits_through_it(tmp_p
         """,
     )
     assert loaders == {"reader", "faithful_search"}
+    loaded = _fixtures_a_test_loads(
+        textwrap.dedent(
+            f"""
+            def test_shape(client, raw_response):
+                result = faithful_search(client, raw_response, "{CLAIMED}")
+            """
+        ),
+        loaders,
+    )
+    assert loaded == {CLAIMED}
+
+
+def test_loader_derivation_refuses_a_helper_proven_through_a_non_name_parameter(
+    tmp_path,
+):
+    # Repair pass six, red team form 11b in its refined shape.
+    # The helper hands its name to a three argument loader on
+    # the branch the claimed name never takes and a fixed name
+    # on the fall through path it does take. The pass five
+    # proof tried the parameters in turn, and the client
+    # parameter, handed to the loader in its own slot at both
+    # return sites, earned the symbolic credit through a slot
+    # that carries no fixture name. The proof now binds every
+    # parameter to its own distinct symbolic name in a single
+    # run and credits only the argument in the name slot, so
+    # the fall through path credits the fixed name, the branch
+    # credits the handed name, and no one parameter is
+    # credited on every path.
+    loaders = _derived_loaders(
+        tmp_path,
+        f"""
+        ROOT = None
+
+
+        def reader(name):
+            return (ROOT / name).read_bytes()
+
+
+        def replay(client, raw_response, name):
+            return reader(name)
+
+
+        def shadow_search(client, raw_response, name):
+            if name == "{OTHER}":
+                return replay(client, raw_response, name)
+            return replay(client, raw_response, "{OTHER}")
+        """,
+    )
+    assert loaders == {"reader", "replay"}
+
+
+def test_linkage_nonlocal_rebind_inside_a_nested_function_earns_no_credit():
+    # Repair pass six, red team form 12a. The nested
+    # definition declares the fed local nonlocal and rebinds
+    # it to the other fixture when called, so the live call
+    # loads that fixture at runtime. The walk treats the call
+    # into a nested definition as inert, which settles the
+    # credit its body earns and not the write it lands, so a
+    # name any nested definition declares nonlocal or global
+    # reads as unresolvable from the definition onward and
+    # the claimed fixture earns nothing.
+    loaded = _loads(
+        f"""
+        def test_shape(client, raw_response):
+            fixture_name = "{CLAIMED}"
+            def swap():
+                nonlocal fixture_name
+                fixture_name = "{OTHER}"
+            swap()
+            result = search(client, raw_response, fixture_name)
+        """
+    )
+    assert loaded == set()
+
+
+def test_loader_derivation_refuses_a_helper_whose_closure_rebinds_its_name(
+    tmp_path,
+):
+    # Repair pass six, red team form 12b. The same write back
+    # one level up, inside a helper under the faithfulness
+    # proof. The helper's nested definition rebinds its name
+    # parameter to the other fixture before the return hands
+    # the parameter to the loader, so at runtime the helper
+    # loads that fixture whatever it was handed. The declared
+    # name reads as unresolvable under the proof as it does
+    # in a test body, the return credits nothing, and the
+    # helper is refused.
+    loaders = _derived_loaders(
+        tmp_path,
+        f"""
+        ROOT = None
+
+
+        def reader(name):
+            return (ROOT / name).read_bytes()
+
+
+        def shadow_search(client, raw_response, name):
+            def swap():
+                nonlocal name
+                name = "{OTHER}"
+            swap()
+            return reader(name)
+        """,
+    )
+    assert loaders == {"reader"}
+
+
+def test_loader_derivation_refuses_a_seed_reader_that_diverts_one_name(tmp_path):
+    # Repair pass six, red team form 13a. The reader at the
+    # bottom of the module returns the other fixture's bytes
+    # for the claimed name and reads faithfully for every
+    # other name, so the whole corpus module stays green
+    # while the one claimed fixture is never opened. The seed
+    # joined on a dependence check that never asked what its
+    # returns carry. It is now proven in the callers' terms,
+    # its reads standing in for loading calls, and the
+    # diverting path credits the fixture it actually reads,
+    # so the reader is refused and the helper above it,
+    # faithful as it is, derives nothing without it.
+    loaders = _derived_loaders(
+        tmp_path,
+        f"""
+        ROOT = None
+
+
+        def fixture_bytes(name):
+            if name == "{CLAIMED}":
+                return (ROOT / "{OTHER}").read_bytes()
+            return (ROOT / name).read_bytes()
+
+
+        def fixture_payload(name):
+            return fixture_bytes(name)
+        """,
+    )
+    assert loaders == set()
+
+
+def test_loader_derivation_refuses_a_seed_reader_that_reads_a_decoy(tmp_path):
+    # Repair pass six, red team form 13b. The reader reads
+    # the path built from its argument and throws the bytes
+    # away, returning the bytes of a fixed name instead. The
+    # dependence check was satisfied by the decoy read while
+    # the returned read never consulted the argument. Under
+    # the seed proof the one completing path credits both the
+    # handed name and the fixed name, which is not the handed
+    # name alone, so the reader is refused.
+    loaders = _derived_loaders(
+        tmp_path,
+        f"""
+        ROOT = None
+
+
+        def fixture_bytes(name):
+            _ = (ROOT / name).read_bytes()
+            return (ROOT / "{OTHER}").read_bytes()
+
+
+        def fixture_payload(name):
+            return fixture_bytes(name)
+        """,
+    )
+    assert loaders == set()
+
+
+def test_loader_derivation_admits_a_faithful_multi_argument_helper(tmp_path):
+    # Positive control for the pass six proof. A helper that
+    # hands the name it was given to a three argument loader,
+    # in the loader's name slot, with its other parameters in
+    # their own slots, derives through the chain and credits
+    # a test that calls it, so the distinct symbolic binding
+    # and the name slot rule refuse the dishonest shapes
+    # without refusing the honest multi argument shape the
+    # shipped replayers carry.
+    loaders = _derived_loaders(
+        tmp_path,
+        """
+        ROOT = None
+
+
+        def reader(name):
+            return (ROOT / name).read_bytes()
+
+
+        def replay(client, raw_response, name):
+            return reader(name)
+
+
+        def faithful_search(client, raw_response, name):
+            return replay(client, raw_response, name)
+        """,
+    )
+    assert loaders == {"reader", "replay", "faithful_search"}
     loaded = _fixtures_a_test_loads(
         textwrap.dedent(
             f"""
