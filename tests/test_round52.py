@@ -166,6 +166,25 @@ assignments inside their arms. The pins below cover
 those forms, plus the boundary control that keeps the
 line between a head binding and a body assignment
 honest.
+
+The landing red team then evaded the pass nine analysis
+in one more family, in repair pass ten, inside the
+admission step again. Every reading admission performs
+reads the statements standing after a candidate for the
+binding positions it knows, and none of them enters a
+definition standing among them, so a faithful helper
+followed by a definition that assigns its name under a
+global declaration, and by a module level call that
+runs that definition as the module loads, kept its
+certification while the name denoted a lambda that
+loads nothing. Admission now gathers the names each
+later definition assigns under a global declaration
+and refuses the candidate when a later module level
+statement calls such a definition, the refusal keying
+on the call, so an installer that is never called
+refuses nothing and the name keeps the body it was
+certified on. The pins below cover the form and the
+boundary that keeps the refusal honest.
 """
 
 from __future__ import annotations
@@ -1439,3 +1458,75 @@ def test_loader_derivation_refuses_a_helper_rebound_inside_a_with_body(tmp_path)
         """,
     )
     assert loaders == {"reader"}
+
+
+def test_loader_derivation_refuses_a_helper_rewritten_by_a_called_installer(tmp_path):
+    # Repair pass ten, red team form 17a. The helper's
+    # body is faithful, and a definition standing after
+    # it assigns its name under a global declaration, and
+    # a bare module level call runs that definition as
+    # the module loads, so the name a test calls denotes
+    # the lambda the installer leaves behind and never
+    # the certified body. Every reading admission
+    # performs reads the statements standing after a
+    # candidate for the binding positions it knows, and
+    # none of them enters a definition standing among
+    # them, and a bare call is an execution no reading
+    # counted. Admission now gathers the names each later
+    # definition assigns under a global declaration and
+    # refuses the candidate when a later module level
+    # statement calls such a definition.
+    loaders = _derived_loaders(
+        tmp_path,
+        """
+        ROOT = None
+
+
+        def reader(name):
+            return (ROOT / name).read_bytes()
+
+
+        def shadow_search(client, raw_response, name):
+            return reader(name)
+
+
+        def _install_shadow():
+            global shadow_search
+            shadow_search = lambda client, raw_response, name: None
+
+
+        _install_shadow()
+        """,
+    )
+    assert loaders == {"reader"}
+
+
+def test_loader_derivation_admits_a_helper_beside_an_uncalled_installer(tmp_path):
+    # Repair pass ten, the boundary, red team form 17c.
+    # The same installer definition standing after the
+    # helper and never called. The name still denotes
+    # the faithful body, because the definition alone
+    # rewrites nothing until a call runs it, so the
+    # refusal keys on the call and not on the presence
+    # of the installer, and the helper derives beside
+    # the reader it loads through.
+    loaders = _derived_loaders(
+        tmp_path,
+        """
+        ROOT = None
+
+
+        def reader(name):
+            return (ROOT / name).read_bytes()
+
+
+        def shadow_search(client, raw_response, name):
+            return reader(name)
+
+
+        def _install_shadow():
+            global shadow_search
+            shadow_search = lambda client, raw_response, name: None
+        """,
+    )
+    assert loaders == {"reader", "shadow_search"}
