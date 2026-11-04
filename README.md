@@ -36,6 +36,8 @@ photo = client.place_photo(details.photos[0], max_width_px=800)
 photo.save("cafe.jpg")
 ```
 
+The photo call downloads the image itself by default. Pass `skip_http_redirect=True` to `place_photo` instead and the call returns a `PhotoUriResult` whose `photo_uri` attribute carries the photo URI, for callers who would rather fetch the image themselves or hand the URI to something else.
+
 An `AsyncClient` with the identical method set is included for async code.
 
 ```python
@@ -78,7 +80,7 @@ removals named plainly.
 | `nearby_search` | `POST /v1/places:searchNearby` | `NearbySearchResult` |
 | `place_details` | `GET /v1/places/{id}` | `Place` |
 | `autocomplete` | `POST /v1/places:autocomplete` | `AutocompleteResult` split into place and query predictions |
-| `place_photo` | `GET /v1/{photo}/media` | `PhotoMedia` with the image bytes, or `PhotoUriResult` in skip redirect mode |
+| `place_photo` | `GET /v1/{photo}/media` | `PhotoMedia` with the image bytes, or `PhotoUriResult` carrying `photo_uri` when `skip_http_redirect=True` |
 
 The search and autocomplete calls take the filters their endpoints offer as keyword arguments. Text Search accepts `page_size`, `min_rating`, `open_now`, `price_levels`, `strict_type_filtering`, `included_type`, location bias and location restriction shapes, `ev_options`, `search_along_route` and `routing_parameters`. Nearby Search accepts its included and excluded type filters beside `max_results` and `routing_parameters`, and Autocomplete accepts `origin`, `input_offset` and primary type filters beside its input.
 
@@ -101,7 +103,7 @@ if details.current_opening_hours is not None:
         print(line)
 ```
 
-Autocomplete and Place Details both accept `session_token`. One token ties a run of autocomplete calls to the details call that closes the session, and that grouping is the shape the API bills as one session, so an autocomplete flow in production should mint a fresh token for each session and pass it to both calls.
+Autocomplete and Place Details both accept `session_token`. One token ties a run of autocomplete calls to the details call that closes the session, and that grouping is the shape the API bills as one session, so an autocomplete flow in production should mint a fresh token for each session and pass it to both calls. Tokens are caller generated rather than minted by placekit, and a UUID is the usual shape.
 
 An autocomplete result carries its predictions on two members, `place_predictions` and `query_predictions`. A prediction's `text` is an optional `FormattedText` rather than a plain string, so the read guards it first. The display string sits at `prediction.text.text`, and the ranges where the input matched inside that string sit at `prediction.text.matches`.
 
@@ -128,6 +130,8 @@ result = client.text_search(
 Any iterable of path strings works too. Omit `fields` on a search or details call and that endpoint uses a curated default, available as `FieldMask.text_search()`, `FieldMask.nearby_search()`, and `FieldMask.place_details()`. Autocomplete takes an optional `fields` mask with no curated default behind it, and `place_photo` takes no `fields` argument at all.
 
 One billing note on the defaults. They include fields from the Enterprise billing tier, among them rating, user rating counts and price level, so a search call with a default mask is billed at the Enterprise tier. Place Details is the exception. Its default mask requests every modelled field, including current opening hours from the higher Enterprise plus Atmosphere tier, so a default `place_details` call is billed at that tier. Pass a narrower `fields` set when you want a lower tier.
+
+Two facts about details masks belong beside that invitation. The path root differs by endpoint. Search and nearby masks name their paths under the `places` prefix, as the example above does, while place details mask paths are bare field names with no prefix, so the details form of the example above is `FieldMask("id", "displayName", "rating")`. A details mask must also still name `id` or `name`, the two identity paths. Drop both and the call raises `DecodeError` even on a well-formed response, because a details result carrying no identity is the wrong shape entirely rather than a place with unrequested attributes. The curated details default names both, so the floor only bites a hand-built narrower mask.
 
 ### Reading attributes the mask did not request
 
