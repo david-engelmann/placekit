@@ -130,22 +130,45 @@ def _fixtures_a_test_loads(source: str, loaders: set[str]) -> set[str]:
     that way fails the accounting check rather than passing it.
 
     Control flow regions combine by a conservative join. At a
-    conditional, a loop, or a try, the walk forks the environment,
-    walks each arm or body from the fork, and joins the results.
-    A name keeps a resolved binding after the region only when
-    every path through the region ends holding the identical
-    binding for it. The untouched path of a conditional without
-    an else arm counts as one of the paths, and so does the path
-    where a loop body never runs, so a name bound inside one arm
-    or inside a loop body reads as unresolvable after the region
-    unless every path binds it to the same fixture names. The
-    body of a try, each of its handlers, and its else arm are
-    separate paths into the join, and its finally arm walks from
-    the joined environment because it runs on every path. A
-    walrus binding inside an expression applies at its position
-    in the walk, so a name rebound by a walrus resolves to the
-    walrus value from that point on, and a walrus that hands a
-    fixture name to a loading call earns the credit for it.
+    conditional, a loop, a try, or a match, the walk forks the
+    environment and the credited set together, walks each arm
+    or body from the fork, and joins the results. A name keeps
+    a resolved binding after the region only when every path
+    through the region ends holding the identical binding for
+    it. The untouched path of a conditional without an else arm
+    counts as one of the paths, and so does the path where a
+    loop body never runs and the path where no arm of a match
+    fits, so a name bound inside one arm or inside a loop body
+    reads as unresolvable after the region unless every path
+    binds it to the same fixture names. The body of a try, each
+    of its handlers, and its else arm are separate paths into
+    the join, and its finally arm walks from the joined
+    environment because it runs on every path. A walrus binding
+    inside an expression applies at its position in the walk,
+    so a name rebound by a walrus resolves to the walrus value
+    from that point on, and a walrus that hands a fixture name
+    to a loading call earns the credit for it.
+
+    The credited set joins by intersection over the same paths,
+    so a fixture counts as loaded only when a loading call
+    resolving to it runs on every path through a region, and a
+    call sitting in an arm, a handler, or a loop body that may
+    never run earns nothing. One loop shape is exempt from the
+    path where its body never runs. A loop over a literal
+    sequence with at least one element, or a while loop on a
+    true constant, whose body carries no break, continue,
+    return, or raise that could carry control past its calls
+    runs its body on every path, so credit recorded in such a
+    body survives the join, and the shipped loop variable loads
+    run through exactly that shape. Credit in a finally arm is
+    ordinary straight line credit, because the finally arm runs
+    on every path. A loading call inside a nested function
+    definition or a lambda earns no credit at all, because such
+    a body runs only when it is called and a call into it is one
+    the walk cannot see into, the same helper treatment a call
+    into another module receives, though the decorators and
+    default values of a definition are scanned because they
+    evaluate when the definition does.
     """
     function = ast.parse(source).body[0]
     loaded = set()
@@ -206,6 +229,49 @@ def _fixtures_a_test_loads(source: str, loaders: set[str]) -> set[str]:
             for element in target.elts:
                 bind(element, None)
 
+    def pattern_names(pattern):
+        """The local names a match pattern binds."""
+        names = []
+        for node in ast.walk(pattern):
+            if isinstance(node, (ast.MatchAs, ast.MatchStar)):
+                if node.name is not None:
+                    names.append(node.name)
+            elif isinstance(node, ast.MatchMapping):
+                if node.rest is not None:
+                    names.append(node.rest)
+        return names
+
+    def body_has_bypass(statements):
+        """Whether a loop body can carry control past its calls.
+
+        A break or a continue at the loop's own level, or a
+        return or a raise anywhere in the body outside a nested
+        definition, can carry control past a loading call the
+        body holds, so a body carrying any of them proves
+        nothing about the calls it holds. A break or a continue
+        inside a nested loop binds to that loop and does not
+        count, and a nested definition is never entered.
+        """
+
+        def visit(node, depth):
+            if isinstance(
+                node,
+                (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda),
+            ):
+                return False
+            if isinstance(node, (ast.Break, ast.Continue)):
+                return depth == 0
+            if isinstance(node, (ast.Return, ast.Raise)):
+                return True
+            child_depth = depth
+            if isinstance(node, (ast.For, ast.AsyncFor, ast.While)):
+                child_depth = depth + 1
+            return any(
+                visit(child, child_depth) for child in ast.iter_child_nodes(node)
+            )
+
+        return any(visit(statement, 0) for statement in statements)
+
     def record_call(call):
         arguments = [*call.args, *(keyword.value for keyword in call.keywords)]
         for argument in arguments:
@@ -223,21 +289,26 @@ def _fixtures_a_test_loads(source: str, loaders: set[str]) -> set[str]:
             else:
                 env[name] = value
 
-    def join_paths(path_envs):
-        """Fold the environments of alternative paths into env.
+    def join_paths(path_states):
+        """Fold the path states of a region into the live state.
 
-        A name keeps a binding only when every path ends holding
-        the identical binding for it. A name bound on some paths
-        only, or bound to different values on different paths,
-        becomes unresolvable, so a fixture name bound inside a
-        region that may not run earns no credit after the region.
+        Each path state is the environment and the credited set
+        one path through the region ends holding. A name keeps a
+        binding only when every path ends holding the identical
+        binding for it. A name bound on some paths only, or bound
+        to different values on different paths, becomes
+        unresolvable, so a fixture name bound inside a region
+        that may not run earns no credit after the region. The
+        credited set becomes the intersection of the path sets,
+        so a fixture counts as loaded only when a loading call
+        resolving to it ran on every path.
         """
         names = set()
-        for path_env in path_envs:
+        for path_env, _path_loaded in path_states:
             names.update(path_env)
         merged = {}
         for name in names:
-            outcomes = [path_env.get(name, unbound) for path_env in path_envs]
+            outcomes = [path_env.get(name, unbound) for path_env, _ in path_states]
             first = outcomes[0]
             if all(
                 outcome is first or (first is not unbound and outcome == first)
@@ -249,30 +320,67 @@ def _fixtures_a_test_loads(source: str, loaders: set[str]) -> set[str]:
                 merged[name] = None
         env.clear()
         env.update(merged)
+        credited = set(path_states[0][1])
+        for _path_env, path_loaded in path_states[1:]:
+            credited.intersection_update(path_loaded)
+        loaded.clear()
+        loaded.update(credited)
 
-    def fork(statements, base):
-        """Walk statements from a copied env, returning the end env.
+    def fork(statements, base_env, base_loaded, prepare=None):
+        """Walk statements along one path, returning its end state.
 
-        The env in force is restored before returning, so the
-        caller joins the path results itself.
+        The walk starts from the given environment and credited
+        set, and the optional prepare step runs once that state
+        is installed, before the first statement, which is how a
+        loop binds its target and a try handler binds its
+        exception name. The state in force is restored before
+        returning, so the caller joins the path results itself.
         """
-        saved = dict(env)
+        saved_env = dict(env)
+        saved_loaded = set(loaded)
         env.clear()
-        env.update(base)
+        env.update(base_env)
+        loaded.clear()
+        loaded.update(base_loaded)
+        if prepare is not None:
+            prepare()
         for sub in statements:
             walk_stmt(sub)
-        result = dict(env)
+        result = (dict(env), set(loaded))
         env.clear()
-        env.update(saved)
+        env.update(saved_env)
+        loaded.clear()
+        loaded.update(saved_loaded)
         return result
+
+    def walk_loop(body, orelse, guaranteed, prepare=None):
+        """Walk one loop body and its else arm as forked paths.
+
+        The path ends feeding the join are the end of the body
+        pass, the end of the else arm walked from the body end,
+        and the end of the else arm walked from the state before
+        the loop. The third end is the zero trip path, and it
+        joins only when the loop is not proven to run its body
+        at least once, so credit recorded in a body that may
+        never run earns nothing, while credit in a proven body
+        pass survives the join.
+        """
+        pre_env = dict(env)
+        pre_loaded = set(loaded)
+        body_end = fork(body, pre_env, pre_loaded, prepare)
+        path_states = [body_end, fork(orelse, *body_end)]
+        if not guaranteed:
+            path_states.append(fork(orelse, pre_env, pre_loaded))
+        join_paths(path_states)
 
     def scan(node):
         """Walk one expression in source order.
 
         Loading calls are recorded as they are met, and the
-        bindings a comprehension or a lambda performs are applied
-        for the span of its body and then restored, matching the
-        scoping the interpreter itself gives them.
+        bindings a comprehension performs are applied for the
+        span of its body and then restored, matching the scoping
+        the interpreter itself gives them. A lambda body is
+        deferred code and is never walked.
         """
         if isinstance(
             node, (ast.ListComp, ast.SetComp, ast.GeneratorExp, ast.DictComp)
@@ -294,24 +402,15 @@ def _fixtures_a_test_loads(source: str, loaders: set[str]) -> set[str]:
             restore(saved)
             return
         if isinstance(node, ast.Lambda):
-            arguments = node.args
-            params = [
-                argument.arg
-                for argument in (
-                    *arguments.posonlyargs,
-                    *arguments.args,
-                    *arguments.kwonlyargs,
-                )
-            ]
-            if arguments.vararg is not None:
-                params.append(arguments.vararg.arg)
-            if arguments.kwarg is not None:
-                params.append(arguments.kwarg.arg)
-            saved = save(params)
-            for param in params:
-                env[param] = None
-            scan(node.body)
-            restore(saved)
+            # A lambda body is deferred code and is never walked,
+            # so a loading call inside it earns no credit. Only
+            # the default values evaluate when the lambda is
+            # created, so only they are scanned.
+            for default in node.args.defaults:
+                scan(default)
+            for default in node.args.kw_defaults:
+                if default is not None:
+                    scan(default)
             return
         if isinstance(node, ast.NamedExpr):
             scan(node.value)
@@ -328,8 +427,20 @@ def _fixtures_a_test_loads(source: str, loaders: set[str]) -> set[str]:
 
     def walk_stmt(statement):
         if isinstance(statement, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            for sub in statement.body:
-                walk_stmt(sub)
+            # A nested definition is deferred code. Its body runs
+            # only if the test calls it, and a call into it is one
+            # the walk cannot see into, so the body is never
+            # walked and a loading call inside it earns no credit,
+            # the helper treatment. The decorators and the default
+            # values are scanned because they evaluate when the
+            # definition does.
+            for decorator in statement.decorator_list:
+                scan(decorator)
+            for default in statement.args.defaults:
+                scan(default)
+            for default in statement.args.kw_defaults:
+                if default is not None:
+                    scan(default)
             return
         if isinstance(statement, ast.ClassDef):
             for sub in statement.body:
@@ -353,46 +464,37 @@ def _fixtures_a_test_loads(source: str, loaders: set[str]) -> set[str]:
             return
         if isinstance(statement, (ast.For, ast.AsyncFor)):
             scan(statement.iter)
-            pre = dict(env)
-            bind(statement.target, value_of(statement.iter))
-            for sub in statement.body:
-                walk_stmt(sub)
-            ran = dict(env)
-            env.clear()
-            env.update(ran)
-            for sub in statement.orelse:
-                walk_stmt(sub)
-            else_after_ran = dict(env)
-            env.clear()
-            env.update(pre)
-            for sub in statement.orelse:
-                walk_stmt(sub)
-            else_after_zero = dict(env)
-            join_paths([ran, else_after_ran, else_after_zero])
+            iter_value = value_of(statement.iter)
+
+            def prepare(target=statement.target, value=iter_value):
+                bind(target, value)
+
+            guaranteed = (
+                isinstance(statement.iter, (ast.Tuple, ast.List))
+                and len(statement.iter.elts) >= 1
+                and not body_has_bypass(statement.body)
+            )
+            walk_loop(statement.body, statement.orelse, guaranteed, prepare)
             return
         if isinstance(statement, ast.While):
             scan(statement.test)
-            pre = dict(env)
-            for sub in statement.body:
-                walk_stmt(sub)
-            ran = dict(env)
-            env.clear()
-            env.update(ran)
-            for sub in statement.orelse:
-                walk_stmt(sub)
-            else_after_ran = dict(env)
-            env.clear()
-            env.update(pre)
-            for sub in statement.orelse:
-                walk_stmt(sub)
-            else_after_zero = dict(env)
-            join_paths([ran, else_after_ran, else_after_zero])
+            guaranteed = (
+                isinstance(statement.test, ast.Constant)
+                and bool(statement.test.value)
+                and not body_has_bypass(statement.body)
+            )
+            walk_loop(statement.body, statement.orelse, guaranteed)
             return
         if isinstance(statement, ast.If):
             scan(statement.test)
-            base = dict(env)
-            then_end = fork(statement.body, base)
-            else_end = fork(statement.orelse, base)
+            base_env = dict(env)
+            base_loaded = set(loaded)
+            then_end = fork(statement.body, base_env, base_loaded)
+            else_end = fork(statement.orelse, base_env, base_loaded)
+            # The path ends feeding the join are the end of the
+            # arm the test selects and the end of the arm it
+            # rejects, with the untouched state standing in for
+            # an else arm the statement does not write.
             join_paths([then_end, else_end])
             return
         if isinstance(statement, (ast.With, ast.AsyncWith)):
@@ -404,26 +506,52 @@ def _fixtures_a_test_loads(source: str, loaders: set[str]) -> set[str]:
                 walk_stmt(sub)
             return
         if isinstance(statement, try_types):
-            pre = dict(env)
-            body_end = fork(statement.body, pre)
-            path_ends = []
-            for handler in statement.handlers:
-                env.clear()
-                env.update(pre)
-                if handler.type is not None:
-                    scan(handler.type)
-                if handler.name is not None:
-                    env[handler.name] = None
-                for sub in handler.body:
-                    walk_stmt(sub)
-                path_ends.append(dict(env))
+            pre_env = dict(env)
+            pre_loaded = set(loaded)
+            body_end = fork(statement.body, pre_env, pre_loaded)
+
+            def fork_handler(handler):
+                def prepare():
+                    if handler.type is not None:
+                        scan(handler.type)
+                    if handler.name is not None:
+                        env[handler.name] = None
+
+                return fork(handler.body, pre_env, pre_loaded, prepare)
+
+            path_states = [fork_handler(handler) for handler in statement.handlers]
             if statement.orelse:
-                path_ends.append(fork(statement.orelse, body_end))
+                path_states.append(fork(statement.orelse, *body_end))
             else:
-                path_ends.append(body_end)
-            join_paths(path_ends)
+                path_states.append(body_end)
+            # The path ends feeding the join are the end of the
+            # try body, or of its else arm, which runs from the
+            # body end, beside the end of each handler, and each
+            # handler is walked from the state before the try.
+            join_paths(path_states)
             for sub in statement.finalbody:
                 walk_stmt(sub)
+            return
+        if isinstance(statement, ast.Match):
+            scan(statement.subject)
+            base_env = dict(env)
+            base_loaded = set(loaded)
+            path_states = [(base_env, base_loaded)]
+
+            def fork_case(case):
+                def prepare():
+                    for name in pattern_names(case.pattern):
+                        env[name] = None
+                    if case.guard is not None:
+                        scan(case.guard)
+
+                return fork(case.body, base_env, base_loaded, prepare)
+
+            path_states.extend(fork_case(case) for case in statement.cases)
+            # The path ends feeding the join are the state before
+            # the match, standing in for the path where no arm
+            # fits, beside the end of each arm.
+            join_paths(path_states)
             return
         if isinstance(statement, ast.Delete):
             for target in statement.targets:
