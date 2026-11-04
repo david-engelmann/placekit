@@ -186,8 +186,13 @@ def _seed_name_parameter(node, source) -> str | None:
     argument as a decoy and returns a fixed name credits both
     on the one path, and a reader whose read target does not
     resolve to the handed parameter credits something the
-    proof cannot name, so each is refused, and the derivation
-    fails closed without it.
+    proof cannot name. A reader that reads another fixture
+    on a path it abandons with a raise credits that fixture
+    on a raised path, and the proof counts the raised paths
+    beside the completing ones, so a raised path may hold
+    credit for nothing but the symbolic name of the handed
+    parameter. Each is refused, and the derivation fails
+    closed without it.
     """
     segment = ast.get_source_segment(source, node)
     if segment is None:
@@ -197,14 +202,21 @@ def _seed_name_parameter(node, source) -> str | None:
         parameter: frozenset([_symbolic_value(parameter)]) for parameter in parameters
     }
     path_credits: list = []
+    raised_credits: list = []
     _fixtures_a_test_loads(
-        segment, set(), bindings, path_credits=path_credits, credit_reads=True
+        segment,
+        set(),
+        bindings,
+        path_credits=path_credits,
+        raised_credits=raised_credits,
+        credit_reads=True,
     )
     if not path_credits:
         return None
     for parameter in parameters:
-        if all(
-            credit == {_symbolic_value(parameter)} for credit in path_credits
+        symbolic = {_symbolic_value(parameter)}
+        if all(credit == symbolic for credit in path_credits) and all(
+            credit <= symbolic for credit in raised_credits
         ):
             return parameter
     return None
@@ -227,7 +239,12 @@ def _helper_name_parameter(node, source, slots) -> str | None:
     through an argument that carries no fixture name earns
     that argument's own symbolic name, which is the wrong one
     unless the parameter it names is the one the loader calls
-    are fed in their name position, so each is refused.
+    are fed in their name position. A helper that loads a
+    fixed name on a path it abandons with a raise earns that
+    name on a raised path, and the proof counts the raised
+    paths beside the completing ones, so a raised path may
+    hold credit for nothing but the symbolic name of the
+    proven parameter. Each is refused.
     """
     segment = ast.get_source_segment(source, node)
     if segment is None:
@@ -237,18 +254,21 @@ def _helper_name_parameter(node, source, slots) -> str | None:
         parameter: frozenset([_symbolic_value(parameter)]) for parameter in parameters
     }
     path_credits: list = []
+    raised_credits: list = []
     _fixtures_a_test_loads(
         segment,
         set(slots),
         bindings,
         name_slots=slots,
         path_credits=path_credits,
+        raised_credits=raised_credits,
     )
     if not path_credits:
         return None
     for parameter in parameters:
-        if all(
-            credit == {_symbolic_value(parameter)} for credit in path_credits
+        symbolic = {_symbolic_value(parameter)}
+        if all(credit == symbolic for credit in path_credits) and all(
+            credit <= symbolic for credit in raised_credits
         ):
             return parameter
     return None
@@ -351,6 +371,7 @@ def _fixtures_a_test_loads(
     initial_bindings: dict | None = None,
     name_slots: dict | None = None,
     path_credits: list | None = None,
+    raised_credits: list | None = None,
     credit_reads: bool = False,
 ) -> set[str]:
     """Fixture file names one test hands to a loading helper.
@@ -505,7 +526,18 @@ def _fixtures_a_test_loads(
     reads credited, a read stands as a loading call whose
     name argument is its target, so the reader at the bottom
     of a module is proven in the same terms as a helper that
-    calls a loader.
+    calls a loader. The proofs also collect the credited set
+    of every path that ends in a raise, and a candidate is
+    refused when a raised path holds credit for anything but
+    the one symbolic name its completing paths proved,
+    because a caller can suppress the raise and run on
+    whatever the path loaded before it ended, so a load
+    standing on such a path is a load the candidate can lend
+    its name to. That counting belongs to the proofs alone.
+    The walk of a test body collects no raised ends, because
+    a path that raises in a test body is a test that failed,
+    and its fixtures earn nothing toward the result either
+    way.
     """
     function = ast.parse(source).body[0]
     loaded = set()
@@ -1257,6 +1289,14 @@ def _fixtures_a_test_loads(
             if statement.cause is not None:
                 scan(statement.cause)
             completed.append((dict(env), set(loaded), "raise"))
+            if raised_credits is not None:
+                # A derivation proof counts the paths that end
+                # in a raise beside the paths that complete, so
+                # the credit this path holds is collected for
+                # the proof to judge. A test body never collects
+                # it, because a raised path there is a failed
+                # test and earns nothing either way.
+                raised_credits.append(set(loaded))
             flow["alive"] = False
             return
         if isinstance(statement, ast.Break):
