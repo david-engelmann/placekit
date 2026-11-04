@@ -128,6 +128,24 @@ def _fixtures_a_test_loads(source: str, loaders: set[str]) -> set[str]:
     name literals, such as the return of a call into another
     module. Unresolvable shapes earn no credit, so a test shaped
     that way fails the accounting check rather than passing it.
+
+    Control flow regions combine by a conservative join. At a
+    conditional, a loop, or a try, the walk forks the environment,
+    walks each arm or body from the fork, and joins the results.
+    A name keeps a resolved binding after the region only when
+    every path through the region ends holding the identical
+    binding for it. The untouched path of a conditional without
+    an else arm counts as one of the paths, and so does the path
+    where a loop body never runs, so a name bound inside one arm
+    or inside a loop body reads as unresolvable after the region
+    unless every path binds it to the same fixture names. The
+    body of a try, each of its handlers, and its else arm are
+    separate paths into the join, and its finally arm walks from
+    the joined environment because it runs on every path. A
+    walrus binding inside an expression applies at its position
+    in the walk, so a name rebound by a walrus resolves to the
+    walrus value from that point on, and a walrus that hands a
+    fixture name to a loading call earns the credit for it.
     """
     function = ast.parse(source).body[0]
     loaded = set()
@@ -160,6 +178,10 @@ def _fixtures_a_test_loads(source: str, loaders: set[str]) -> set[str]:
             return env.get(expression.id)
         if isinstance(expression, ast.Starred):
             return value_of(expression.value)
+        if isinstance(expression, ast.NamedExpr):
+            result = value_of(expression.value)
+            bind(expression.target, result)
+            return result
         return None
 
     def target_names(target):
@@ -200,6 +222,49 @@ def _fixtures_a_test_loads(source: str, loaders: set[str]) -> set[str]:
                 env.pop(name, None)
             else:
                 env[name] = value
+
+    def join_paths(path_envs):
+        """Fold the environments of alternative paths into env.
+
+        A name keeps a binding only when every path ends holding
+        the identical binding for it. A name bound on some paths
+        only, or bound to different values on different paths,
+        becomes unresolvable, so a fixture name bound inside a
+        region that may not run earns no credit after the region.
+        """
+        names = set()
+        for path_env in path_envs:
+            names.update(path_env)
+        merged = {}
+        for name in names:
+            outcomes = [path_env.get(name, unbound) for path_env in path_envs]
+            first = outcomes[0]
+            if all(
+                outcome is first or (first is not unbound and outcome == first)
+                for outcome in outcomes
+            ):
+                if first is not unbound:
+                    merged[name] = first
+            else:
+                merged[name] = None
+        env.clear()
+        env.update(merged)
+
+    def fork(statements, base):
+        """Walk statements from a copied env, returning the end env.
+
+        The env in force is restored before returning, so the
+        caller joins the path results itself.
+        """
+        saved = dict(env)
+        env.clear()
+        env.update(base)
+        for sub in statements:
+            walk_stmt(sub)
+        result = dict(env)
+        env.clear()
+        env.update(saved)
+        return result
 
     def scan(node):
         """Walk one expression in source order.
@@ -248,6 +313,10 @@ def _fixtures_a_test_loads(source: str, loaders: set[str]) -> set[str]:
             scan(node.body)
             restore(saved)
             return
+        if isinstance(node, ast.NamedExpr):
+            scan(node.value)
+            bind(node.target, value_of(node.value))
+            return
         if (
             isinstance(node, ast.Call)
             and isinstance(node.func, ast.Name)
@@ -284,25 +353,47 @@ def _fixtures_a_test_loads(source: str, loaders: set[str]) -> set[str]:
             return
         if isinstance(statement, (ast.For, ast.AsyncFor)):
             scan(statement.iter)
+            pre = dict(env)
             bind(statement.target, value_of(statement.iter))
             for sub in statement.body:
                 walk_stmt(sub)
+            ran = dict(env)
+            env.clear()
+            env.update(ran)
             for sub in statement.orelse:
                 walk_stmt(sub)
+            else_after_ran = dict(env)
+            env.clear()
+            env.update(pre)
+            for sub in statement.orelse:
+                walk_stmt(sub)
+            else_after_zero = dict(env)
+            join_paths([ran, else_after_ran, else_after_zero])
             return
         if isinstance(statement, ast.While):
             scan(statement.test)
+            pre = dict(env)
             for sub in statement.body:
                 walk_stmt(sub)
+            ran = dict(env)
+            env.clear()
+            env.update(ran)
             for sub in statement.orelse:
                 walk_stmt(sub)
+            else_after_ran = dict(env)
+            env.clear()
+            env.update(pre)
+            for sub in statement.orelse:
+                walk_stmt(sub)
+            else_after_zero = dict(env)
+            join_paths([ran, else_after_ran, else_after_zero])
             return
         if isinstance(statement, ast.If):
             scan(statement.test)
-            for sub in statement.body:
-                walk_stmt(sub)
-            for sub in statement.orelse:
-                walk_stmt(sub)
+            base = dict(env)
+            then_end = fork(statement.body, base)
+            else_end = fork(statement.orelse, base)
+            join_paths([then_end, else_end])
             return
         if isinstance(statement, (ast.With, ast.AsyncWith)):
             for item in statement.items:
@@ -313,17 +404,24 @@ def _fixtures_a_test_loads(source: str, loaders: set[str]) -> set[str]:
                 walk_stmt(sub)
             return
         if isinstance(statement, try_types):
-            for sub in statement.body:
-                walk_stmt(sub)
+            pre = dict(env)
+            body_end = fork(statement.body, pre)
+            path_ends = []
             for handler in statement.handlers:
+                env.clear()
+                env.update(pre)
                 if handler.type is not None:
                     scan(handler.type)
                 if handler.name is not None:
                     env[handler.name] = None
                 for sub in handler.body:
                     walk_stmt(sub)
-            for sub in statement.orelse:
-                walk_stmt(sub)
+                path_ends.append(dict(env))
+            if statement.orelse:
+                path_ends.append(fork(statement.orelse, body_end))
+            else:
+                path_ends.append(body_end)
+            join_paths(path_ends)
             for sub in statement.finalbody:
                 walk_stmt(sub)
             return
