@@ -43,6 +43,26 @@ on every path, it never walks a deferred body, and it keeps
 loop body credit only for the loops it can prove run at least
 once. The pins below cover those forms, plus the positive
 controls that keep the intersection honest.
+
+The landing red team then evaded the pass three analysis in
+three more families, in repair pass four. The walk modelled
+no path ending, so a loading call after a return, after a
+conditional whose arms both return, or after a raise inside
+a with body earned credit from dead code. The expression
+scan walked flat, so a call inside a comprehension over an
+empty sequence, inside a generator expression nobody
+consumes, behind a short circuited boolean operand, or in
+the untaken branch of a conditional expression earned
+credit the interpreter never gave it. And a class body
+walked in the enclosing environment, so a binding written
+there leaked into the test and shadowed the name the live
+call reads. The analysis now ends a path at the statement
+that ends it and counts only the paths that complete, the
+expression scan carries the same evaluation discipline as
+the statement walk, and a class body walks in a forked
+environment whose bindings are discarded when the
+definition ends. The pins below cover those forms, plus
+the positive controls that keep the new rules honest.
 """
 
 from __future__ import annotations
@@ -409,3 +429,211 @@ def test_linkage_call_in_a_nonempty_literal_loop_still_credits():
         """
     )
     assert loaded == {CLAIMED}
+
+
+def test_linkage_call_after_an_unconditional_return_earns_no_credit():
+    # Repair pass four, red team form 6a. The claimed name is
+    # handed to the loader only after a return has already
+    # ended the test, so the call is dead code and the fixture
+    # is never opened. The live call before the return loads
+    # the other fixture and keeps its credit.
+    loaded = _loads(
+        f"""
+        def test_shape(client, raw_response):
+            fixture_name = "{OTHER}"
+            result = search(client, raw_response, fixture_name)
+            return
+            dead = search(client, raw_response, "{CLAIMED}")
+        """
+    )
+    assert loaded == {OTHER}
+
+
+def test_linkage_call_after_a_conditional_whose_arms_both_return_earns_no_credit():
+    # Repair pass four, red team form 6c. Both arms of the
+    # conditional return, so every path through it has ended
+    # and the call after it is dead code on all of them, with
+    # no constant condition and no dead arm involved.
+    loaded = _loads(
+        f"""
+        def test_shape(client, raw_response):
+            fixture_name = "{OTHER}"
+            result = search(client, raw_response, fixture_name)
+            if client is not None:
+                return
+            else:
+                return
+            dead = search(client, raw_response, "{CLAIMED}")
+        """
+    )
+    assert loaded == {OTHER}
+
+
+def test_linkage_call_after_a_raise_in_a_with_body_earns_no_credit():
+    # Repair pass four, red team form 6d. The raise abandons
+    # the with body at once, so the call standing after it in
+    # the body never runs, whether or not the context manager
+    # suppresses the exception. The with walk forks its body,
+    # so the dead call earns nothing and the live call after
+    # the block loads the other fixture.
+    loaded = _loads(
+        f"""
+        def test_shape(client, raw_response):
+            from contextlib import suppress
+            fixture_name = "{OTHER}"
+            with suppress(RuntimeError):
+                raise RuntimeError("stop")
+                dead = search(client, raw_response, "{CLAIMED}")
+            result = search(client, raw_response, fixture_name)
+        """
+    )
+    assert loaded == {OTHER}
+
+
+def test_linkage_call_in_a_comprehension_over_an_empty_sequence_earns_no_credit():
+    # Repair pass four, red team form 7a. The comprehension
+    # iterates over an empty tuple, so its body runs zero
+    # times and the call inside it never runs. A comprehension
+    # body earns credit only on a provably nonempty literal
+    # sequence, so the claimed fixture earns nothing.
+    loaded = _loads(
+        f"""
+        def test_shape(client, raw_response):
+            fixture_name = "{OTHER}"
+            dead = [search(client, raw_response, "{CLAIMED}") for _unused in ()]
+            result = search(client, raw_response, fixture_name)
+        """
+    )
+    assert loaded == {OTHER}
+
+
+def test_linkage_call_in_an_unconsumed_generator_expression_earns_no_credit():
+    # Repair pass four, red team form 7b. A generator
+    # expression is lazy and nothing in the test consumes it,
+    # so its body never runs even though its iterable holds an
+    # item. The body is deferred code and earns no credit, as
+    # a lambda body earns none.
+    loaded = _loads(
+        f"""
+        def test_shape(client, raw_response):
+            fixture_name = "{OTHER}"
+            dead = (search(client, raw_response, "{CLAIMED}") for _unused in ("x",))
+            result = search(client, raw_response, fixture_name)
+        """
+    )
+    assert loaded == {OTHER}
+
+
+def test_linkage_call_behind_a_short_circuited_operand_earns_no_credit():
+    # Repair pass four, red team form 7c. The constant False
+    # decides the boolean operation, so the right operand is
+    # never evaluated and the call inside it never runs. An
+    # operand earns credit only behind constants that
+    # guarantee its evaluation.
+    loaded = _loads(
+        f"""
+        def test_shape(client, raw_response):
+            fixture_name = "{OTHER}"
+            dead = False and search(client, raw_response, "{CLAIMED}")
+            result = search(client, raw_response, fixture_name)
+        """
+    )
+    assert loaded == {OTHER}
+
+
+def test_linkage_call_in_an_untaken_conditional_expression_branch_earns_no_credit():
+    # Repair pass four, red team form 7d. The condition of
+    # the conditional expression selects the other branch, so
+    # the branch holding the claimed call is never evaluated.
+    # The branches fork and join by intersection, so a call
+    # standing in only one of them earns nothing.
+    loaded = _loads(
+        f"""
+        def test_shape(client, raw_response):
+            fixture_name = "{OTHER}"
+            dead = search(client, raw_response, "{CLAIMED}") if client is None else None
+            result = search(client, raw_response, fixture_name)
+        """
+    )
+    assert loaded == {OTHER}
+
+
+def test_linkage_rebind_inside_a_class_body_earns_no_credit():
+    # Repair pass four, red team form 8a. The class body runs
+    # when the definition does, but its assignments land in
+    # the class namespace, so the test local still holds the
+    # other fixture when the live call reads it. The body
+    # walks in a forked environment whose bindings are
+    # discarded, so the claimed fixture earns nothing.
+    loaded = _loads(
+        f"""
+        def test_shape(client, raw_response):
+            fixture_name = "{OTHER}"
+            class Holder:
+                fixture_name = "{CLAIMED}"
+            result = search(client, raw_response, fixture_name)
+        """
+    )
+    assert loaded == {OTHER}
+
+
+def test_linkage_call_in_both_conditional_expression_branches_still_credits():
+    # Positive control for the expression fork. Both branches
+    # of the conditional expression hand the claimed name to
+    # the loader, so whichever branch the condition selects
+    # the call runs, and the credit survives the intersection.
+    loaded = _loads(
+        f"""
+        def test_shape(client, raw_response):
+            result = search(client, raw_response, "{CLAIMED}") if client is not None else search(client, raw_response, "{CLAIMED}")
+        """
+    )
+    assert loaded == {CLAIMED}
+
+
+def test_linkage_call_behind_a_guaranteeing_constant_still_credits():
+    # Positive control for the short circuit rule. The
+    # constant True guarantees the right operand of the and
+    # evaluates, so the call behind it runs on every path and
+    # keeps its credit.
+    loaded = _loads(
+        f"""
+        def test_shape(client, raw_response):
+            result = True and search(client, raw_response, "{CLAIMED}")
+        """
+    )
+    assert loaded == {CLAIMED}
+
+
+def test_linkage_call_in_a_comprehension_over_a_nonempty_literal_still_credits():
+    # Positive control for the comprehension rule. The
+    # comprehension iterates over a literal tuple with two
+    # elements, so its body provably runs and the credit its
+    # call records is genuine.
+    loaded = _loads(
+        f"""
+        def test_shape(client, raw_response):
+            results = [search(client, raw_response, "{CLAIMED}") for _unused in ("x", "y")]
+        """
+    )
+    assert loaded == {CLAIMED}
+
+
+def test_linkage_call_in_a_class_body_still_credits():
+    # Positive control for the class scope rule. A loading
+    # call written directly in a class body runs when the
+    # class is defined, so it earns its credit, while the
+    # same body's rebind earns the enclosing scope nothing
+    # and the live call after the definition loads the other
+    # fixture.
+    loaded = _loads(
+        f"""
+        def test_shape(client, raw_response):
+            fixture_name = "{OTHER}"
+            class Holder:
+                fixture_name = "{CLAIMED}"
+                payload = fixture_payload("{CLAIMED}")
+            result = search(client, raw_response, fixture_name)
+        """
+    )
+    assert loaded == {CLAIMED, OTHER}
