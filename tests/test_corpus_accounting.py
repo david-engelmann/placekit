@@ -66,22 +66,88 @@ def _builder_module():
     return module
 
 
-_SYMBOLIC_NAME = "the symbolic fixture name the loader derivation binds"
+def _target_names(target) -> list:
+    """The local names an assignment target binds."""
+    if isinstance(target, ast.Name):
+        return [target.id]
+    if isinstance(target, ast.Starred):
+        return _target_names(target.value)
+    if isinstance(target, (ast.Tuple, ast.List)):
+        names = []
+        for element in target.elts:
+            names.extend(_target_names(element))
+        return names
+    return []
 
 
-def _seed_parameter(node) -> str | None:
-    """The parameter a disk reading helper reads through.
+def _assignment_pairs(statements) -> list:
+    """The target and value pairs of the assignments in a body.
 
-    A helper whose own body reads a file from disk seeds the
-    loader set, and the read is faithful only when the path it
-    reads is built from a name the helper was handed. The names
-    a value depends on are tracked through the body assignments
-    as a safe over reading, never entering a nested definition,
-    whose assignments bind in its own scope, and the helper is
-    a seed through a parameter when the target expression of
-    one of its reads depends on that parameter.
+    The pairs are read syntactically over the whole body,
+    never entering a nested definition, whose assignments
+    bind in its own scope. Plain and annotated assignments,
+    walrus bindings, loop targets, and augmented assignments
+    all gather. Augmented assignments gather because a name
+    augmented from a value derives from that value in exactly
+    the way a name assigned from it does, and both readings
+    the pairs serve, the names a loop body derives from its
+    target and the names a seed read target derives from, are
+    over readings that must not miss a derivation, since a
+    missed derivation can only refuse a shape, never credit
+    one.
     """
-    parameters = [
+    pairs = []
+
+    def collect(node):
+        if isinstance(
+            node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda)
+        ):
+            return
+        if isinstance(node, ast.Assign):
+            targets = []
+            for target in node.targets:
+                targets.extend(_target_names(target))
+            pairs.append((targets, node.value))
+        elif isinstance(node, ast.AnnAssign) and node.value is not None:
+            pairs.append((_target_names(node.target), node.value))
+        elif isinstance(node, ast.AugAssign):
+            pairs.append((_target_names(node.target), node.value))
+        elif isinstance(node, ast.NamedExpr):
+            pairs.append((_target_names(node.target), node.value))
+        elif isinstance(node, (ast.For, ast.AsyncFor)):
+            pairs.append((_target_names(node.target), node.iter))
+        for child in ast.iter_child_nodes(node):
+            collect(child)
+
+    for statement in statements:
+        collect(statement)
+    return pairs
+
+
+def _symbolic_value(parameter: str) -> str:
+    """The symbolic fixture name one parameter is bound to.
+
+    Every parameter of a helper under a derivation proof is
+    bound to its own symbolic name, distinct from every other
+    parameter's, so credit earned through one parameter can
+    never be mistaken for credit earned through another.
+    """
+    return f"the symbolic fixture name bound to parameter {parameter}"
+
+
+_UNRESOLVED_READ = "the fixture name a disk read may load that the walk cannot resolve"
+
+
+def _parameter_names(node) -> list:
+    """The names of the parameters a helper can be handed.
+
+    Positional and keyword parameters both count. A fixture
+    name arriving through a starred or a double starred
+    parameter cannot be tracked to the argument that carried
+    it, so those parameters stand outside the proofs, and a
+    helper that loads through one fails closed.
+    """
+    return [
         argument.arg
         for argument in (
             *node.args.posonlyargs,
@@ -89,135 +155,122 @@ def _seed_parameter(node) -> str | None:
             *node.args.kwonlyargs,
         )
     ]
-    pairs = []
 
-    def collect(current):
-        if isinstance(
-            current, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda)
-        ):
-            return
-        if isinstance(current, ast.Assign):
-            targets = []
-            for target in current.targets:
-                targets.extend(
-                    sub.id for sub in ast.walk(target) if isinstance(sub, ast.Name)
-                )
-            pairs.append((targets, current.value))
-        elif isinstance(current, ast.AnnAssign) and current.value is not None:
-            pairs.append(
-                (
-                    [
-                        sub.id
-                        for sub in ast.walk(current.target)
-                        if isinstance(sub, ast.Name)
-                    ],
-                    current.value,
-                )
-            )
-        elif isinstance(current, ast.NamedExpr):
-            pairs.append(([current.target.id], current.value))
-        elif isinstance(current, (ast.For, ast.AsyncFor)):
-            pairs.append(
-                (
-                    [
-                        sub.id
-                        for sub in ast.walk(current.target)
-                        if isinstance(sub, ast.Name)
-                    ],
-                    current.iter,
-                )
-            )
-        for child in ast.iter_child_nodes(current):
-            collect(child)
 
-    for statement in node.body:
-        collect(statement)
-    reads = [
-        sub.func.value
-        for sub in ast.walk(node)
-        if isinstance(sub, ast.Call)
-        and isinstance(sub.func, ast.Attribute)
-        and sub.func.attr in ("read_bytes", "read_text")
-    ]
-    if not reads:
+def _parameter_index(node, parameter: str) -> int | None:
+    """The positional index of a parameter, or None.
+
+    The index counts the positional parameters, the ones a
+    call can fill by position. A keyword only parameter has
+    no position and returns None, so a call fills its slot by
+    keyword alone.
+    """
+    positional = [argument.arg for argument in (*node.args.posonlyargs, *node.args.args)]
+    if parameter in positional:
+        return positional.index(parameter)
+    return None
+
+
+def _seed_name_parameter(node, source) -> str | None:
+    """The parameter a disk reading helper provably reads through.
+
+    The helper body is analysed once, with a distinct
+    symbolic fixture name bound to each of its parameters and
+    its disk reads standing as loading calls whose name
+    argument is the read target, and the helper is a seed
+    through a parameter only when the credited set of every
+    path that completes the analysis is exactly that
+    parameter's symbolic name. A reader that diverts the name
+    it is handed to another fixture on one of its paths
+    credits that fixture there, a reader that reads its
+    argument as a decoy and returns a fixed name credits both
+    on the one path, and a reader whose read target does not
+    resolve to the handed parameter credits something the
+    proof cannot name, so each is refused, and the derivation
+    fails closed without it.
+    """
+    segment = ast.get_source_segment(source, node)
+    if segment is None:
         return None
-
-    def mentions(expression, names):
-        return any(
-            isinstance(sub, ast.Name) and sub.id in names for sub in ast.walk(expression)
-        )
-
+    parameters = _parameter_names(node)
+    bindings = {
+        parameter: frozenset([_symbolic_value(parameter)]) for parameter in parameters
+    }
+    path_credits: list = []
+    _fixtures_a_test_loads(
+        segment, set(), bindings, path_credits=path_credits, credit_reads=True
+    )
+    if not path_credits:
+        return None
     for parameter in parameters:
-        depends = {parameter}
-        growing = True
-        while growing:
-            growing = False
-            for targets, value in pairs:
-                if mentions(value, depends):
-                    for name in targets:
-                        if name not in depends:
-                            depends.add(name)
-                            growing = True
-        if any(mentions(target, depends) for target in reads):
+        if all(
+            credit == {_symbolic_value(parameter)} for credit in path_credits
+        ):
             return parameter
     return None
 
 
-def _helper_passes_name_through(node, source, loaders) -> bool:
-    """Whether a helper loads exactly the fixture name it is handed.
+def _helper_name_parameter(node, source, slots) -> str | None:
+    """The parameter a helper provably loads a fixture name from.
 
-    The helper body is analysed with each of its parameters in
-    turn bound to a symbolic fixture name, against the loader
-    set as it stands, and the helper passes only when the
-    credited set of one such analysis is exactly the symbolic
-    name. A helper that drops its argument and loads a fixed
-    name of its own earns that fixed name instead, a helper
-    that hands its argument over on only some of its paths
-    earns the intersection of its paths, and a helper that
-    loads its argument beside a fixed name earns both, so
-    each differs from the symbolic name alone and is refused.
+    The helper body is analysed once, with a distinct
+    symbolic fixture name bound to each of its parameters,
+    against the loader set as it stands, and only the
+    argument sitting in the name slot of a loader call can
+    earn credit, never an argument in any other slot. The
+    helper passes a name through the parameter whose symbolic
+    name is the credited set of every path that completes the
+    analysis. A helper that drops its argument earns a fixed
+    name on the paths that load, a helper that hands its
+    argument over on only some of its paths earns a different
+    set on the others, and a helper whose credit would arrive
+    through an argument that carries no fixture name earns
+    that argument's own symbolic name, which is the wrong one
+    unless the parameter it names is the one the loader calls
+    are fed in their name position, so each is refused.
     """
     segment = ast.get_source_segment(source, node)
     if segment is None:
-        return False
-    parameters = [
-        argument.arg
-        for argument in (
-            *node.args.posonlyargs,
-            *node.args.args,
-            *node.args.kwonlyargs,
-        )
-    ]
+        return None
+    parameters = _parameter_names(node)
+    bindings = {
+        parameter: frozenset([_symbolic_value(parameter)]) for parameter in parameters
+    }
+    path_credits: list = []
+    _fixtures_a_test_loads(
+        segment,
+        set(slots),
+        bindings,
+        name_slots=slots,
+        path_credits=path_credits,
+    )
+    if not path_credits:
+        return None
     for parameter in parameters:
-        credited = _fixtures_a_test_loads(
-            segment, loaders, {parameter: frozenset([_SYMBOLIC_NAME])}
-        )
-        if credited == {_SYMBOLIC_NAME}:
-            return True
-    return False
+        if all(
+            credit == {_symbolic_value(parameter)} for credit in path_credits
+        ):
+            return parameter
+    return None
 
 
-def _loader_function_names(filename: str) -> set[str]:
-    """Names of the module level helpers that load a fixture by name.
+def _derive_loaders(filename: str) -> dict:
+    """The loader name slots derived from a module, by name.
 
-    The set is derived from the module itself, and membership
-    is a claim about faithfulness as much as about
-    reachability. The reader at the bottom is the helper whose
-    own body reads a file from disk, and it joins only when
-    the read is of a path built from a name it was handed,
-    tracked through its assignments. A helper that calls a
-    loader joins only when it hands over the name it was
-    given on every path, proven by analysing its body with a
-    symbolic fixture name bound to its parameter, so the
-    payload helper and the search and details replayers join
-    through the readers they call, while a helper that drops
-    its argument, loads a fixed name of its own, or passes
-    its argument on only some paths is refused. Admission is
-    iterated to a fixed point and then verified against the
-    finished set, so every member still provably loads the
-    fixture it is handed beside the other members. Test
-    functions never join, because nothing loads a fixture
-    through a test.
+    Each member maps to the slot of its fixture name
+    argument, the positional index and the parameter name a
+    call fills when it hands a fixture name over. The reader
+    at the bottom of the module seeds the set through the
+    seed proof, and a helper that calls a loader joins
+    through the caller proof against the slots as they
+    stand. Admission is iterated to a fixed point and then
+    verified against the finished set, the seed members by
+    re-running the seed proof and the caller members by
+    re-running the caller proof against the finished slots
+    without their own, so every member still provably loads
+    the fixture it is handed beside the other members, and a
+    member whose proof depended on a member the verification
+    refused is refused in turn.
     """
     path = Path(__file__).parent / filename
     source = path.read_text()
@@ -227,32 +280,78 @@ def _loader_function_names(filename: str) -> set[str]:
         for node in tree.body
         if isinstance(node, ast.FunctionDef) and not node.name.startswith("test_")
     }
-    seeds = {
-        name for name, node in helpers.items() if _seed_parameter(node) is not None
+    seeds = {}
+    for name, node in helpers.items():
+        parameter = _seed_name_parameter(node, source)
+        if parameter is not None:
+            seeds[name] = parameter
+    slots = {
+        name: (_parameter_index(helpers[name], parameter), parameter)
+        for name, parameter in seeds.items()
     }
-    loaders = set(seeds)
     while True:
         growing = True
         while growing:
             growing = False
             for name, node in helpers.items():
-                if name not in loaders and _helper_passes_name_through(
-                    node, source, loaders
-                ):
-                    loaders.add(name)
-                    growing = True
-        refused = {
-            name
-            for name in loaders - seeds
-            if not _helper_passes_name_through(helpers[name], source, loaders - {name})
-        }
+                if name not in slots:
+                    parameter = _helper_name_parameter(node, source, slots)
+                    if parameter is not None:
+                        slots[name] = (_parameter_index(node, parameter), parameter)
+                        growing = True
+        refused = set()
+        for name in slots:
+            if name in seeds:
+                parameter = _seed_name_parameter(helpers[name], source)
+            else:
+                others = {key: slot for key, slot in slots.items() if key != name}
+                parameter = _helper_name_parameter(helpers[name], source, others)
+            if parameter is None or slots[name][1] != parameter:
+                refused.add(name)
         if not refused:
-            return loaders
-        loaders -= refused
+            return slots
+        for name in refused:
+            slots.pop(name, None)
+
+
+def _loader_function_names(filename: str) -> set[str]:
+    """Names of the module level helpers that load a fixture by name.
+
+    The set is derived from the module itself, and membership
+    is a claim about faithfulness as much as about
+    reachability. The reader at the bottom is the helper whose
+    own body reads a file from disk, and it joins only when a
+    proof of the same strength as the caller proof, run with
+    a distinct symbolic fixture name bound to each of its
+    parameters and its reads standing as loading calls, credits
+    exactly the symbolic name of the parameter it was handed
+    on every path, so a reader that diverts the name it is
+    handed or reads its argument as a decoy is refused. A
+    helper that calls a loader joins only when it hands over
+    the name it was given on every path, proven by the same
+    single analysis, in which only the argument sitting in
+    the name slot of a loader call can earn credit, so the
+    payload helper and the search and details replayers join
+    through the readers they call, while a helper that drops
+    its argument, loads a fixed name of its own, passes its
+    argument on only some paths, or earns its credit through
+    an argument that carries no fixture name is refused.
+    Admission is iterated to a fixed point and then verified
+    against the finished set, so every member still provably
+    loads the fixture it is handed beside the other members.
+    Test functions never join, because nothing loads a fixture
+    through a test.
+    """
+    return set(_derive_loaders(filename))
 
 
 def _fixtures_a_test_loads(
-    source: str, loaders: set[str], initial_bindings: dict | None = None
+    source: str,
+    loaders: set[str],
+    initial_bindings: dict | None = None,
+    name_slots: dict | None = None,
+    path_credits: list | None = None,
+    credit_reads: bool = False,
 ) -> set[str]:
     """Fixture file names one test hands to a loading helper.
 
@@ -331,6 +430,17 @@ def _fixtures_a_test_loads(
     default values of a definition are scanned because they
     evaluate when the definition does.
 
+    A nested definition is not inert for bindings, though. A
+    name it declares nonlocal or global is a name it may write
+    into a scope outside itself when it is called, and the
+    walk cannot see when or whether the write lands, so such a
+    name reads as unresolvable from the statement of the
+    definition onward, in a test body and in a helper under a
+    derivation proof alike. A definition inside a class body
+    writes back the same way, because a method's nonlocal
+    declaration names the enclosing function scope, past the
+    class namespace its other assignments land in.
+
     The walk also models a path ending. A return ends its
     path where it stands, and the credit it holds stands
     frozen toward the whole test, because a returned test has
@@ -383,10 +493,34 @@ def _fixtures_a_test_loads(
     from the one named residual above, and a shape it
     cannot model resolves to no credit and fails the
     accounting check closed.
+
+    Three further modes serve the loader derivation proofs
+    and are never used on a test body. With a slot table in
+    force, a loading call credits only the argument standing
+    in the name slot of the loader it calls, so credit traces
+    to the one parameter in that position. With the credited
+    set of every completing path collected beside the walk,
+    a proof can require one credited set on all of them
+    rather than the intersection the walk returns. With disk
+    reads credited, a read stands as a loading call whose
+    name argument is its target, so the reader at the bottom
+    of a module is proven in the same terms as a helper that
+    calls a loader.
     """
     function = ast.parse(source).body[0]
     loaded = set()
     env = dict(initial_bindings) if initial_bindings else {}
+    own_parameters = {
+        argument.arg
+        for argument in (
+            *function.args.posonlyargs,
+            *function.args.args,
+            *function.args.kwonlyargs,
+            *([function.args.vararg] if function.args.vararg is not None else []),
+            *([function.args.kwarg] if function.args.kwarg is not None else []),
+        )
+    }
+    read_pairs = _assignment_pairs(function.body) if credit_reads else []
     unbound = object()
     # The walk state record holds whether the path being
     # walked is still alive, the credit frozen by the paths
@@ -426,18 +560,6 @@ def _fixtures_a_test_loads(
             return result
         return None
 
-    def target_names(target):
-        if isinstance(target, ast.Name):
-            return [target.id]
-        if isinstance(target, ast.Starred):
-            return target_names(target.value)
-        if isinstance(target, (ast.Tuple, ast.List)):
-            names = []
-            for element in target.elts:
-                names.extend(target_names(element))
-            return names
-        return []
-
     def bind(target, value):
         """Record one binding, with value a name set or None."""
         if isinstance(target, ast.Name):
@@ -458,6 +580,21 @@ def _fixtures_a_test_loads(
             elif isinstance(node, ast.MatchMapping):
                 if node.rest is not None:
                     names.append(node.rest)
+        return names
+
+    def writeback_names(node):
+        """The names a definition subtree declares global or nonlocal.
+
+        A declaration anywhere in the subtree counts, at any
+        depth, because the walk cannot see which nested body
+        a call reaches, and every such name is one a call into
+        the definition may write in a scope outside the body
+        that declares it.
+        """
+        names = set()
+        for sub in ast.walk(node):
+            if isinstance(sub, (ast.Global, ast.Nonlocal)):
+                names.update(sub.names)
         return names
 
     def body_has_bypass(statements):
@@ -505,32 +642,7 @@ def _fixtures_a_test_loads(
         bind in their own scope and the walk never enters them
         either.
         """
-        pairs = []
-
-        def collect(node):
-            if isinstance(
-                node,
-                (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda),
-            ):
-                return
-            if isinstance(node, ast.Assign):
-                targets = []
-                for target in node.targets:
-                    targets.extend(target_names(target))
-                pairs.append((targets, node.value))
-            elif isinstance(node, ast.AnnAssign) and node.value is not None:
-                pairs.append((target_names(node.target), node.value))
-            elif isinstance(node, ast.AugAssign):
-                pairs.append((target_names(node.target), node.value))
-            elif isinstance(node, ast.NamedExpr):
-                pairs.append((target_names(node.target), node.value))
-            elif isinstance(node, (ast.For, ast.AsyncFor)):
-                pairs.append((target_names(node.target), node.iter))
-            for child in ast.iter_child_nodes(node):
-                collect(child)
-
-        for statement in statements:
-            collect(statement)
+        pairs = _assignment_pairs(statements)
         derived = {seed}
         growing = True
         while growing:
@@ -563,12 +675,148 @@ def _fixtures_a_test_loads(
         A returned test has run to completion, so the fixtures
         the path loaded are one of the sets the whole test is
         intersected against, and a fixture it never loaded can
-        earn no credit from code it never reaches.
+        earn no credit from code it never reaches. The set is
+        also recorded whole in the path credits when a
+        derivation proof is collecting them, so the proof can
+        judge every completing path on its own set rather
+        than on the intersection alone.
         """
+        if path_credits is not None:
+            path_credits.append(set(credit))
         if flow["finished"] is None:
             flow["finished"] = set(credit)
         else:
             flow["finished"].intersection_update(credit)
+
+    def record_slot_call(call, slot):
+        """Credit a loading call through its name slot alone.
+
+        The slot is the position and the parameter name of the
+        fixture name argument of the loader being called, as
+        the derivation recorded them when the loader was
+        itself proven. Only the argument standing in that slot
+        earns credit, by keyword when the call names it and
+        otherwise by position, and a call whose slot a starred
+        argument leaves unplaceable earns nothing, so credit
+        in a derivation proof can arrive only through the
+        parameter that occupies the name position.
+        """
+        if flow["suppress"]:
+            return
+        index, parameter = slot
+        argument = None
+        for keyword in call.keywords:
+            if keyword.arg == parameter:
+                argument = keyword.value
+                break
+        if argument is None and index is not None and index < len(call.args):
+            if not any(
+                isinstance(arg, ast.Starred) for arg in call.args[: index + 1]
+            ):
+                argument = call.args[index]
+        if argument is None:
+            return
+        names = value_of(argument)
+        if names:
+            loaded.update(names)
+
+    def dependence_names(name):
+        """The fixture names an unresolvable local may derive from.
+
+        The local's assignments in the walked body are traced
+        through the shared assignment pair reading, so a read
+        target built in a local from a handed parameter still
+        resolves to that parameter. The result is the set of
+        fixture names the trace reaches, or None when the
+        trace reaches a name bound from a value the pairs do
+        not explain, or a handed parameter the walk never
+        bound, because a read fed by such a local earns a name
+        the proof cannot credit. A name the trace meets that
+        the body never assigns and the function was never
+        handed is module level furniture a path is built
+        from, and it carries no fixture name.
+        """
+        credited = set()
+        seen = set()
+        frontier = [name]
+        while frontier:
+            current = frontier.pop()
+            if current in seen:
+                continue
+            seen.add(current)
+            explained = False
+            for targets, value in read_pairs:
+                if current not in targets:
+                    continue
+                explained = True
+                for sub in ast.walk(value):
+                    if isinstance(sub, ast.Constant) and isinstance(sub.value, str):
+                        credited.add(sub.value)
+                    elif isinstance(sub, ast.Name):
+                        if sub.id in env and env[sub.id] is not None:
+                            credited.update(env[sub.id])
+                        elif any(
+                            sub.id in pair_targets for pair_targets, _ in read_pairs
+                        ):
+                            frontier.append(sub.id)
+                        elif sub.id in env or sub.id in own_parameters:
+                            return None
+            if not explained:
+                return None
+        return frozenset(credited)
+
+    def read_values(expression):
+        """The fixture names a disk read target may denote.
+
+        The name a path expression denotes stands in its
+        final component, so a division chain resolves through
+        its right operand alone, the components before it
+        being the folders the path is built from, and any
+        other target is read whole. A string constant in the
+        component is a fixture name the read may load, and a
+        local name contributes the binding in effect for it,
+        or, when that binding does not resolve, the names its
+        assignments in the body derive it from. A component
+        holding a call, or a local whose derivation the trace
+        cannot see through, resolves to None, and a read fed
+        by it earns a name the proof cannot credit.
+        """
+        if isinstance(expression, ast.BinOp) and isinstance(expression.op, ast.Div):
+            return read_values(expression.right)
+        names = set()
+        for sub in ast.walk(expression):
+            if isinstance(sub, ast.Call):
+                return None
+            if isinstance(sub, ast.Constant) and isinstance(sub.value, str):
+                names.add(sub.value)
+            elif isinstance(sub, ast.Name) and sub.id in env:
+                resolved = env[sub.id]
+                if resolved is not None:
+                    names.update(resolved)
+                else:
+                    traced = dependence_names(sub.id)
+                    if traced is None:
+                        return None
+                    names.update(traced)
+        return frozenset(names)
+
+    def record_read(call):
+        """Credit a disk read as a loading call in a seed proof.
+
+        The read target stands in for the name argument, and
+        the fixture names it may denote are credited. A target
+        the walk cannot resolve earns the unresolved read
+        name instead, which no proof can mistake for the
+        symbolic name of a parameter, so the reader under
+        proof is refused.
+        """
+        if flow["suppress"]:
+            return
+        values = read_values(call.func.value)
+        if values is None:
+            loaded.add(_UNRESOLVED_READ)
+        else:
+            loaded.update(values)
 
     def scan_suppressed(node):
         """Scan an expression whose calls earn no credit.
@@ -814,7 +1062,7 @@ def _fixtures_a_test_loads(
             generators = node.generators
             names = []
             for generator in generators:
-                names.extend(target_names(generator.target))
+                names.extend(_target_names(generator.target))
             saved = save(names)
             exempt = isinstance(
                 generators[0].iter, (ast.Tuple, ast.List, ast.Set)
@@ -851,7 +1099,7 @@ def _fixtures_a_test_loads(
             generators = node.generators
             names = []
             for generator in generators:
-                names.extend(target_names(generator.target))
+                names.extend(_target_names(generator.target))
             saved = save(names)
             scan(generators[0].iter)
             for index, generator in enumerate(generators):
@@ -919,12 +1167,18 @@ def _fixtures_a_test_loads(
             else:
                 bind(node.target, value_of(node.value))
             return
-        if (
-            isinstance(node, ast.Call)
-            and isinstance(node.func, ast.Name)
-            and node.func.id in loaders
-        ):
-            record_call(node)
+        if isinstance(node, ast.Call):
+            if isinstance(node.func, ast.Name) and node.func.id in loaders:
+                if name_slots is None:
+                    record_call(node)
+                elif node.func.id in name_slots:
+                    record_slot_call(node, name_slots[node.func.id])
+            elif (
+                credit_reads
+                and isinstance(node.func, ast.Attribute)
+                and node.func.attr in ("read_bytes", "read_text")
+            ):
+                record_read(node)
         for child in ast.iter_child_nodes(node):
             scan(child)
 
@@ -936,7 +1190,11 @@ def _fixtures_a_test_loads(
             # walked and a loading call inside it earns no credit,
             # the helper treatment. The decorators and the default
             # values are scanned because they evaluate when the
-            # definition does.
+            # definition does. The definition is not inert for
+            # bindings, though, because a name it declares global
+            # or nonlocal is one a call into it may write in the
+            # enclosing scope, so every such name reads as
+            # unresolvable from the definition onward.
             for decorator in statement.decorator_list:
                 scan(decorator)
             for default in statement.args.defaults:
@@ -944,6 +1202,8 @@ def _fixtures_a_test_loads(
             for default in statement.args.kw_defaults:
                 if default is not None:
                     scan(default)
+            for name in writeback_names(statement):
+                env[name] = None
             return
         if isinstance(statement, ast.ClassDef):
             # A class body runs when the definition does, so a
@@ -970,6 +1230,13 @@ def _fixtures_a_test_loads(
             raised = any(end[2] == "raise" for end in inner_completed)
             env.clear()
             env.update(saved_env)
+            # A method of the class can declare a name nonlocal
+            # and write it in the enclosing function scope, past
+            # the class namespace, so the write back names of
+            # the whole definition are poisoned in the restored
+            # environment even though its bindings are discarded.
+            for name in writeback_names(statement):
+                env[name] = None
             flow["alive"] = False if raised else saved_alive
             return
         if isinstance(statement, ast.Return):
@@ -1085,6 +1352,11 @@ def _fixtures_a_test_loads(
                 and bool(statement.test.value)
                 and not body_has_bypass(statement.body)
             )
+            # A while loop binds no target, so there is no end
+            # state to settle here the way the for branch
+            # settles its target. The names its body binds meet
+            # the identical binding join inside the loop walk,
+            # against the path where the body never runs.
             walk_loop(statement.body, statement.orelse, guaranteed, None, completed)
             return
         if isinstance(statement, ast.If):
@@ -1205,6 +1477,8 @@ def _fixtures_a_test_loads(
         if not flow["alive"]:
             break
         walk_stmt(statement, completed)
+    if path_credits is not None and flow["alive"]:
+        path_credits.append(set(loaded))
     result = set(loaded) if flow["alive"] else None
     if flow["finished"] is not None:
         if result is None:
