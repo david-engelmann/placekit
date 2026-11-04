@@ -241,6 +241,36 @@ dunder init method and through the module level base
 classes it names. The pins below cover those forms,
 plus the control that keeps the uninvoked lambda
 honest.
+
+The landing red team then evaded the pass twelve
+analysis in one more family, in repair pass thirteen,
+in the executions a class statement performs
+implicitly. Creating a class runs the subclass hook
+of every base it names and the construction of the
+metaclass it names, and neither execution wears the
+shape of a call standing in the source, so an
+installer called from a hook on a module level base,
+and a name rewritten by a metaclass at class
+creation, were never collected, though the write set
+of the metaclass stood gathered among the targets
+the reach consults and only the invocation was
+missing. And a class standing inside a body the
+reach has entered was stepped over whole, so a
+decorator expression on such a class was discarded
+with its body, though the header of a function
+definition in the same position was already read and
+the header of a class at module level was read
+before it. A class creation now counts beside the
+header and body readings, as a call into the
+subclass hooks of the module level bases the class
+names, resolved through the base chain, and, when
+its metaclass keyword names a module level class, as
+a call into the construction gathered for that name,
+and a class in any executing position contributes
+its header parts while its body inside a reached
+body stays deferred. The pins below cover those
+forms, plus the boundary control that marks where
+the family ended.
 """
 
 from __future__ import annotations
@@ -2036,3 +2066,194 @@ def test_loader_derivation_admits_a_helper_beside_an_uninvoked_lambda(tmp_path):
         """,
     )
     assert loaders == {"reader", "shadow_search"}
+
+
+def test_loader_derivation_refuses_a_helper_rewritten_through_a_subclass_hook(tmp_path):
+    # Repair pass thirteen, red team form 20a. Defining
+    # a subclass calls the dunder init subclass method
+    # of each base it names, so a subclass standing
+    # after the helper runs the hook its base defines,
+    # the hook runs the installer, and the name a test
+    # calls denotes the lambda the installer leaves
+    # behind. The pass twelve reach collected a call
+    # only where a call stands in the source, and the
+    # hook execution wears no call shape, so it was
+    # never collected, and the hook method was gathered
+    # by no reading at all. A class creation now counts
+    # as a call into the subclass hooks of the module
+    # level bases the class names, resolved through the
+    # base chain, whose bodies join the reach.
+    loaders = _derived_loaders(
+        tmp_path,
+        """
+        ROOT = None
+
+
+        def reader(name):
+            return (ROOT / name).read_bytes()
+
+
+        def shadow_search(client, raw_response, name):
+            return reader(name)
+
+
+        def _install_shadow():
+            global shadow_search
+            shadow_search = lambda client, raw_response, name: None
+
+
+        class _HookBase:
+            def __init_subclass__(cls, **kwargs):
+                _install_shadow()
+
+
+        class _HookChild(_HookBase):
+            pass
+        """,
+    )
+    assert loaders == {"reader"}
+
+
+def test_loader_derivation_refuses_a_helper_rewritten_by_a_metaclass(tmp_path):
+    # Repair pass thirteen, red team form 20b. Defining
+    # a class under a metaclass calls that metaclass to
+    # construct the class, and here the metaclass init
+    # method assigns the helper name under a global
+    # declaration as the class is created, so the name
+    # denotes the lambda before any test is collected.
+    # The pass twelve reading already gathered the
+    # write set of that method as the construction
+    # write set of the metaclass, and the metaclass
+    # stood among the targets the reach consults, but
+    # the metaclass keyword standing in the class
+    # header was visited as a bare name and never as
+    # the invocation it performs, so no call into the
+    # metaclass was ever recorded. The keyword naming a
+    # module level class now counts as a call into the
+    # construction gathered for that name.
+    loaders = _derived_loaders(
+        tmp_path,
+        """
+        ROOT = None
+
+
+        def reader(name):
+            return (ROOT / name).read_bytes()
+
+
+        def shadow_search(client, raw_response, name):
+            return reader(name)
+
+
+        class _ShadowMeta(type):
+            def __init__(cls, name, bases, namespace):
+                global shadow_search
+                shadow_search = lambda client, raw_response, name: None
+
+
+        class _ShadowMarked(metaclass=_ShadowMeta):
+            pass
+        """,
+    )
+    assert loaders == {"reader"}
+
+
+def test_loader_derivation_refuses_a_helper_rewritten_through_a_class_decorator_in_a_reached_body(
+    tmp_path,
+):
+    # Repair pass thirteen, red team form 20c. A
+    # definition the module level calls defines a
+    # decorated class in its body, and the class
+    # statement evaluates its decorator expression as
+    # the body runs it, so the installer call standing
+    # in that expression runs and the name denotes the
+    # lambda. The pass twelve visitor entered the
+    # enclosing body and returned whole at the class
+    # node, discarding the header with the body, though
+    # the header of a function definition in the same
+    # position was already read and the header of a
+    # class at module level was read before it. A class
+    # in any executing position now contributes its
+    # header parts, while its body inside a reached
+    # body stays deferred on the terms a definition
+    # body stands on.
+    loaders = _derived_loaders(
+        tmp_path,
+        """
+        ROOT = None
+
+
+        def reader(name):
+            return (ROOT / name).read_bytes()
+
+
+        def shadow_search(client, raw_response, name):
+            return reader(name)
+
+
+        def _install_shadow():
+            global shadow_search
+            shadow_search = lambda client, raw_response, name: None
+
+
+        def _wrap(value):
+            return lambda cls: cls
+
+
+        def _run_at_load():
+            @_wrap(_install_shadow())
+            class _Inner:
+                pass
+
+
+        _run_at_load()
+        """,
+    )
+    assert loaders == {"reader"}
+
+
+def test_loader_derivation_refuses_a_helper_rewritten_in_a_subclass_body(tmp_path):
+    # Repair pass thirteen, the boundary control, red
+    # team form 20d. The same hook base and the same
+    # installer as form 20a stand here, with the
+    # subclass carrying the installer call plainly in
+    # its own body. This shape was already refused
+    # before this pass, on the pass eleven ground that
+    # the bodies of classes standing at module level
+    # are executing statements whose plain calls are
+    # collected, and it is pinned here as the boundary
+    # of family 20, marking that the family turned on
+    # the invocation being implicit and not on the
+    # class being created. The call in the body bit
+    # while the call in the hook evaded, until the
+    # creation reading of this pass counted the hook
+    # with it.
+    loaders = _derived_loaders(
+        tmp_path,
+        """
+        ROOT = None
+
+
+        def reader(name):
+            return (ROOT / name).read_bytes()
+
+
+        def shadow_search(client, raw_response, name):
+            return reader(name)
+
+
+        def _install_shadow():
+            global shadow_search
+            shadow_search = lambda client, raw_response, name: None
+
+
+        class _HookBase:
+            def __init_subclass__(cls, **kwargs):
+                _install_shadow()
+
+
+        class _HookChild(_HookBase):
+            _install_shadow()
+        """,
+    )
+    assert loaders == {"reader"}
