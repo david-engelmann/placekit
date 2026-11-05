@@ -594,10 +594,15 @@ def _later_call_rewrites(module_body, position, name) -> bool:
     reach closes over, and the operand resolution of
     the with and for statements among them, and the
     selection reading among them, a subscript whose
-    value position holds such a name selecting out
-    of the element the name denotes beside the
-    module bindings route on the placement index
-    terms, the
+    value position holds such a name, the name
+    standing there bare or yielded to the position
+    through an arm of a conditional expression, an
+    operand of a boolean expression, or the value
+    a walrus expression yields, or standing behind
+    a further name bound to such a yielding form,
+    selecting out of the element the name denotes
+    beside the module bindings route on the
+    placement index terms, the
     elements read where the iterable stands as a
     literal tuple or list or as a plain name the
     bindings resolve to one, on the element terms
@@ -867,7 +872,14 @@ def _later_call_rewrites(module_body, position, name) -> bool:
     boolean expression, or the value a walrus
     expression yields, or denoted there by a name
     bound to a subscript selecting it out of a
-    further literal so standing, on the index terms the
+    further literal so standing, and a name
+    standing in the value position bound to a
+    subscript whose own value position holds such
+    a yielding form or a loop target name resolving
+    beside the denotation the bare name takes to
+    the classes of the elements that subscript's
+    selection yields on the same terms, on the
+    index terms the
     placement reading selects on, on the reach's
     expression terms beside the bare name and
     subscript forms the denotation reading takes,
@@ -1236,7 +1248,14 @@ def _later_call_rewrites(module_body, position, name) -> bool:
         whole resolution. A loop target name standing
         in the value position resolves beside that
         route through the loop target element reading,
-        to the elements the name denotes, so the
+        to the elements the name denotes, wherever in
+        the value position the resolution reaches it,
+        the name standing there bare, or yielded to
+        the position through an arm of a conditional
+        expression, an operand of a boolean
+        expression, or the value a walrus expression
+        yields, or standing behind a further name
+        bound to such a yielding form in turn, so the
         subscript selects out of the element the name
         denotes on the same index terms rather than
         out of the iterable its header walks, the
@@ -1276,7 +1295,7 @@ def _later_call_rewrites(module_body, position, name) -> bool:
                 selected.extend(elements)
         return selected
 
-    def subscript_value_class_names(expression):
+    def subscript_value_class_names(expression, seen_names=frozenset()):
         """The class names a subscript's value position resolves to.
 
         The execution counting reads a subscript's value
@@ -1305,26 +1324,67 @@ def _later_call_rewrites(module_body, position, name) -> bool:
         index terms the placement reading selects on,
         because the outer subscript performs the class
         getitem of the class the selection yields.
+        A name standing in the position bound to a
+        subscript whose own value position holds a
+        yielding form of those kinds, or a loop target
+        name the selection reading resolves beside the
+        module bindings route, resolves beside the
+        denotation the bare name takes to the classes
+        of the elements that subscript's selection
+        yields, read through the selection reading on
+        the same terms, because the name denotes the
+        element the selection yields and the forms
+        that subscript stands on are the selection
+        reading's own ground, while a name bound to a
+        subscript standing on any other value, a
+        literal among them, resolves through the
+        denotation alone.
         """
         if isinstance(expression, ast.IfExp):
-            names = subscript_value_class_names(expression.body)
-            names.extend(subscript_value_class_names(expression.orelse))
+            names = subscript_value_class_names(expression.body, seen_names)
+            names.extend(
+                subscript_value_class_names(expression.orelse, seen_names)
+            )
             return names
         if isinstance(expression, ast.BoolOp):
             names = []
             for operand in expression.values:
-                names.extend(subscript_value_class_names(operand))
+                names.extend(
+                    subscript_value_class_names(operand, seen_names)
+                )
             return names
         if isinstance(expression, ast.NamedExpr):
-            return subscript_value_class_names(expression.value)
+            return subscript_value_class_names(expression.value, seen_names)
         if isinstance(expression, ast.Subscript):
             names = []
             for element in subscript_selected_values(expression):
-                names.extend(subscript_value_class_names(element))
+                names.extend(
+                    subscript_value_class_names(element, seen_names)
+                )
             if names:
                 return names
+        names = []
+        if isinstance(expression, ast.Name) and expression.id not in seen_names:
+            for bound_value in module_bindings.get(expression.id, []):
+                if not isinstance(bound_value, ast.Subscript):
+                    continue
+                bound_base = bound_value.value
+                if isinstance(
+                    bound_base, (ast.IfExp, ast.BoolOp, ast.NamedExpr)
+                ) or (
+                    isinstance(bound_base, ast.Name)
+                    and bound_base.id in loop_target_names
+                ):
+                    for element in subscript_selected_values(bound_value):
+                        names.extend(
+                            subscript_value_class_names(
+                                element, seen_names | {expression.id}
+                            )
+                        )
         resolved = denoted_class_name(expression)
-        return [resolved] if resolved is not None else []
+        if resolved is not None:
+            names.append(resolved)
+        return names
 
     def unpacking_body_pairs(statements):
         """The name and element pairs the unpacking assignments of a body fix.
@@ -2042,7 +2102,21 @@ def _later_call_rewrites(module_body, position, name) -> bool:
         at, so a subscript selecting through the name
         selects through the denoted literal on the same
         terms as a literal standing in the assignment
-        itself. A conditional expression carries the
+        itself. A name a loop target binds carries
+        beside that route the elements of the literals
+        the elements it denotes carry, read through
+        the loop target element reading on the same
+        terms, because the binding the bindings record
+        for such a name is the iterable its header
+        walks and not the element it denotes, so the
+        name carries the denoted element wherever the
+        resolution reaches it, standing bare in the
+        expression, yielded through an arm of a
+        conditional expression, an operand of a boolean
+        expression, or the value a walrus expression
+        yields, or standing behind a further name bound
+        to such a yielding form in turn. A conditional
+        expression carries the
         elements of the literals its arms carry, a
         boolean expression the elements of the literals
         its operands carry, and a walrus expression the
@@ -2085,12 +2159,14 @@ def _later_call_rewrites(module_body, position, name) -> bool:
             return sequences
         if isinstance(expression, ast.Name) and expression.id not in seen_names:
             sequences = []
+            seen = seen_names | {expression.id}
             for bound_value in module_bindings.get(expression.id, []):
-                sequences.extend(
-                    literal_sequences(
-                        bound_value, seen_names | {expression.id}
-                    )
-                )
+                sequences.extend(literal_sequences(bound_value, seen))
+            if expression.id in loop_target_names:
+                for element in loop_target_elements(
+                    expression.id, seen_names
+                ):
+                    sequences.extend(literal_sequences(element, seen))
             return sequences
         return []
 
@@ -2799,9 +2875,14 @@ def _derive_loaders(filename: str) -> dict:
     name a loop target binds denoting an element of
     that iterable at the seats that resolve a name
     to a value, a subscript standing on such a
-    name selecting out of that element beside the
-    module bindings route on the placement index
-    terms, a name an unpacking loop target
+    name, or on a value yielding such a name
+    through an arm of a conditional expression, an
+    operand of a boolean expression, or the value
+    a walrus expression yields, or on a further
+    name bound to such a yielding form, selecting
+    out of that element beside the module bindings
+    route on the placement index terms, a name an
+    unpacking loop target
     binds denoting the component standing at its
     own place in the element it unpacks, paired on
     the same terms, and the elements of an element
@@ -2984,7 +3065,13 @@ def _derive_loaders(filename: str) -> dict:
     or the value a walrus expression yields, or
     denoted there by a name bound to a subscript
     selecting it out of a further literal so
-    standing,
+    standing, and a name standing in the value
+    position bound to a subscript whose own value
+    position holds such a yielding form or a loop
+    target name resolving beside the denotation
+    the bare name takes to the classes of the
+    elements that subscript's selection yields on
+    the same terms,
     counting as a call into the dunder class getitem
     method of that class wherever the reach reads the
     subscript as an execution, and the bodies of the lambdas a statement
@@ -3123,9 +3210,14 @@ def _loader_function_names(filename: str) -> set[str]:
     name a loop target binds denoting an element of
     that iterable at the seats that resolve a name
     to a value, a subscript standing on such a
-    name selecting out of that element beside the
-    module bindings route on the placement index
-    terms, a name an unpacking loop target
+    name, or on a value yielding such a name
+    through an arm of a conditional expression, an
+    operand of a boolean expression, or the value
+    a walrus expression yields, or on a further
+    name bound to such a yielding form, selecting
+    out of that element beside the module bindings
+    route on the placement index terms, a name an
+    unpacking loop target
     binds denoting the component standing at its
     own place in the element it unpacks, paired on
     the same terms, and the elements of an element
@@ -3311,7 +3403,13 @@ def _loader_function_names(filename: str) -> set[str]:
     or the value a walrus expression yields, or
     denoted there by a name bound to a subscript
     selecting it out of a further literal so
-    standing, each
+    standing, and a name standing in the value
+    position bound to a subscript whose own value
+    position holds such a yielding form or a loop
+    target name resolving beside the denotation
+    the bare name takes to the classes of the
+    elements that subscript's selection yields on
+    the same terms, each
     gathered on the same installation terms through
     the base classes the class names, and the body
     of a lambda a call invokes where it stands, because
