@@ -631,7 +631,28 @@ def _later_call_rewrites(module_body, position, name) -> bool:
     it makes in turn and its write set counted on the
     terms of a direct call, and a name bound to a
     lambda counts as a call into the lambda body read
-    where it stands in the binding. A call naming an
+    where it stands in the binding. A name bound to a
+    subscript selecting a callable out of a literal
+    standing in the binding or denoted by a plain name
+    standing in it through the bindings counts as a
+    call into the callable the selection yields, a
+    definition name so selected counting as a call
+    into that definition and a lambda so selected as
+    a call into its body read where it stands, the
+    selection read on the index terms the placement
+    reading selects on and a name bound to such a
+    selection standing for the callable it yields in
+    turn, and a name bound to a conditional
+    expression, a boolean expression, or a walrus
+    expression counts as a call into the callable
+    the value it yields denotes, each read through
+    the values the expression yields on the same
+    terms, the name guard the literal sequences
+    reading keeps against a name resolving through
+    itself standing over the whole resolution here
+    too, so a name bound through selections and
+    aliases back to itself ends the expansion at the
+    name. A call naming an
     instance counts beside these as a call into the
     dunder call methods of the class the instance
     stands in, its own or inherited through its base
@@ -2570,6 +2591,59 @@ def _later_call_rewrites(module_body, position, name) -> bool:
                 return True
         return False
 
+    def queue_bound_callees(bound_value, seen_names):
+        """Queue the callees one bound value of a called name denotes.
+
+        A plain name standing in the value counts as a
+        called name in its turn, queued beside the calls
+        already gathered, and a lambda standing in the
+        value counts as a call into its body read where
+        it stands in the binding. A subscript standing
+        in the value denotes the callees its selected
+        elements denote, read through the selection
+        reading on the index terms the placement
+        reading selects on, so a definition name or a
+        lambda selected out of a literal standing in
+        the binding or denoted by a plain name standing
+        in it counts here as it counts standing in the
+        binding itself, and a name bound to such a
+        selection stands for the callable it yields in
+        turn. A conditional expression denotes the
+        callees its arms denote, a boolean expression
+        the callees its operands denote, and a walrus
+        expression the callee the value it yields
+        denotes, because the value each such expression
+        yields stands where the name stands. The name
+        guard the literal sequences reading keeps
+        against a name resolving through itself stands
+        over the whole resolution here too, so the
+        called name the expansion resolves is not
+        queued again through its own bound values, and
+        a name bound through selections and aliases
+        back to itself ends the expansion at the name
+        rather than looping it. A value standing in
+        any other form denotes no callee this seat can
+        name.
+        """
+        if isinstance(bound_value, ast.Name):
+            if bound_value.id not in seen_names:
+                queue.append(([bound_value.id], [], []))
+        elif isinstance(bound_value, ast.Lambda):
+            queue.append(calls([bound_value.body]))
+        elif isinstance(bound_value, ast.Subscript):
+            for element in subscript_selected_values(
+                bound_value, seen_names
+            ):
+                queue_bound_callees(element, seen_names)
+        elif isinstance(bound_value, ast.IfExp):
+            queue_bound_callees(bound_value.body, seen_names)
+            queue_bound_callees(bound_value.orelse, seen_names)
+        elif isinstance(bound_value, ast.BoolOp):
+            for operand in bound_value.values:
+                queue_bound_callees(operand, seen_names)
+        elif isinstance(bound_value, ast.NamedExpr):
+            queue_bound_callees(bound_value.value, seen_names)
+
     while queue:
         found, created, dispatched = queue.pop()
         for protocol_bodies, protocol_writes in dispatched:
@@ -2629,10 +2703,7 @@ def _later_call_rewrites(module_body, position, name) -> bool:
             if called in loop_target_names:
                 bound_values.extend(loop_target_elements(called))
             for bound_value in bound_values:
-                if isinstance(bound_value, ast.Name):
-                    queue.append(([bound_value.id], [], []))
-                elif isinstance(bound_value, ast.Lambda):
-                    queue.append(calls([bound_value.body]))
+                queue_bound_callees(bound_value, frozenset({called}))
     return False
 
 
@@ -2712,7 +2783,20 @@ def _derive_loaders(filename: str) -> dict:
     definition standing at the end of the chain of
     such bindings and a name bound to a lambda
     counting as a call into the lambda body read where
-    it stands in the binding, a call naming an instance
+    it stands in the binding, a name bound to a
+    subscript selecting a callable out of a literal
+    standing in the binding or denoted by a plain
+    name standing in it counting as a call into the
+    callable the selection yields, a definition name
+    so selected counting as a call into that
+    definition and a lambda so selected as a call
+    into its body read where it stands, and a name
+    bound to a conditional expression, a boolean
+    expression, or a walrus expression counting as a
+    call into the callable the value it yields
+    denotes, the name guard against a name resolving
+    through itself standing over the resolution, a
+    call naming an instance
     counting as a call into the dunder call methods of
     the class the instance stands in, resolved through
     the bindings to the instantiation the name denotes
@@ -3016,7 +3100,20 @@ def _loader_function_names(filename: str) -> set[str]:
     as a call into the definition standing at the end
     of the chain of such bindings and a name bound to
     a lambda counting as a call into the lambda body
-    read where it stands in the binding, a call naming
+    read where it stands in the binding, a name bound
+    to a subscript selecting a callable out of a
+    literal standing in the binding or denoted by a
+    plain name standing in it counting as a call into
+    the callable the selection yields, a definition
+    name so selected counting as a call into that
+    definition and a lambda so selected as a call
+    into its body read where it stands, and a name
+    bound to a conditional expression, a boolean
+    expression, or a walrus expression counting as a
+    call into the callable the value it yields
+    denotes, the name guard against a name resolving
+    through itself standing over the resolution, a
+    call naming
     an instance counting as a call into the dunder
     call methods of the class the instance stands in,
     resolved through the bindings to the instantiation
