@@ -525,8 +525,9 @@ def _later_call_rewrites(module_body, position, name) -> bool:
     standing in one of the expression forms this
     passage reads standing in the assignment itself,
     an arm of a conditional expression, an operand
-    of a boolean expression, or an element a
-    subscript selects, or by a plain name
+    of a boolean expression, an element a
+    subscript selects, or the value a walrus
+    expression yields, or by a plain name
     a loop target binds, the name denoting an element
     of the iterable its header walks, where an
     element the iterable carries instantiates that
@@ -580,7 +581,18 @@ def _later_call_rewrites(module_body, position, name) -> bool:
     the value standing behind a loop target there
     being the iterable the header walks, so a name
     bound in any of those forms resolves as the same
-    name bound by a plain assignment does. Where a
+    name bound by a plain assignment does. A name a
+    loop target binds denotes an element of that
+    iterable at every seat that resolves a name to the
+    value it denotes, the class turning points the
+    alias resolution serves, the instance resolution
+    of the call locus, the bound value expansion the
+    reach closes over, and the operand resolution of
+    the with and for statements among them, the
+    elements read where the iterable stands as a
+    literal tuple or list or as a plain name the
+    bindings resolve to one, on the element terms
+    the placement reading reads such a name on. Where a
     plain assignment unpacks, a single target standing
     as a tuple or a list against a value standing as
     a tuple or a list of the same length with no
@@ -708,18 +720,22 @@ def _later_call_rewrites(module_body, position, name) -> bool:
     it, or as an operand of a boolean expression
     yielding it through one of its operands, or
     through an arm of a conditional expression one
-    of whose arms returns it in any of those forms, a
-    name counting as bound to the first parameter
-    where its body binds it by a plain, an annotated,
-    or a walrus assignment to a value counting in any
-    of those forms, by an unpacking assignment
-    pairing it with an element so counting on the
-    element pairing terms, by a loop target the
-    header pairs with an element of a literal holding
-    a name so counting, or by an assignment to a
-    conditional expression either of whose arms is a
-    name so counting, or to a boolean expression one
-    of whose operands is such a name, the shapes in
+    of whose arms returns it in any of those forms,
+    or as an element a subscript selects out of a
+    literal tuple or list holding it, the element
+    read on the index terms the placement reading
+    selects on, a name counting as bound to the
+    first parameter where its body binds it by a
+    plain, an annotated, or a walrus assignment to
+    a value counting in any of those forms, by an
+    unpacking assignment pairing it with an element
+    so counting on the element pairing terms, by a
+    loop target, plain or unpacking, paired with
+    an element of a literal holding a name so
+    counting, or by an assignment to a conditional
+    expression either of whose arms is a name so
+    counting, or to a boolean expression one of
+    whose operands is such a name, the shapes in
     which the statement performs the next method of
     the class it starts from. An iter method returning
     any other value hands the iteration to a value the
@@ -740,21 +756,32 @@ def _later_call_rewrites(module_body, position, name) -> bool:
     augmented assignment performs the dispatch of its
     operation on the value its target name denotes,
     so an augmented assignment whose target is a
-    plain name counts as a call into the dunder iadd
-    method of the class the name's value denotes
+    plain name counts as a call into the in place
+    method its operator names, the dunder iadd
+    method for the additive operator, the dunder
+    isub method for the subtractive, the dunder imul
+    method for the multiplicative, and their
+    siblings for the remaining operators the grammar
+    carries, of the class the name's value denotes
     where that class's chain carries one, and into
-    the dunder add method of that class where it
-    carries none, the plain method standing as the in
-    place method's designated fallback, the name
+    the plain method of the same operation, the
+    dunder add method for the additive operator and
+    its siblings, of that class where it carries
+    none, the plain method standing as the in place
+    method's designated fallback for its operator,
+    the name
     resolved through the bindings to the instantiation
     it denotes on the terms the call locus resolves
-    an instance name by, both methods gathered for
-    every module level class on the same installation
-    terms. A
+    an instance name by, both methods of every
+    operator gathered for every module level class
+    on the same installation terms. A
     subscript whose value position resolves to a
     module level class, a conditional expression
     standing in the value position resolving to the
-    classes of both its arms on the reach's
+    classes of both its arms, a boolean expression
+    resolving to the classes of its operands, and a
+    walrus expression resolving to the class of the
+    value it yields, on the reach's
     expression terms beside the bare name and
     subscript forms the denotation reading takes,
     performs the dunder class
@@ -778,9 +805,10 @@ def _later_call_rewrites(module_body, position, name) -> bool:
     the dunder iter or dunder next method of a class
     a for statement walks, the dunder getitem method
     of a class a for statement walks by the sequence
-    fallback, the dunder iadd or dunder add method of
-    the class of the value an augmented assignment's
-    target name denotes, or the dunder class
+    fallback, the in place method of the operation
+    an augmented assignment performs, or the plain
+    method standing as its fallback, of the class of
+    the value its target name denotes, or the dunder class
     getitem method of a class a subscript names,
     whose write set holds it.
 
@@ -920,6 +948,34 @@ def _later_call_rewrites(module_body, position, name) -> bool:
     for statement in module_body:
         collect_loop_targets(statement)
 
+    def loop_target_elements(name, seen_names=frozenset()):
+        """The element expressions a loop target name denotes.
+
+        A name a loop target binds denotes an element of
+        the iterable its header walks, not the iterable
+        itself, so where the iterable stands as a literal
+        tuple or a list, or as a plain name the module
+        level bindings resolve to one, the name denotes
+        the elements that literal carries, read on the
+        element terms the placement reading reads such
+        a name on. An iterable standing in any other
+        form, a call among them, denotes no element this
+        reading can name.
+        """
+        elements = []
+        if name in seen_names:
+            return elements
+        for bound_value in module_bindings.get(name, []):
+            if isinstance(bound_value, (ast.Tuple, ast.List)):
+                elements.extend(bound_value.elts)
+            elif isinstance(bound_value, ast.Name):
+                elements.extend(
+                    loop_target_elements(
+                        bound_value.id, seen_names | {name}
+                    )
+                )
+        return elements
+
     def base_name(expression):
         """The plain name a base expression resolves to, if any.
 
@@ -952,13 +1008,20 @@ def _later_call_rewrites(module_body, position, name) -> bool:
         class. A name bound to any other value, an
         instantiation among them, denotes that value and
         not a class, and resolves to nothing here, as
-        does a name bound to no class at all.
+        does a name bound to no class at all. A name a
+        loop target binds denotes an element of the
+        iterable its header walks, so the elements the
+        iterable denotes stand behind the name here
+        beside the values its bindings record whole.
         """
         if name in class_nodes:
             return name
         if name in seen:
             return None
-        for bound_value in module_bindings.get(name, []):
+        bound_values = list(module_bindings.get(name, []))
+        if name in loop_target_names:
+            bound_values.extend(loop_target_elements(name))
+        for bound_value in bound_values:
             resolved = None
             if isinstance(bound_value, ast.Name):
                 resolved = aliased_class(bound_value.id, seen | {name})
@@ -1001,15 +1064,26 @@ def _later_call_rewrites(module_body, position, name) -> bool:
         resolves to the classes of both its arms, over
         reading an unfoldable condition in the safe
         direction as the counting does at its other
-        loci, beside the bare name and subscript forms
-        the class denotation reading takes, which this
-        reading leaves at its own width for the base
-        and annotation positions it serves.
+        loci, a boolean expression standing in the
+        position resolves to the classes of its
+        operands, and a walrus expression standing in
+        the position resolves to the class of the value
+        it yields, beside the bare name and subscript
+        forms the class denotation reading takes, which
+        this reading leaves at its own width for the
+        base and annotation positions it serves.
         """
         if isinstance(expression, ast.IfExp):
             names = subscript_value_class_names(expression.body)
             names.extend(subscript_value_class_names(expression.orelse))
             return names
+        if isinstance(expression, ast.BoolOp):
+            names = []
+            for operand in expression.values:
+                names.extend(subscript_value_class_names(operand))
+            return names
+        if isinstance(expression, ast.NamedExpr):
+            return subscript_value_class_names(expression.value)
         resolved = denoted_class_name(expression)
         return [resolved] if resolved is not None else []
 
@@ -1181,8 +1255,23 @@ def _later_call_rewrites(module_body, position, name) -> bool:
     self_returning_iterables = set()
     class_getitem_methods = {}
     getitem_methods = {}
-    iadd_methods = {}
-    add_methods = {}
+    augmented_inplace_methods = {}
+    augmented_plain_methods = {}
+    augmented_operators = (
+        (ast.Add, "__iadd__", "__add__"),
+        (ast.Sub, "__isub__", "__sub__"),
+        (ast.Mult, "__imul__", "__mul__"),
+        (ast.MatMult, "__imatmul__", "__matmul__"),
+        (ast.Div, "__itruediv__", "__truediv__"),
+        (ast.FloorDiv, "__ifloordiv__", "__floordiv__"),
+        (ast.Mod, "__imod__", "__mod__"),
+        (ast.Pow, "__ipow__", "__pow__"),
+        (ast.LShift, "__ilshift__", "__lshift__"),
+        (ast.RShift, "__irshift__", "__rshift__"),
+        (ast.BitAnd, "__iand__", "__and__"),
+        (ast.BitOr, "__ior__", "__or__"),
+        (ast.BitXor, "__ixor__", "__xor__"),
+    )
 
     def designated_bodies(table, class_name, node, seen, names):
         found_bodies, found_writes = method_installations(node.body, names)
@@ -1262,6 +1351,20 @@ def _later_call_rewrites(module_body, position, name) -> bool:
                 continue
             first = parameters[0].arg
 
+            def selected_elements(expression):
+                if not isinstance(expression.value, (ast.Tuple, ast.List)):
+                    return []
+                elements = expression.value.elts
+                index = expression.slice
+                if (
+                    isinstance(index, ast.Constant)
+                    and isinstance(index.value, int)
+                    and not isinstance(index.value, bool)
+                    and -len(elements) <= index.value < len(elements)
+                ):
+                    return [elements[index.value]]
+                return list(elements)
+
             def returns_instance(expression, instance_names):
                 if isinstance(expression, ast.Name):
                     return expression.id in instance_names
@@ -1275,6 +1378,11 @@ def _later_call_rewrites(module_body, position, name) -> bool:
                     return any(
                         returns_instance(operand, instance_names)
                         for operand in expression.values
+                    )
+                if isinstance(expression, ast.Subscript):
+                    return any(
+                        returns_instance(element, instance_names)
+                        for element in selected_elements(expression)
                     )
                 return False
 
@@ -1291,6 +1399,11 @@ def _later_call_rewrites(module_body, position, name) -> bool:
                     return any(
                         value_counts_as_instance(operand)
                         for operand in bound_value.values
+                    )
+                if isinstance(bound_value, ast.Subscript):
+                    return any(
+                        value_counts_as_instance(element)
+                        for element in selected_elements(bound_value)
                     )
                 return False
 
@@ -1338,12 +1451,18 @@ def _later_call_rewrites(module_body, position, name) -> bool:
                         (_target_names(node.target), node.value)
                     )
                 elif isinstance(node, (ast.For, ast.AsyncFor)):
-                    element_pairs = unpacking_element_pairs(
-                        node.target, node.iter
-                    )
-                    if element_pairs is not None:
-                        for bound_name, element in element_pairs:
-                            alias_pairs.append(([bound_name], element))
+                    if isinstance(node.target, ast.Name) and isinstance(
+                        node.iter, (ast.Tuple, ast.List)
+                    ):
+                        for element in node.iter.elts:
+                            alias_pairs.append(([node.target.id], element))
+                    else:
+                        element_pairs = unpacking_element_pairs(
+                            node.target, node.iter
+                        )
+                        if element_pairs is not None:
+                            for bound_name, element in element_pairs:
+                                alias_pairs.append(([bound_name], element))
                 for child in ast.iter_child_nodes(node):
                     collect_alias_pairs(child)
 
@@ -1432,20 +1551,21 @@ def _later_call_rewrites(module_body, position, name) -> bool:
                 {class_name},
                 ("__getitem__",),
             )
-            designated_bodies(
-                iadd_methods,
-                class_name,
-                class_node,
-                {class_name},
-                ("__iadd__",),
-            )
-            designated_bodies(
-                add_methods,
-                class_name,
-                class_node,
-                {class_name},
-                ("__add__",),
-            )
+            for _operator, inplace_name, plain_name in augmented_operators:
+                designated_bodies(
+                    augmented_inplace_methods.setdefault(inplace_name, {}),
+                    class_name,
+                    class_node,
+                    {class_name},
+                    (inplace_name,),
+                )
+                designated_bodies(
+                    augmented_plain_methods.setdefault(plain_name, {}),
+                    class_name,
+                    class_node,
+                    {class_name},
+                    (plain_name,),
+                )
             if iter_returns_instance(class_name, class_node, {class_name}):
                 self_returning_iterables.add(class_name)
 
@@ -1620,9 +1740,11 @@ def _later_call_rewrites(module_body, position, name) -> bool:
         what that name places in turn, and a name bound
         to a conditional expression places what its arms
         place, a name bound to a boolean expression
-        places what its operands place, and a name bound
-        to a subscript places what the element the
-        subscript selects places, each read on the same
+        places what its operands place, a name bound to
+        a subscript places what the element the
+        subscript selects places, and a name bound to a
+        walrus expression places what the value the
+        walrus yields places, each read on the same
         terms the reading reads the form standing in the
         assignment itself, while a name bound
         to a tuple or a list denotes that value itself and
@@ -1672,6 +1794,8 @@ def _later_call_rewrites(module_body, position, name) -> bool:
             for operand in value.values:
                 classes.extend(placed_descriptor_classes(operand, seen_names))
             return classes
+        if isinstance(value, ast.NamedExpr):
+            return placed_descriptor_classes(value.value, seen_names)
         if isinstance(value, ast.Name) and value.id not in seen_names:
             classes = []
             walks_elements = element_of or value.id in loop_target_names
@@ -1715,6 +1839,14 @@ def _later_call_rewrites(module_body, position, name) -> bool:
                             element_of=element_of,
                         )
                     )
+                elif isinstance(bound_value, ast.NamedExpr):
+                    classes.extend(
+                        placed_descriptor_classes(
+                            bound_value.value,
+                            seen_names | {value.id},
+                            element_of=element_of,
+                        )
+                    )
             return classes
         return []
 
@@ -1740,11 +1872,20 @@ def _later_call_rewrites(module_body, position, name) -> bool:
         call locus asks which body a call runs, so a name
         counts here for the call methods of a class while
         counting for nothing at the class turning points.
+        A name a loop target binds denotes an element of
+        the iterable its header walks, so an element the
+        iterable denotes that instantiates a class counts
+        here as an instance of that class, and an element
+        standing as a further name denotes what that name
+        denotes in turn, on the same element terms.
         """
         classes = []
         if callee_name in seen_names:
             return classes
-        for bound_value in module_bindings.get(callee_name, []):
+        bound_values = list(module_bindings.get(callee_name, []))
+        if callee_name in loop_target_names:
+            bound_values.extend(loop_target_elements(callee_name))
+        for bound_value in bound_values:
             if isinstance(bound_value, ast.Call):
                 resolved = denoted_class_name(bound_value.func)
                 if resolved is not None:
@@ -1907,17 +2048,32 @@ def _later_call_rewrites(module_body, position, name) -> bool:
                 return
             if isinstance(node, ast.AugAssign):
                 if isinstance(node.target, ast.Name):
-                    for value_class in instance_call_classes(node.target.id):
-                        iadd_bodies = iadd_methods.get(
-                            value_class, ([], set())
-                        )[0]
-                        add_bodies = add_methods.get(value_class, ([], set()))[
-                            0
-                        ]
-                        if iadd_bodies:
-                            dispatched.append(iadd_methods[value_class])
-                        elif add_bodies:
-                            dispatched.append(add_methods[value_class])
+                    for (
+                        operator_type,
+                        inplace_name,
+                        plain_name,
+                    ) in augmented_operators:
+                        if not isinstance(node.op, operator_type):
+                            continue
+                        inplace_table = augmented_inplace_methods.get(
+                            inplace_name, {}
+                        )
+                        plain_table = augmented_plain_methods.get(
+                            plain_name, {}
+                        )
+                        for value_class in instance_call_classes(
+                            node.target.id
+                        ):
+                            inplace_bodies = inplace_table.get(
+                                value_class, ([], set())
+                            )[0]
+                            plain_bodies = plain_table.get(
+                                value_class, ([], set())
+                            )[0]
+                            if inplace_bodies:
+                                dispatched.append(inplace_table[value_class])
+                            elif plain_bodies:
+                                dispatched.append(plain_table[value_class])
                 for child in ast.iter_child_nodes(node):
                     visit(child)
                 return
@@ -2088,7 +2244,10 @@ def _later_call_rewrites(module_body, position, name) -> bool:
                     return True
                 for body in instance_bodies:
                     queue.append(calls(body))
-            for bound_value in module_bindings.get(called, []):
+            bound_values = list(module_bindings.get(called, []))
+            if called in loop_target_names:
+                bound_values.extend(loop_target_elements(called))
+            for bound_value in bound_values:
                 if isinstance(bound_value, ast.Name):
                     queue.append(([bound_value.id], [], []))
                 elif isinstance(bound_value, ast.Lambda):
@@ -2147,7 +2306,10 @@ def _derive_loaders(filename: str) -> dict:
     carrying a value, a walrus binding standing in an
     expression, and a loop target standing in a loop
     header alike, the value standing behind a loop
-    target being the iterable the header walks, an
+    target being the iterable the header walks, a
+    name a loop target binds denoting an element of
+    that iterable at the seats that resolve a name
+    to a value, an
     assignment unpacking a single tuple or list
     target against a tuple or list value of the same
     length pairing each name it binds with the
@@ -2205,7 +2367,8 @@ def _derive_loaders(filename: str) -> dict:
     instantiation of the class, or to a value
     standing in one of the expression forms this
     passage reads standing in the assignment itself,
-    or a loop target
+    the value a walrus expression yields among
+    them, or a loop target
     bound to an element of the iterable it walks
     where an element instantiates the class, the
     bodies of classes standing inside the bodies those
@@ -2244,22 +2407,31 @@ def _derive_loaders(filename: str) -> dict:
     yielding it, as an operand of a boolean
     expression yielding it, or through an arm
     of a conditional expression returning it in
-    any of those forms, and into the dunder
+    any of those forms, or as an element a
+    subscript selects out of a literal tuple or
+    list holding it, and into the dunder
     getitem method of the same class where no dunder
     iter method stands in its chain, the sequence
     fallback the statement performs in the iter
     method's absence, other shapes of iter
     return standing on the return value ground this
     reading does not model, an augmented assignment
-    counting as a call into the dunder iadd method
-    of the class the value its target name denotes
-    stands in, or into the dunder add method of that
-    class where no dunder iadd method stands in its
+    counting as a call into the in place method its
+    operator names, the dunder iadd method for the
+    additive operator and its siblings for the
+    remaining operators, of the class the value its
+    target name denotes
+    stands in, or into the plain method of the same
+    operation of that class where no in place
+    method stands in its
     chain, and a subscript whose
     value position resolves to a module level class,
     a conditional expression standing in the value
     position resolving to the classes of both its
-    arms, counting as a call into the dunder class getitem
+    arms, a boolean expression resolving to the
+    classes of its operands, and a walrus
+    expression resolving to the class of the value
+    it yields, counting as a call into the dunder class getitem
     method of that class wherever the reach reads the
     subscript as an execution, and the bodies of the lambdas a statement
     invokes, because
@@ -2393,7 +2565,10 @@ def _loader_function_names(filename: str) -> set[str]:
     carrying a value, a walrus binding standing in an
     expression, and a loop target standing in a loop
     header alike, the value standing behind a loop
-    target being the iterable the header walks, an
+    target being the iterable the header walks, a
+    name a loop target binds denoting an element of
+    that iterable at the seats that resolve a name
+    to a value, an
     assignment unpacking a single tuple or list
     target against a tuple or list value of the same
     length pairing each name it binds with the
@@ -2466,7 +2641,8 @@ def _loader_function_names(filename: str) -> set[str]:
     bound to an instantiation of the class, or to a
     value standing in one of the expression forms
     this passage reads standing in the assignment
-    itself, or a loop
+    itself, the value a walrus expression yields
+    among them, or a loop
     target bound to an element of the iterable it
     walks where an element instantiates the class,
     their own or inherited through their module level
@@ -2500,18 +2676,27 @@ def _loader_function_names(filename: str) -> set[str]:
     through a walrus expression yielding it, as an
     operand of a boolean expression yielding it, or
     through an arm of a conditional expression
-    returning it in any of those forms,
+    returning it in any of those forms, or as an
+    element a subscript selects out of a literal
+    tuple or list holding it,
     the dunder getitem method of the same class
     where no dunder iter method stands in its chain,
-    the dunder iadd method of the class the value an
-    augmented assignment's target name denotes
-    stands in, or the dunder add method of that
-    class where no dunder iadd method stands, and the
+    the in place method of the operation an
+    augmented assignment performs, the dunder iadd
+    method for the additive operator and its
+    siblings for the remaining operators, of the
+    class the value its target name denotes
+    stands in, or the plain method of the same
+    operation of that class where no in place
+    method stands, and the
     dunder class getitem method of a class a
     subscript's value position resolves to, a
     conditional expression standing in the value
     position resolving to the classes of both its
-    arms, each
+    arms, a boolean expression resolving to the
+    classes of its operands, and a walrus
+    expression resolving to the class of the value
+    it yields, each
     gathered on the same installation terms through
     the base classes the class names, and the body
     of a lambda a call invokes where it stands, because
