@@ -8201,3 +8201,632 @@ def test_loader_derivation_keeps_a_helper_beside_a_hookless_descriptor_placed_by
         """,
     )
     assert loaders == {"reader", "shadow_search"}
+
+
+def test_loader_derivation_refuses_a_helper_rewritten_through_an_instance_call_bearing_the_name_of_an_unpacking_loop_target(
+    tmp_path,
+):
+    # Repair pass twenty three, red team family 67,
+    # form 67a. A loop whose target unpacks its
+    # element binds each name the target carries to
+    # a component of the element, so the name here
+    # denotes the callable instance standing at its
+    # place in the one element tuple, and the call
+    # after the candidate runs its dunder call
+    # method, whose body calls the installer. The
+    # element reading handed every seat the element
+    # whole, because the unpacking pairing the
+    # earlier passes settled read assignment targets
+    # and no reading paired a loop target. The
+    # element reading now pairs an unpacking loop
+    # target against each element its header walks
+    # on the same element pairing terms.
+    loaders = _derived_loaders(
+        tmp_path,
+        """
+        ROOT = None
+
+
+        def reader(name):
+            return (ROOT / name).read_bytes()
+
+
+        def shadow_search(client, raw_response, name):
+            return reader(name)
+
+
+        def _install_shadow():
+            global shadow_search
+            shadow_search = lambda client, raw_response, name: None
+
+
+        class _Runner:
+            def __call__(self):
+                _install_shadow()
+
+
+        for _inst, _other in [(_Runner(), None)]:
+            pass
+
+
+        _inst()
+        """,
+    )
+    assert loaders == {"reader"}
+
+
+def test_loader_derivation_refuses_a_helper_rewritten_through_a_subclass_hook_behind_a_base_an_unpacking_loop_target_bound(
+    tmp_path,
+):
+    # Repair pass twenty three, red team family 67,
+    # form 67b. The same unpacking header binds a
+    # class carrying a subclass hook at its place
+    # in the element, and a class definition after
+    # the candidate names the unpacking name as a
+    # base, so the hook fires at the child class
+    # creation and calls the installer. The alias
+    # resolution read the name as denoting the
+    # element tuple and resolved no class behind
+    # it. The pairing the element reading now
+    # performs for loop targets hands the base seat
+    # the component the name denotes.
+    loaders = _derived_loaders(
+        tmp_path,
+        """
+        ROOT = None
+
+
+        def reader(name):
+            return (ROOT / name).read_bytes()
+
+
+        def shadow_search(client, raw_response, name):
+            return reader(name)
+
+
+        def _install_shadow():
+            global shadow_search
+            shadow_search = lambda client, raw_response, name: None
+
+
+        class _HookBase:
+            def __init_subclass__(cls, **kwargs):
+                _install_shadow()
+
+
+        for _base, _other in [(_HookBase, None)]:
+            pass
+
+
+        class _HookChild(_base):
+            pass
+        """,
+    )
+    assert loaders == {"reader"}
+
+
+def test_loader_derivation_refuses_a_helper_rewritten_through_a_class_getitem_behind_a_nested_selection_in_the_value_position(
+    tmp_path,
+):
+    # Repair pass twenty three, red team family 68.
+    # A subscript whose value position itself stands
+    # as a subscript selecting a class out of a one
+    # element literal performs the dunder class
+    # getitem method of the class the selection
+    # yields, whose body calls the installer. The
+    # subscript value reading fell through to the
+    # class denotation reading for such a subscript,
+    # and the denotation reading resolves nothing
+    # behind a literal, so the counting named no
+    # class at the execution seat. The subscript
+    # value reading now resolves a subscript
+    # standing in the value position through the
+    # elements it selects, on the index terms the
+    # placement reading selects on, while the
+    # denotation reading keeps its own width for
+    # the base and annotation positions it serves.
+    loaders = _derived_loaders(
+        tmp_path,
+        """
+        ROOT = None
+
+
+        def reader(name):
+            return (ROOT / name).read_bytes()
+
+
+        def shadow_search(client, raw_response, name):
+            return reader(name)
+
+
+        def _install_shadow():
+            global shadow_search
+            shadow_search = lambda client, raw_response, name: None
+
+
+        class _GIBase:
+            @classmethod
+            def __class_getitem__(cls, item):
+                _install_shadow()
+                return cls
+
+
+        _selected = (_GIBase,)[0][int]
+        """,
+    )
+    assert loaders == {"reader"}
+
+
+def test_loader_derivation_refuses_a_helper_rewritten_through_a_next_method_behind_an_iter_returning_a_selection_behind_a_local_name(
+    tmp_path,
+):
+    # Repair pass twenty three, red team family 69,
+    # form 69a. A class whose dunder iter method
+    # binds a local name to a one element literal
+    # holding the instance and returns a subscript
+    # selecting through that name is its own
+    # iterator by construction, so the for statement
+    # after the candidate performs the dunder next
+    # method of the same class, whose body calls the
+    # installer. The selection helper read a
+    # subscript only where the literal stood in the
+    # node itself, although following a body local
+    # name to the value it denotes is the alias
+    # collector's own office. The selection reading
+    # now resolves the literal a selection stands on
+    # through the local bindings the collector
+    # gathers for the body.
+    loaders = _derived_loaders(
+        tmp_path,
+        """
+        ROOT = None
+
+
+        def reader(name):
+            return (ROOT / name).read_bytes()
+
+
+        def shadow_search(client, raw_response, name):
+            return reader(name)
+
+
+        def _install_shadow():
+            global shadow_search
+            shadow_search = lambda client, raw_response, name: None
+
+
+        class _IterNamedSelection:
+            def __iter__(self):
+                pair = (self,)
+                return pair[0]
+
+            def __next__(self):
+                _install_shadow()
+                raise StopIteration
+
+
+        for _ in _IterNamedSelection():
+            pass
+        """,
+    )
+    assert loaders == {"reader"}
+
+
+def test_loader_derivation_refuses_a_helper_rewritten_through_a_next_method_behind_an_iter_returning_a_selection_behind_a_loop_paired_name(
+    tmp_path,
+):
+    # Repair pass twenty three, red team family 69,
+    # form 69b. The same mediation stands here one
+    # binding further in, through a plain loop
+    # target over a list carrying one tuple holding
+    # the instance, the target paired with that
+    # tuple on the family 61 terms, and the return
+    # selecting through the target name. The scan
+    # could not read the selection because the name
+    # the subscript stands on is a body local the
+    # selection helper never resolved. The
+    # selection reading now resolves such a name
+    # through the pairs the collector gathers,
+    # loop pairings among them.
+    loaders = _derived_loaders(
+        tmp_path,
+        """
+        ROOT = None
+
+
+        def reader(name):
+            return (ROOT / name).read_bytes()
+
+
+        def shadow_search(client, raw_response, name):
+            return reader(name)
+
+
+        def _install_shadow():
+            global shadow_search
+            shadow_search = lambda client, raw_response, name: None
+
+
+        class _IterLoopNamedSelection:
+            def __iter__(self):
+                for result in [(self,)]:
+                    pass
+                return result[0]
+
+            def __next__(self):
+                _install_shadow()
+                raise StopIteration
+
+
+        for _ in _IterLoopNamedSelection():
+            pass
+        """,
+    )
+    assert loaders == {"reader"}
+
+
+def test_loader_derivation_refuses_a_helper_rewritten_through_a_next_method_behind_an_iter_returning_a_name_bound_to_a_selection(
+    tmp_path,
+):
+    # Repair pass twenty three, red team family 69,
+    # form 69c. A local name bound to the selection
+    # itself, out of a literal a second local name
+    # denotes, is returned bare, so the evasion
+    # stands in the alias collector's value reading
+    # alone, the return standing as a plain name
+    # the collector never admitted. The value
+    # reading shares the widened selection reading,
+    # so a name bound to a selection of the instance
+    # counts as the instance through the binding as
+    # it does standing in the return.
+    loaders = _derived_loaders(
+        tmp_path,
+        """
+        ROOT = None
+
+
+        def reader(name):
+            return (ROOT / name).read_bytes()
+
+
+        def shadow_search(client, raw_response, name):
+            return reader(name)
+
+
+        def _install_shadow():
+            global shadow_search
+            shadow_search = lambda client, raw_response, name: None
+
+
+        class _IterAliasedSelection:
+            def __iter__(self):
+                pair = (self,)
+                result = pair[0]
+                return result
+
+            def __next__(self):
+                _install_shadow()
+                raise StopIteration
+
+
+        for _ in _IterAliasedSelection():
+            pass
+        """,
+    )
+    assert loaders == {"reader"}
+
+
+def test_loader_derivation_refuses_a_helper_rewritten_through_a_next_method_behind_an_iter_returning_a_loop_target_over_a_bound_literal(
+    tmp_path,
+):
+    # Repair pass twenty three, red team family 69,
+    # form 69d. A plain loop target inside the iter
+    # body walks a name the body binds to a list
+    # literal holding the instance, and the method
+    # returns the target name. The collector's loop
+    # branch read literal headers only and paired
+    # the target with the name itself, whose
+    # denotation is the list and not the instance,
+    # so the element step the earlier passes settled
+    # for literal headers was missing behind the
+    # name. The collector now pairs a loop target
+    # whose header stands as a name with the
+    # elements of the literal that name denotes in
+    # the body.
+    loaders = _derived_loaders(
+        tmp_path,
+        """
+        ROOT = None
+
+
+        def reader(name):
+            return (ROOT / name).read_bytes()
+
+
+        def shadow_search(client, raw_response, name):
+            return reader(name)
+
+
+        def _install_shadow():
+            global shadow_search
+            shadow_search = lambda client, raw_response, name: None
+
+
+        class _IterNamedLoop:
+            def __iter__(self):
+                pair = [self]
+                for result in pair:
+                    pass
+                return result
+
+            def __next__(self):
+                _install_shadow()
+                raise StopIteration
+
+
+        for _ in _IterNamedLoop():
+            pass
+        """,
+    )
+    assert loaders == {"reader"}
+
+
+def test_loader_derivation_refuses_a_helper_rewritten_through_a_call_bearing_the_name_of_a_second_loop_target(
+    tmp_path,
+):
+    # Repair pass twenty three, red team family 70.
+    # Two loops chain in the open, the first binding
+    # a name to the one element of a literal of one
+    # list, the installer itself standing as that
+    # list's only element, and the second walking
+    # the first name and binding the installer to
+    # its target, which the segment then calls. The
+    # element reading recursed into what the middle
+    # name denotes, the elements of its own
+    # iterable, where the second loop asks what the
+    # middle name is worth, one level short. The
+    # element reading now composes, reading an
+    # element for what it is worth where a further
+    # loop's iterable stands as a loop target name,
+    # so the chain resolves at every level.
+    loaders = _derived_loaders(
+        tmp_path,
+        """
+        ROOT = None
+
+
+        def reader(name):
+            return (ROOT / name).read_bytes()
+
+
+        def shadow_search(client, raw_response, name):
+            return reader(name)
+
+
+        def _install_shadow():
+            global shadow_search
+            shadow_search = lambda client, raw_response, name: None
+
+
+        for _inner in [[_install_shadow]]:
+            pass
+
+
+        for _fn in _inner:
+            pass
+
+
+        _fn()
+        """,
+    )
+    assert loaders == {"reader"}
+
+
+def test_loader_derivation_refuses_a_helper_rewritten_through_a_call_naming_an_instance_bound_to_a_selection(
+    tmp_path,
+):
+    # Repair pass twenty three, red team family 71,
+    # form 71a. A name bound to a subscript selecting
+    # an instantiation out of a one element literal
+    # denotes that instance by construction, and a
+    # call by that name after the candidate runs the
+    # instance's dunder call method, whose body
+    # calls the installer. The instance resolution
+    # took no subscript value at all, although its
+    # own passage states it resolves on the terms
+    # the placement reading resolves a placed name
+    # by, and the placement reading has followed
+    # such a name since pass twenty one. The
+    # instance resolution now reads a subscript
+    # binding value through the elements it
+    # selects, on the placement reading's index
+    # terms.
+    loaders = _derived_loaders(
+        tmp_path,
+        """
+        ROOT = None
+
+
+        def reader(name):
+            return (ROOT / name).read_bytes()
+
+
+        def shadow_search(client, raw_response, name):
+            return reader(name)
+
+
+        def _install_shadow():
+            global shadow_search
+            shadow_search = lambda client, raw_response, name: None
+
+
+        class _Runner:
+            def __call__(self):
+                _install_shadow()
+
+
+        _acc = (_Runner(),)[0]
+
+
+        _acc()
+        """,
+    )
+    assert loaders == {"reader"}
+
+
+def test_loader_derivation_refuses_a_helper_rewritten_through_an_augmented_assignments_isub_method_on_an_instance_bound_to_a_selection(
+    tmp_path,
+):
+    # Repair pass twenty three, red team family 71,
+    # form 71b. The augmented seat resolves its
+    # target name through the same instance
+    # resolution, so a name bound to a selection of
+    # an accumulator instance out of a literal
+    # performs the dunder isub dispatch the
+    # augmented counting gathers, on a value the
+    # resolution never named. The widened instance
+    # resolution hands the augmented seat the
+    # selected instance on the same terms as the
+    # call seat.
+    loaders = _derived_loaders(
+        tmp_path,
+        """
+        ROOT = None
+
+
+        def reader(name):
+            return (ROOT / name).read_bytes()
+
+
+        def shadow_search(client, raw_response, name):
+            return reader(name)
+
+
+        def _install_shadow():
+            global shadow_search
+            shadow_search = lambda client, raw_response, name: None
+
+
+        class _AccumSub:
+            def __isub__(self, other):
+                _install_shadow()
+                return self
+
+
+        _acc = (_AccumSub(),)[0]
+
+
+        _acc -= 1
+        """,
+    )
+    assert loaders == {"reader"}
+
+
+def test_loader_derivation_keeps_a_helper_beside_a_quiet_function_called_through_an_unpacking_loop_target_name(
+    tmp_path,
+):
+    # Repair pass twenty three, the boundary control
+    # beside family 67. The same unpacking header
+    # binds a quiet module level function as a
+    # component of its element, and a call after the
+    # loop bears the unpacking name, the same shape
+    # as form 67a with a function whose body calls
+    # nothing and assigns nothing under a global
+    # declaration. The element reading now pairs the
+    # name with its component and the call is counted
+    # into the quiet body, but the counting this pass
+    # adds refuses nothing here and the faithful
+    # helper keeps its derivation beside the reader.
+    # The control marks the family turning on the
+    # component the target binds performing the
+    # rewrite, the repair widening the resolution
+    # while keeping the refusal keyed on what the
+    # resolved body does.
+    loaders = _derived_loaders(
+        tmp_path,
+        """
+        ROOT = None
+
+
+        def reader(name):
+            return (ROOT / name).read_bytes()
+
+
+        def shadow_search(client, raw_response, name):
+            return reader(name)
+
+
+        def _install_shadow():
+            global shadow_search
+            shadow_search = lambda client, raw_response, name: None
+
+
+        def _quiet():
+            return None
+
+
+        for _fn, _other in [(_quiet, None)]:
+            pass
+
+
+        _fn()
+        """,
+    )
+    assert loaders == {"reader", "shadow_search"}
+
+
+def test_loader_derivation_keeps_a_helper_beside_an_iter_returning_a_distinct_iterator_through_a_named_selection(
+    tmp_path,
+):
+    # Repair pass twenty three, the boundary control
+    # beside family 69. The same name mediated
+    # selection stands here returning a distinct
+    # iterator object out of the literal a local
+    # name denotes, with a loud dunder next method
+    # that never fires because the returned iterator
+    # is a different object from the instance. The
+    # selection reading now resolves the literal
+    # behind the name and reads the selected
+    # element, which is the distinct iterator and
+    # not the instance, so the next method counting
+    # stays silent and the faithful helper keeps its
+    # derivation beside the reader. The control
+    # marks the family turning on the value the
+    # selection returns, the repair widening the
+    # mediation while keeping the return value
+    # ground fenced for values that are not the
+    # instance itself.
+    loaders = _derived_loaders(
+        tmp_path,
+        """
+        ROOT = None
+
+
+        def reader(name):
+            return (ROOT / name).read_bytes()
+
+
+        def shadow_search(client, raw_response, name):
+            return reader(name)
+
+
+        def _install_shadow():
+            global shadow_search
+            shadow_search = lambda client, raw_response, name: None
+
+
+        class _IterDistinct:
+            def __iter__(self):
+                pair = (iter([]),)
+                return pair[0]
+
+            def __next__(self):
+                _install_shadow()
+                raise StopIteration
+
+
+        for _ in _IterDistinct():
+            pass
+        """,
+    )
+    assert loaders == {"reader", "shadow_search"}
