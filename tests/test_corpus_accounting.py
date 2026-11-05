@@ -592,7 +592,12 @@ def _later_call_rewrites(module_body, position, name) -> bool:
     alias resolution serves, the instance resolution
     of the call locus, the bound value expansion the
     reach closes over, and the operand resolution of
-    the with and for statements among them, the
+    the with and for statements among them, and the
+    selection reading among them, a subscript whose
+    value position holds such a name selecting out
+    of the element the name denotes beside the
+    module bindings route on the placement index
+    terms, the
     elements read where the iterable stands as a
     literal tuple or list or as a plain name the
     bindings resolve to one, on the element terms
@@ -783,7 +788,11 @@ def _later_call_rewrites(module_body, position, name) -> bool:
     terms, through an arm of a conditional
     expression, an operand of a boolean expression,
     the value a walrus expression yields, or the
-    selection a subscript performs, or standing in
+    selection a subscript performs, a selection
+    selecting a name the body binds to one counting
+    as the literal that name denotes in its turn,
+    the name followed through the body's own literal
+    reading on the same terms, or standing in
     the subscript as the value
     a walrus expression yields, as an operand of a
     boolean expression, in an arm of a conditional
@@ -1224,7 +1233,16 @@ def _later_call_rewrites(module_body, position, name) -> bool:
         selection evaluates to, the name guard the
         literal sequences reading keeps against a name
         resolving through itself standing over the
-        whole resolution. A subscript standing on any
+        whole resolution. A loop target name standing
+        in the value position resolves beside that
+        route through the loop target element reading,
+        to the elements the name denotes, so the
+        subscript selects out of the element the name
+        denotes on the same index terms rather than
+        out of the iterable its header walks, the
+        binding the pair collection records for such
+        a name being that iterable and not the element
+        it denotes. A subscript standing on any
         other value evaluates to nothing this reading
         can name.
         """
@@ -1232,6 +1250,15 @@ def _later_call_rewrites(module_body, position, name) -> bool:
             bases = subscript_selected_values(expression.value, seen_names)
         else:
             bases = [expression.value]
+            if (
+                isinstance(expression.value, ast.Name)
+                and expression.value.id in loop_target_names
+            ):
+                bases.extend(
+                    loop_target_elements(
+                        expression.value.id, seen_names
+                    )
+                )
         sequences = []
         for base in bases:
             sequences.extend(literal_sequences(base, seen_names))
@@ -1676,12 +1703,16 @@ def _later_call_rewrites(module_body, position, name) -> bool:
                 a literal an arm of a conditional
                 expression denotes, or a literal an inner
                 subscript selects out of a further
-                literal so denoted, each read on the same
-                terms, because the value each such form
-                yields is the sequence the selection
-                stands on. A value standing in any other
-                form denotes no literal this reading can
-                name.
+                literal so denoted, or the literal a
+                name an inner subscript selects out of
+                a literal denotes in its turn, that name
+                followed through the body's own literal
+                reading on the same terms, each read on
+                the same terms, because the value each
+                such form yields is the sequence the
+                selection stands on. A value standing in
+                any other form denotes no literal this
+                reading can name.
                 """
                 if isinstance(value, (ast.Tuple, ast.List)):
                     return [value]
@@ -1703,11 +1734,17 @@ def _later_call_rewrites(module_body, position, name) -> bool:
                     )
                     return nodes
                 if isinstance(value, ast.Subscript):
-                    return [
-                        element
-                        for element in selected_elements(value, seen_names)
-                        if isinstance(element, (ast.Tuple, ast.List))
-                    ]
+                    nodes = []
+                    for element in selected_elements(value, seen_names):
+                        if isinstance(element, (ast.Tuple, ast.List)):
+                            nodes.append(element)
+                        elif isinstance(element, ast.Name):
+                            nodes.extend(
+                                local_literal_nodes(
+                                    element.id, seen_names
+                                )
+                            )
+                    return nodes
                 return []
 
             def selected_elements(expression, seen_names=frozenset()):
@@ -2761,7 +2798,10 @@ def _derive_loaders(filename: str) -> dict:
     target being the iterable the header walks, a
     name a loop target binds denoting an element of
     that iterable at the seats that resolve a name
-    to a value, a name an unpacking loop target
+    to a value, a subscript standing on such a
+    name selecting out of that element beside the
+    module bindings route on the placement index
+    terms, a name an unpacking loop target
     binds denoting the component standing at its
     own place in the element it unpacks, paired on
     the same terms, and the elements of an element
@@ -2904,7 +2944,11 @@ def _derive_loaders(filename: str) -> dict:
     conditional expression, an operand of a boolean
     expression, the value a walrus expression
     yields, or the selection a subscript performs,
-    or standing in the subscript as the
+    a selection selecting a name the body binds
+    to one counting as the literal that name
+    denotes in its turn, the name followed through
+    the body's own literal reading on the same
+    terms, or standing in the subscript as the
     value a walrus expression yields, as an operand
     of a boolean expression, in an arm of a
     conditional expression, or behind an inner
@@ -3078,7 +3122,10 @@ def _loader_function_names(filename: str) -> set[str]:
     target being the iterable the header walks, a
     name a loop target binds denoting an element of
     that iterable at the seats that resolve a name
-    to a value, a name an unpacking loop target
+    to a value, a subscript standing on such a
+    name selecting out of that element beside the
+    module bindings route on the placement index
+    terms, a name an unpacking loop target
     binds denoting the component standing at its
     own place in the element it unpacks, paired on
     the same terms, and the elements of an element
@@ -3229,7 +3276,11 @@ def _loader_function_names(filename: str) -> set[str]:
     conditional expression, an operand of a boolean
     expression, the value a walrus expression
     yields, or the selection a subscript performs,
-    or standing in the subscript as
+    a selection selecting a name the body binds
+    to one counting as the literal that name
+    denotes in its turn, the name followed through
+    the body's own literal reading on the same
+    terms, or standing in the subscript as
     the value a walrus expression yields, as an
     operand of a boolean expression, in an arm of
     a conditional expression, or behind an inner
