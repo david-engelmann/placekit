@@ -10558,3 +10558,426 @@ def test_loader_derivation_keeps_a_helper_beside_a_quiet_instance_bound_to_a_sel
         """,
     )
     assert loaders == {"reader", "shadow_search"}
+
+
+def test_loader_derivation_refuses_a_helper_rewritten_by_an_installer_called_through_a_name_bound_to_a_subscript_selecting_it_out_of_a_literal(
+    tmp_path,
+):
+    # Repair pass twenty six, red team family 83,
+    # form 83a. A plain assignment binds a name to a
+    # subscript selecting the installer out of a
+    # literal, and a module level call bearing that
+    # name runs the installer exactly as a call
+    # bearing its definition name does. The pass
+    # twenty five reach queued a call for a bound
+    # value only where the value stood as a plain
+    # name or as a lambda, so the selected installer
+    # never joined the reach, although the callee
+    # passage states a call dispatches on the
+    # callable the name denotes however the name
+    # came to be bound to it and carries no closing
+    # refusal. The bound callee expansion now
+    # follows a bound subscript through the
+    # selection reading, so the call counts against
+    # the definition the selection yields.
+    loaders = _derived_loaders(
+        tmp_path,
+        """
+        ROOT = None
+
+
+        def reader(name):
+            return (ROOT / name).read_bytes()
+
+
+        def shadow_search(client, raw_response, name):
+            return reader(name)
+
+
+        def _install_shadow():
+            global shadow_search
+            shadow_search = lambda client, raw_response, name: None
+
+
+        _fn = (_install_shadow,)[0]
+
+        _fn()
+        """,
+    )
+    assert loaders == {"reader"}
+
+
+def test_loader_derivation_refuses_a_helper_rewritten_by_an_installer_called_through_a_name_bound_to_a_subscript_selecting_it_out_of_a_name_bound_to_a_literal(
+    tmp_path,
+):
+    # Repair pass twenty six, red team family 83,
+    # form 83b. The selection stands on a further
+    # name the bindings resolve to the literal, so
+    # the installer reaches the called name through
+    # a name, a selection, and a literal. The pass
+    # twenty five expansion read neither the
+    # selection nor the name standing in it, so the
+    # chain resolved to no callee. The expansion now
+    # reads the subscript through the selection
+    # reading on its own terms, which resolves a
+    # name standing in the value position through
+    # the bindings to the literal it denotes.
+    loaders = _derived_loaders(
+        tmp_path,
+        """
+        ROOT = None
+
+
+        def reader(name):
+            return (ROOT / name).read_bytes()
+
+
+        def shadow_search(client, raw_response, name):
+            return reader(name)
+
+
+        def _install_shadow():
+            global shadow_search
+            shadow_search = lambda client, raw_response, name: None
+
+
+        _pair = (_install_shadow,)
+
+        _fn = _pair[0]
+
+        _fn()
+        """,
+    )
+    assert loaders == {"reader"}
+
+
+def test_loader_derivation_refuses_a_helper_rewritten_by_an_installer_called_through_a_name_bound_to_a_conditional_expression(
+    tmp_path,
+):
+    # Repair pass twenty six, red team family 83,
+    # form 83c. A conditional expression yields the
+    # installer on its taken arm and a quiet
+    # function on the other, and a call bearing the
+    # bound name runs the installer. The pass twenty
+    # five expansion queued no call for a bound
+    # conditional, while the instance resolution
+    # beside it followed bound conditional arms on
+    # the placement terms. The expansion now follows
+    # a bound conditional through both arms, over
+    # reading an unfoldable condition in the safe
+    # direction as the counting does at its other
+    # loci, so the call counts against the installer
+    # either arm denotes.
+    loaders = _derived_loaders(
+        tmp_path,
+        """
+        ROOT = None
+
+
+        def reader(name):
+            return (ROOT / name).read_bytes()
+
+
+        def shadow_search(client, raw_response, name):
+            return reader(name)
+
+
+        def _install_shadow():
+            global shadow_search
+            shadow_search = lambda client, raw_response, name: None
+
+
+        def _quiet():
+            return None
+
+
+        _fn = _install_shadow if True else _quiet
+
+        _fn()
+        """,
+    )
+    assert loaders == {"reader"}
+
+
+def test_loader_derivation_refuses_a_helper_rewritten_by_an_installer_called_through_a_name_bound_to_a_boolean_expression(
+    tmp_path,
+):
+    # Repair pass twenty six, red team family 83,
+    # form 83d. A boolean expression yields the
+    # installer as its deciding operand, and a call
+    # bearing the bound name runs it. The pass
+    # twenty five expansion queued no call for a
+    # bound boolean expression, while the readings
+    # beside it followed bound boolean operands.
+    # The expansion now follows a bound boolean
+    # expression through its operands, so the call
+    # counts against the installer an operand
+    # denotes.
+    loaders = _derived_loaders(
+        tmp_path,
+        """
+        ROOT = None
+
+
+        def reader(name):
+            return (ROOT / name).read_bytes()
+
+
+        def shadow_search(client, raw_response, name):
+            return reader(name)
+
+
+        def _install_shadow():
+            global shadow_search
+            shadow_search = lambda client, raw_response, name: None
+
+
+        def _quiet():
+            return None
+
+
+        _fn = _install_shadow or _quiet
+
+        _fn()
+        """,
+    )
+    assert loaders == {"reader"}
+
+
+def test_loader_derivation_refuses_a_helper_rewritten_by_an_installer_called_through_a_name_bound_to_a_walrus_expression(
+    tmp_path,
+):
+    # Repair pass twenty six, red team family 83,
+    # form 83e. A walrus expression yields the
+    # installer as the value it binds, and a call
+    # bearing the bound name runs it. The pass
+    # twenty five expansion queued no call for a
+    # bound walrus expression, while the readings
+    # beside it followed the value a bound walrus
+    # yields. The expansion now follows a bound
+    # walrus expression through its value, so the
+    # call counts against the installer the value
+    # denotes.
+    loaders = _derived_loaders(
+        tmp_path,
+        """
+        ROOT = None
+
+
+        def reader(name):
+            return (ROOT / name).read_bytes()
+
+
+        def shadow_search(client, raw_response, name):
+            return reader(name)
+
+
+        def _install_shadow():
+            global shadow_search
+            shadow_search = lambda client, raw_response, name: None
+
+
+        _fn = (_held := _install_shadow)
+
+        _fn()
+        """,
+    )
+    assert loaders == {"reader"}
+
+
+def test_loader_derivation_refuses_a_helper_rewritten_through_a_decorator_in_bare_name_form_bound_to_a_subscript_selecting_it_out_of_a_literal(
+    tmp_path,
+):
+    # Repair pass twenty six, red team family 83,
+    # form 83f. The decorator seat. A name bound to
+    # a subscript selecting a decorator out of a
+    # literal stands in bare name form on a decoy
+    # definition, and the application runs the
+    # decorator, whose body calls the installer.
+    # The decorator passage counts a bare name
+    # application as a call into the value the name
+    # denotes, resolved as the reach resolves its
+    # callees, so the application rides the callee
+    # resolution itself. The pass twenty five
+    # expansion queued no call for the selected
+    # decorator, so its body never joined the reach.
+    # The expansion now follows the bound subscript,
+    # and the application counts against the
+    # decorator the selection yields.
+    loaders = _derived_loaders(
+        tmp_path,
+        """
+        ROOT = None
+
+
+        def reader(name):
+            return (ROOT / name).read_bytes()
+
+
+        def shadow_search(client, raw_response, name):
+            return reader(name)
+
+
+        def _install_shadow():
+            global shadow_search
+            shadow_search = lambda client, raw_response, name: None
+
+
+        def _loud_decorator(fn):
+            _install_shadow()
+            return fn
+
+
+        _fn = (_loud_decorator,)[0]
+
+
+        @_fn
+        def _decoy():
+            return None
+        """,
+    )
+    assert loaders == {"reader"}
+
+
+def test_loader_derivation_refuses_a_helper_rewritten_by_an_installer_called_through_a_name_bound_to_a_lambda_selected_out_of_a_literal(
+    tmp_path,
+):
+    # Repair pass twenty six, red team family 83,
+    # form 83g. A subscript selects a lambda out of
+    # a literal, the lambda body standing as a call
+    # into the installer in the open, and a call
+    # bearing the bound name runs the lambda. The
+    # pass twenty five expansion read neither the
+    # selection nor the lambda behind it, although
+    # a name bound to a lambda standing in the
+    # binding counted as a call into its body. The
+    # expansion now follows the selection to the
+    # lambda it yields, and the lambda counts on
+    # the lambda binding terms, its body read where
+    # it stands.
+    loaders = _derived_loaders(
+        tmp_path,
+        """
+        ROOT = None
+
+
+        def reader(name):
+            return (ROOT / name).read_bytes()
+
+
+        def shadow_search(client, raw_response, name):
+            return reader(name)
+
+
+        def _install_shadow():
+            global shadow_search
+            shadow_search = lambda client, raw_response, name: None
+
+
+        _fn = ((lambda: _install_shadow()),)[0]
+
+        _fn()
+        """,
+    )
+    assert loaders == {"reader"}
+
+
+def test_loader_derivation_keeps_a_helper_beside_a_call_through_a_name_bound_to_a_quiet_callable_selected_out_of_a_literal(
+    tmp_path,
+):
+    # Repair pass twenty six, the boundary control
+    # beside family 83. The same selection binding
+    # as form 83a stands here on a function whose
+    # body only returns, called through the bound
+    # name after the candidate. The expansion now
+    # follows the selection and the call is counted
+    # into the quiet body, but it calls nothing and
+    # assigns nothing under a global declaration, so
+    # the counting this pass adds refuses nothing
+    # here and the faithful helper keeps its
+    # derivation beside the reader. The control
+    # marks the family turning on the callable
+    # behind the bound name performing the rewrite,
+    # the repair widening the resolution while
+    # keeping the refusal keyed on what the resolved
+    # body does.
+    loaders = _derived_loaders(
+        tmp_path,
+        """
+        ROOT = None
+
+
+        def reader(name):
+            return (ROOT / name).read_bytes()
+
+
+        def shadow_search(client, raw_response, name):
+            return reader(name)
+
+
+        def _install_shadow():
+            global shadow_search
+            shadow_search = lambda client, raw_response, name: None
+
+
+        def _quiet_fn():
+            return None
+
+
+        _fn = (_quiet_fn,)[0]
+
+        _fn()
+        """,
+    )
+    assert loaders == {"reader", "shadow_search"}
+
+
+def test_loader_derivation_keeps_a_helper_beside_a_quiet_decorator_selected_out_of_a_literal(
+    tmp_path,
+):
+    # Repair pass twenty six, the boundary control
+    # beside form 83f. The same decorator selection
+    # stands here on a decorator whose body only
+    # returns the value it is handed, applied in
+    # bare name form to a decoy definition after
+    # the candidate. The expansion now follows the
+    # selection and the application is counted into
+    # the quiet body, but it calls nothing and
+    # assigns nothing under a global declaration, so
+    # the counting this pass adds refuses nothing
+    # here and the faithful helper keeps its
+    # derivation beside the reader. The control
+    # marks the decorator form of the family turning
+    # on the applied body performing the rewrite.
+    loaders = _derived_loaders(
+        tmp_path,
+        """
+        ROOT = None
+
+
+        def reader(name):
+            return (ROOT / name).read_bytes()
+
+
+        def shadow_search(client, raw_response, name):
+            return reader(name)
+
+
+        def _install_shadow():
+            global shadow_search
+            shadow_search = lambda client, raw_response, name: None
+
+
+        def _quiet_decorator(fn):
+            return fn
+
+
+        _dec = (_quiet_decorator,)[0]
+
+
+        @_dec
+        def _decoy():
+            return None
+        """,
+    )
+    assert loaders == {"reader", "shadow_search"}
