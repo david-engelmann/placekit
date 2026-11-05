@@ -4039,3 +4039,601 @@ def test_loader_derivation_keeps_a_helper_beside_a_quiet_subclass_hook_defined_i
         """,
     )
     assert loaders == {"reader", "shadow_search"}
+
+
+def test_loader_derivation_refuses_a_helper_rewritten_by_an_installer_called_through_a_bound_name(
+    tmp_path,
+):
+    # Repair pass eighteen, red team form 32a. A plain
+    # assignment can bind a second name to the installer
+    # itself, and a module level call bearing that name
+    # runs the installer body exactly as a call bearing
+    # its definition name does, so the name a test calls
+    # denotes the lambda. The pass seventeen reach
+    # resolved the callee of a plain call by the name a
+    # definition statement carries alone, and the bound
+    # name stands in no callee table and no write set
+    # table, so the call closed over nothing although
+    # the module level bindings the same reading gathers
+    # hold the alias in the open. The reach now resolves
+    # a callee name through those bindings, a name bound
+    # to a plain name counting as a call into the
+    # definition standing at the end of the chain.
+    loaders = _derived_loaders(
+        tmp_path,
+        """
+        ROOT = None
+
+
+        def reader(name):
+            return (ROOT / name).read_bytes()
+
+
+        def shadow_search(client, raw_response, name):
+            return reader(name)
+
+
+        def _install_shadow():
+            global shadow_search
+            shadow_search = lambda client, raw_response, name: None
+
+
+        _alias_installer = _install_shadow
+
+
+        _alias_installer()
+        """,
+    )
+    assert loaders == {"reader"}
+
+
+def test_loader_derivation_refuses_a_helper_rewritten_by_a_wrapper_called_through_a_bound_name(
+    tmp_path,
+):
+    # Repair pass eighteen, red team form 32b. A wrapper
+    # whose body calls the installer can stand under a
+    # second name bound to it by a plain assignment, and
+    # a call bearing that name runs the wrapper, whose
+    # own call into the installer is a plain name call
+    # the counting would close over at once if the
+    # wrapper body ever joined the reach. It never
+    # joined, because the call that would bring it in
+    # bore the alias, which resolved to nothing, so the
+    # stop stands in the resolution of the callee name
+    # itself and not in any property of the body behind
+    # it. The bound name now counts as a call into the
+    # wrapper on the terms of a direct call, and the
+    # reach closes over the installer call inside it.
+    loaders = _derived_loaders(
+        tmp_path,
+        """
+        ROOT = None
+
+
+        def reader(name):
+            return (ROOT / name).read_bytes()
+
+
+        def shadow_search(client, raw_response, name):
+            return reader(name)
+
+
+        def _install_shadow():
+            global shadow_search
+            shadow_search = lambda client, raw_response, name: None
+
+
+        def _wrap():
+            _install_shadow()
+
+
+        _alias_wrap = _wrap
+
+
+        _alias_wrap()
+        """,
+    )
+    assert loaders == {"reader"}
+
+
+def test_loader_derivation_refuses_a_helper_rewritten_by_an_installer_called_from_a_bound_lambda(
+    tmp_path,
+):
+    # Repair pass eighteen, red team form 32c. A name
+    # can be bound to a lambda whose body calls the
+    # installer, and a call bearing that name runs the
+    # lambda body where it stands in the binding. The
+    # counting read a lambda body where a call invokes
+    # the lambda where it stands and where an assignment
+    # installs one under a designated name, but at the
+    # call locus the callee is a name, the name resolved
+    # to nothing, and the lambda standing behind the
+    # binding was a body the reach never entered although
+    # it stands in the open in the same module. A name
+    # bound to a lambda now counts as a call into the
+    # lambda body read where it stands in the binding.
+    loaders = _derived_loaders(
+        tmp_path,
+        """
+        ROOT = None
+
+
+        def reader(name):
+            return (ROOT / name).read_bytes()
+
+
+        def shadow_search(client, raw_response, name):
+            return reader(name)
+
+
+        def _install_shadow():
+            global shadow_search
+            shadow_search = lambda client, raw_response, name: None
+
+
+        _alias_lambda = lambda: _install_shadow()
+
+
+        _alias_lambda()
+        """,
+    )
+    assert loaders == {"reader"}
+
+
+def test_loader_derivation_refuses_a_helper_rewritten_by_a_decorator_applied_to_a_definition(
+    tmp_path,
+):
+    # Repair pass eighteen, red team form 33a. A
+    # decorator whose body calls the installer, standing
+    # in bare name form on a decoy definition after the
+    # candidate, is applied to the decoy as the decoy
+    # statement completes, and that application runs the
+    # decorator body and with it the installer. The pass
+    # seventeen header reading visited the decorator
+    # expression and found a name standing in it and
+    # nothing else, no call node to collect, so the one
+    # body that performs the rewrite never joined the
+    # reach. The application of a decorator standing in
+    # bare name form now counts as a call into the value
+    # the name denotes, resolved as the reach resolves
+    # its callees.
+    loaders = _derived_loaders(
+        tmp_path,
+        """
+        ROOT = None
+
+
+        def reader(name):
+            return (ROOT / name).read_bytes()
+
+
+        def shadow_search(client, raw_response, name):
+            return reader(name)
+
+
+        def _install_shadow():
+            global shadow_search
+            shadow_search = lambda client, raw_response, name: None
+
+
+        def _deco(value):
+            _install_shadow()
+            return value
+
+
+        @_deco
+        def _decoy():
+            pass
+        """,
+    )
+    assert loaders == {"reader"}
+
+
+def test_loader_derivation_refuses_a_helper_rewritten_by_a_decorator_applied_to_a_class(
+    tmp_path,
+):
+    # Repair pass eighteen, red team form 33b. The same
+    # decorator standing in bare name form on a decoy
+    # class after the candidate is applied to the class
+    # as the class statement completes, after a creation
+    # whose body is empty and counts nothing, and the
+    # decorator body runs the installer the same way.
+    # The creation counting met the class in full and
+    # counted the five executions a creation performs,
+    # and the sixth execution the statement performs,
+    # the application of its decorator, stood outside
+    # the five and was counted nowhere, although it is
+    # designated by the same grammar on the same
+    # statement. The application now counts beside the
+    # five as a call into the decorator definition.
+    loaders = _derived_loaders(
+        tmp_path,
+        """
+        ROOT = None
+
+
+        def reader(name):
+            return (ROOT / name).read_bytes()
+
+
+        def shadow_search(client, raw_response, name):
+            return reader(name)
+
+
+        def _install_shadow():
+            global shadow_search
+            shadow_search = lambda client, raw_response, name: None
+
+
+        def _deco(value):
+            _install_shadow()
+            return value
+
+
+        @_deco
+        class _Decoy:
+            pass
+        """,
+    )
+    assert loaders == {"reader"}
+
+
+def test_loader_derivation_refuses_a_helper_rewritten_by_a_class_standing_as_a_decorator(
+    tmp_path,
+):
+    # Repair pass eighteen, red team form 33c. A class
+    # whose dunder init method calls the installer can
+    # stand in bare name form as the decorator on a decoy
+    # definition, and applying the decorator calls the
+    # class with the decoy as its argument, so the
+    # construction runs and its init method runs the
+    # installer. A call naming this class standing in an
+    # expression statement would count its construction
+    # at once, and the application performs exactly that
+    # call, designated by the decorator position rather
+    # than by a call node, while the counting read the
+    # position as an expression to search for calls and
+    # never as the call it is. The application now counts
+    # as the call it performs, into the construction
+    # gathered for the class the name denotes.
+    loaders = _derived_loaders(
+        tmp_path,
+        """
+        ROOT = None
+
+
+        def reader(name):
+            return (ROOT / name).read_bytes()
+
+
+        def shadow_search(client, raw_response, name):
+            return reader(name)
+
+
+        def _install_shadow():
+            global shadow_search
+            shadow_search = lambda client, raw_response, name: None
+
+
+        class _Deco:
+            def __init__(self, value):
+                _install_shadow()
+                self.value = value
+
+
+        @_Deco
+        def _decoy():
+            pass
+        """,
+    )
+    assert loaders == {"reader"}
+
+
+def test_loader_derivation_refuses_a_helper_rewritten_by_an_instance_standing_as_a_decorator(
+    tmp_path,
+):
+    # Repair pass eighteen, red team form 33d. An
+    # instance of a class whose dunder call method calls
+    # the installer can stand in bare name form as the
+    # decorator on a decoy definition, and applying the
+    # decorator calls the instance, which dispatches on
+    # the call method of its class and runs the
+    # installer. The shape composes the two stops of
+    # this pass, the application of the decorator counted
+    # nowhere and the call the application performs
+    # bearing an instance name whose dispatch the call
+    # counting resolved to nothing, so it is closed only
+    # by counting the application as a call and resolving
+    # the instance name the call bears to the call
+    # methods of the class it stands in.
+    loaders = _derived_loaders(
+        tmp_path,
+        """
+        ROOT = None
+
+
+        def reader(name):
+            return (ROOT / name).read_bytes()
+
+
+        def shadow_search(client, raw_response, name):
+            return reader(name)
+
+
+        def _install_shadow():
+            global shadow_search
+            shadow_search = lambda client, raw_response, name: None
+
+
+        class _Runner:
+            def __call__(self, value):
+                _install_shadow()
+                return value
+
+
+        _runner = _Runner()
+
+
+        @_runner
+        def _decoy():
+            pass
+        """,
+    )
+    assert loaders == {"reader"}
+
+
+def test_loader_derivation_refuses_a_helper_rewritten_by_an_instance_called_through_its_bound_name(
+    tmp_path,
+):
+    # Repair pass eighteen, red team form 34a. An
+    # instance of a class whose dunder call method calls
+    # the installer, bound at module level after the
+    # candidate and called by its bound name, dispatches
+    # the call on the call method of its class, and the
+    # method runs the installer. The counting resolved
+    # the callee name to no body, not to a definition,
+    # not to a class, and not through the bindings to the
+    # instantiation the placement reading would resolve
+    # it by, although the instantiation statement itself
+    # was counted in full as a construction that rewrites
+    # nothing. The call locus asks which body a call
+    # runs, so the name now resolves through the bindings
+    # to the instantiation it denotes and the call counts
+    # into the dunder call methods gathered for that
+    # class.
+    loaders = _derived_loaders(
+        tmp_path,
+        """
+        ROOT = None
+
+
+        def reader(name):
+            return (ROOT / name).read_bytes()
+
+
+        def shadow_search(client, raw_response, name):
+            return reader(name)
+
+
+        def _install_shadow():
+            global shadow_search
+            shadow_search = lambda client, raw_response, name: None
+
+
+        class _Runner:
+            def __call__(self):
+                _install_shadow()
+
+
+        _runner = _Runner()
+
+
+        _runner()
+        """,
+    )
+    assert loaders == {"reader"}
+
+
+def test_loader_derivation_refuses_a_helper_rewritten_by_an_instance_reached_through_a_second_name(
+    tmp_path,
+):
+    # Repair pass eighteen, red team form 34b. The same
+    # instance can be reached through a second name bound
+    # to the first, and a call bearing the second name
+    # dispatches on the same call method of the same
+    # class. The placement reading follows a name bound
+    # to a further name in turn when it resolves what a
+    # placed name puts in a namespace, so the chain of
+    # two plain bindings is a chain that reading already
+    # walks at its locus, while the call counting walked
+    # it at none, resolving neither name to the
+    # instantiation or to the class. The instance
+    # resolution at the call locus now follows the chain
+    # the same way, so the stop is closed at the
+    # resolution of the callee name and not at the
+    # directness of the binding.
+    loaders = _derived_loaders(
+        tmp_path,
+        """
+        ROOT = None
+
+
+        def reader(name):
+            return (ROOT / name).read_bytes()
+
+
+        def shadow_search(client, raw_response, name):
+            return reader(name)
+
+
+        def _install_shadow():
+            global shadow_search
+            shadow_search = lambda client, raw_response, name: None
+
+
+        class _Runner:
+            def __call__(self):
+                _install_shadow()
+
+
+        _runner = _Runner()
+
+
+        _runner2 = _runner
+
+
+        _runner2()
+        """,
+    )
+    assert loaders == {"reader"}
+
+
+def test_loader_derivation_keeps_a_helper_beside_a_call_through_a_name_bound_to_a_quiet_definition(
+    tmp_path,
+):
+    # Repair pass eighteen, the boundary control beside
+    # family 32. The same alias shape as form 32a stands
+    # here with the bound definition a function whose
+    # body only returns, called through its alias after
+    # the candidate. The callee name now resolves through
+    # the bindings to the body it denotes and that body
+    # joins the reach, but it calls nothing and assigns
+    # nothing under a global declaration, so the counting
+    # this pass adds refuses nothing here and the
+    # faithful helper keeps its derivation beside the
+    # reader. The control marks the family turning on
+    # the body behind the bound name performing the
+    # rewrite, the repair resolving the name to that body
+    # and keeping the refusal keyed on what the body
+    # does rather than on the presence of a bound name
+    # call.
+    loaders = _derived_loaders(
+        tmp_path,
+        """
+        ROOT = None
+
+
+        def reader(name):
+            return (ROOT / name).read_bytes()
+
+
+        def shadow_search(client, raw_response, name):
+            return reader(name)
+
+
+        def _install_shadow():
+            global shadow_search
+            shadow_search = lambda client, raw_response, name: None
+
+
+        def _quiet():
+            return None
+
+
+        _alias_quiet = _quiet
+
+
+        _alias_quiet()
+        """,
+    )
+    assert loaders == {"reader", "shadow_search"}
+
+
+def test_loader_derivation_keeps_a_helper_beside_a_returning_decorator_in_bare_name_form(
+    tmp_path,
+):
+    # Repair pass eighteen, the boundary control beside
+    # family 33. The same decorator shape as form 33a
+    # stands here with a decorator whose body only
+    # returns the value it is handed, standing on a decoy
+    # definition after the candidate. The application of
+    # the decorator now counts as a call into the
+    # decorator definition and its body joins the reach,
+    # but it calls nothing and assigns nothing under a
+    # global declaration, so the counting this pass adds
+    # refuses nothing here and the faithful helper keeps
+    # its derivation beside the reader. The control marks
+    # the family turning on the application performing
+    # the rewrite, the repair counting the application as
+    # the call it is while keeping the refusal keyed on
+    # what the applied body does.
+    loaders = _derived_loaders(
+        tmp_path,
+        """
+        ROOT = None
+
+
+        def reader(name):
+            return (ROOT / name).read_bytes()
+
+
+        def shadow_search(client, raw_response, name):
+            return reader(name)
+
+
+        def _install_shadow():
+            global shadow_search
+            shadow_search = lambda client, raw_response, name: None
+
+
+        def _deco(value):
+            return value
+
+
+        @_deco
+        def _decoy():
+            pass
+        """,
+    )
+    assert loaders == {"reader", "shadow_search"}
+
+
+def test_loader_derivation_keeps_a_helper_beside_a_quiet_instance_called_through_its_bound_name(
+    tmp_path,
+):
+    # Repair pass eighteen, the boundary control beside
+    # family 34. The same instance shape as form 34a
+    # stands here with a class whose dunder call method
+    # only returns, the instance bound and called after
+    # the candidate. The call now resolves the instance
+    # name to the class it stands in and reads that class
+    # its call methods on the same terms as the metaclass
+    # seat, but the method calls nothing and assigns
+    # nothing under a global declaration, so the counting
+    # this pass adds refuses nothing here and the faithful
+    # helper keeps its derivation beside the reader. The
+    # control marks the family turning on the call method
+    # performing the rewrite, the repair keeping the
+    # refusal keyed on what the method body does rather
+    # than on the presence of an instance call.
+    loaders = _derived_loaders(
+        tmp_path,
+        """
+        ROOT = None
+
+
+        def reader(name):
+            return (ROOT / name).read_bytes()
+
+
+        def shadow_search(client, raw_response, name):
+            return reader(name)
+
+
+        def _install_shadow():
+            global shadow_search
+            shadow_search = lambda client, raw_response, name: None
+
+
+        class _Runner:
+            def __call__(self):
+                return None
+
+
+        _runner = _Runner()
+
+
+        _runner()
+        """,
+    )
+    assert loaders == {"reader", "shadow_search"}
