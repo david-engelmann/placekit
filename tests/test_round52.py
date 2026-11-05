@@ -2433,3 +2433,437 @@ def test_loader_derivation_keeps_a_helper_beside_a_hookless_descriptor(tmp_path)
         """,
     )
     assert loaders == {"reader", "shadow_search"}
+
+
+def test_loader_derivation_refuses_a_helper_rewritten_through_a_prepare_method(
+    tmp_path,
+):
+    # Repair pass fifteen, red team form 22a. Creating
+    # a class calls the prepare method of its metaclass
+    # before the class body runs, so the marked class
+    # standing after the helper runs the prepare method
+    # of the metaclass its keyword names, the prepare
+    # method runs the installer, and the name a test
+    # calls denotes the lambda the installer leaves
+    # behind. The pass fourteen counting named the
+    # subclass hooks, the set name hooks, and the
+    # construction of the metaclass, and the
+    # construction gathering it consulted read the
+    # dunder new and dunder init methods alone, so the
+    # prepare method standing in the same method
+    # position was gathered under no name at all and
+    # the installer call inside it was never read. The
+    # prepare method now stands in the construction
+    # gathering beside the dunder new and dunder init
+    # methods, so the names it assigns under a global
+    # declaration are counted in the construction write
+    # set and its body joins the reach.
+    loaders = _derived_loaders(
+        tmp_path,
+        """
+        ROOT = None
+
+
+        def reader(name):
+            return (ROOT / name).read_bytes()
+
+
+        def shadow_search(client, raw_response, name):
+            return reader(name)
+
+
+        def _install_shadow():
+            global shadow_search
+            shadow_search = lambda client, raw_response, name: None
+
+
+        class _PrepareMeta(type):
+            @classmethod
+            def __prepare__(mcls, name, bases, **kwargs):
+                _install_shadow()
+                return {}
+
+
+        class _PreparedMarked(metaclass=_PrepareMeta):
+            pass
+        """,
+    )
+    assert loaders == {"reader"}
+
+
+def test_loader_derivation_refuses_a_helper_rewritten_by_an_inherited_prepare_method(
+    tmp_path,
+):
+    # Repair pass fifteen, red team form 22b. A class
+    # whose statement names no metaclass keyword is
+    # constructed by the metaclass its bases stand
+    # under, and creating it calls that metaclass
+    # prepare method before its body runs, so the child
+    # standing after the helper runs the prepare method
+    # of the metaclass it inherits, the prepare method
+    # runs the installer, and the name denotes the
+    # lambda. The pass fourteen counting resolved the
+    # inherited metaclass and counted the creation as
+    # a call into its construction, and the construction
+    # it arrived at was the same empty gathering as in
+    # form 22a, because the prepare method was gathered
+    # under no name on either path. The creation of the
+    # base standing before the helper runs the same
+    # prepare method and is honestly overwritten when
+    # the helper definition binds the name after it,
+    # which is why the segment orders its definitions
+    # as it does and why the refusal keys on the child
+    # creation after the candidate. The prepare method
+    # now stands in the construction gathering, so the
+    # inherited path counts it with the construction.
+    loaders = _derived_loaders(
+        tmp_path,
+        """
+        ROOT = None
+
+
+        def reader(name):
+            return (ROOT / name).read_bytes()
+
+
+        class _PrepareMeta(type):
+            @classmethod
+            def __prepare__(mcls, name, bases, **kwargs):
+                _install_shadow()
+                return {}
+
+
+        def _install_shadow():
+            global shadow_search
+            shadow_search = lambda client, raw_response, name: None
+
+
+        class _MetaBase(metaclass=_PrepareMeta):
+            pass
+
+
+        def shadow_search(client, raw_response, name):
+            return reader(name)
+
+
+        class _MetaChild(_MetaBase):
+            pass
+        """,
+    )
+    assert loaders == {"reader"}
+
+
+def test_loader_derivation_refuses_a_helper_rewritten_through_a_name_bound_descriptor(
+    tmp_path,
+):
+    # Repair pass fifteen, red team form 23a. The set
+    # name hook runs for every descriptor standing in
+    # the namespace a class body builds, however the
+    # instance arrived there, so an instance bound at
+    # module level under its own name and placed in the
+    # marked class body by that name runs its hook as
+    # the marked class is created, the hook runs the
+    # installer, and the name a test calls denotes the
+    # lambda. The pass fourteen counting read each
+    # class body assignment whose value is a call and
+    # credited no other arrival shape, so a body
+    # assignment whose value is a plain name resolved
+    # to nothing and the hook method was never
+    # consulted. A body assignment whose value is a
+    # plain name now resolves through the module level
+    # bindings of that name, and where a binding value
+    # is a call naming a module level class the
+    # creation counts as a call into the set name
+    # methods of that class on the same terms as a
+    # direct instantiation, keeping the refusal keyed
+    # on the execution, since a name bound to no
+    # descriptor instance refuses nothing extra.
+    loaders = _derived_loaders(
+        tmp_path,
+        """
+        ROOT = None
+
+
+        def reader(name):
+            return (ROOT / name).read_bytes()
+
+
+        def shadow_search(client, raw_response, name):
+            return reader(name)
+
+
+        def _install_shadow():
+            global shadow_search
+            shadow_search = lambda client, raw_response, name: None
+
+
+        class _ShadowDescriptor:
+            def __set_name__(self, owner, name):
+                _install_shadow()
+
+
+        _SHARED_DESCRIPTOR = _ShadowDescriptor()
+
+
+        class _DescriptorMarked:
+            marker = _SHARED_DESCRIPTOR
+        """,
+    )
+    assert loaders == {"reader"}
+
+
+def test_loader_derivation_refuses_a_helper_rewritten_in_a_class_body_inside_a_called_function(
+    tmp_path,
+):
+    # Repair pass fifteen, red team form 24a. A class
+    # body runs at its statement, so when a function
+    # the module level calls holds a class definition,
+    # the class body statements run as part of that
+    # call, and the plain installer call standing in
+    # the class body leaves the name denoting the
+    # lambda. The counting read the header of a class
+    # standing inside a body it had entered and counted
+    # the executions its creation performs, and stopped
+    # at the class body itself, on the ground that such
+    # calls run on their own time, the ground the
+    # eleventh repair pass falsified and removed at
+    # module level, where the same body was already
+    # read. A class standing inside a body the reach
+    # has entered is now read on the terms of a class
+    # at module level, its body statements read for the
+    # calls standing in them, while the body of a
+    # further definition standing in it stays
+    # deferred, since a definition alone performs none
+    # of its body.
+    loaders = _derived_loaders(
+        tmp_path,
+        """
+        ROOT = None
+
+
+        def reader(name):
+            return (ROOT / name).read_bytes()
+
+
+        def shadow_search(client, raw_response, name):
+            return reader(name)
+
+
+        def _install_shadow():
+            global shadow_search
+            shadow_search = lambda client, raw_response, name: None
+
+
+        def _run_at_load():
+            class _Inner:
+                _install_shadow()
+
+
+        _run_at_load()
+        """,
+    )
+    assert loaders == {"reader"}
+
+
+def test_loader_derivation_refuses_a_helper_rewritten_through_a_subclass_hook_on_a_subscripted_base(
+    tmp_path,
+):
+    # Repair pass fifteen, red team form 25a. A base
+    # standing in a subscript expression performs the
+    # same subclass hook execution as the same base in
+    # bare name form, where the base defines a class
+    # get item method that returns the class itself,
+    # the standard generic alias idiom, so the child
+    # standing after the helper under a subscription of
+    # its base runs the base subclass hook, the hook
+    # runs the installer, and the name denotes the
+    # lambda. Every base resolution the counting
+    # performed took bases in bare name form only, so a
+    # creation under a subscripted base counted no hook
+    # at all and the hook body was never read. Every
+    # base reading now unwraps a subscript base to the
+    # plain name standing in its value position, so one
+    # base counts the same in either of its two
+    # grammatical forms, while a base whose value
+    # position holds no plain name counts nothing.
+    loaders = _derived_loaders(
+        tmp_path,
+        """
+        ROOT = None
+
+
+        def reader(name):
+            return (ROOT / name).read_bytes()
+
+
+        def shadow_search(client, raw_response, name):
+            return reader(name)
+
+
+        def _install_shadow():
+            global shadow_search
+            shadow_search = lambda client, raw_response, name: None
+
+
+        class _HookBase:
+            def __init_subclass__(cls, **kwargs):
+                _install_shadow()
+
+            @classmethod
+            def __class_getitem__(cls, item):
+                return cls
+
+
+        class _HookChild(_HookBase[int]):
+            pass
+        """,
+    )
+    assert loaders == {"reader"}
+
+
+def test_loader_derivation_refuses_a_helper_rewritten_by_a_metaclass_behind_a_subscripted_base(
+    tmp_path,
+):
+    # Repair pass fifteen, red team form 25b. A child
+    # standing under a subscription of a base stands
+    # under the base itself where the base class get
+    # item method returns the class, and inherits the
+    # metaclass the base stands under, so creating the
+    # child standing after the helper runs that
+    # metaclass construction again and leaves the name
+    # denoting the lambda. The pass fourteen counting
+    # resolved the inherited metaclass through the
+    # bases the child names, in bare name form only, so
+    # before a subscript it resolved nothing and
+    # counted no construction, though the base and its
+    # keyword stood in the open in the same module. The
+    # metaclass candidate resolution now unwraps a
+    # subscript base to the plain name in its value
+    # position with every other base reading, so the
+    # child creation counts as a call into the
+    # construction it inherits. The creation of the
+    # base standing before the helper runs the same
+    # construction and is honestly overwritten when the
+    # helper definition binds the name after it, as in
+    # form 21b.
+    loaders = _derived_loaders(
+        tmp_path,
+        """
+        ROOT = None
+
+
+        def reader(name):
+            return (ROOT / name).read_bytes()
+
+
+        class _ShadowMeta(type):
+            def __init__(cls, name, bases, namespace):
+                _install_shadow()
+
+
+        def _install_shadow():
+            global shadow_search
+            shadow_search = lambda client, raw_response, name: None
+
+
+        class _MetaBase(metaclass=_ShadowMeta):
+            @classmethod
+            def __class_getitem__(cls, item):
+                return cls
+
+
+        def shadow_search(client, raw_response, name):
+            return reader(name)
+
+
+        class _MetaChild(_MetaBase[int]):
+            pass
+        """,
+    )
+    assert loaders == {"reader"}
+
+
+def test_loader_derivation_keeps_a_helper_beside_a_quiet_prepare_method(tmp_path):
+    # Repair pass fifteen, the boundary control beside
+    # family 22. The same marked class shape as form
+    # 22a stands here under a metaclass whose prepare
+    # method only returns an empty namespace and calls
+    # nothing. Creating the marked class still runs the
+    # prepare method, and its body is now read with the
+    # construction, but it reaches no installer and
+    # assigns nothing under a global declaration, so
+    # the counting this pass adds refuses nothing here
+    # and the faithful helper keeps its derivation
+    # beside the reader. The control marks the family
+    # turning on the prepare execution performing the
+    # rewrite and not on the method merely standing in
+    # the metaclass.
+    loaders = _derived_loaders(
+        tmp_path,
+        """
+        ROOT = None
+
+
+        def reader(name):
+            return (ROOT / name).read_bytes()
+
+
+        def shadow_search(client, raw_response, name):
+            return reader(name)
+
+
+        class _QuietMeta(type):
+            @classmethod
+            def __prepare__(mcls, name, bases, **kwargs):
+                return {}
+
+
+        class _PreparedMarked(metaclass=_QuietMeta):
+            pass
+        """,
+    )
+    assert loaders == {"reader", "shadow_search"}
+
+
+def test_loader_derivation_keeps_a_helper_beside_a_class_body_in_an_uncalled_function(
+    tmp_path,
+):
+    # Repair pass fifteen, the boundary control beside
+    # family 24. The same class body shape as form 24a
+    # stands here inside a function no statement calls,
+    # so the enclosing body never runs, the class
+    # statement inside it never runs, and the class
+    # body is never read, because the reach enters a
+    # body only through a call that reaches it. The
+    # counting this pass adds reads class bodies only
+    # inside bodies the reach has entered, so it
+    # refuses nothing here and the faithful helper
+    # keeps its derivation beside the reader. The
+    # control marks the family turning on the enclosing
+    # body executing and not on the class merely
+    # standing in the module.
+    loaders = _derived_loaders(
+        tmp_path,
+        """
+        ROOT = None
+
+
+        def reader(name):
+            return (ROOT / name).read_bytes()
+
+
+        def shadow_search(client, raw_response, name):
+            return reader(name)
+
+
+        def _install_shadow():
+            global shadow_search
+            shadow_search = lambda client, raw_response, name: None
+
+
+        def _never_run():
+            class _Inner:
+                _install_shadow()
+        """,
+    )
+    assert loaders == {"reader", "shadow_search"}
