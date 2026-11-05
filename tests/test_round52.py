@@ -10981,3 +10981,764 @@ def test_loader_derivation_keeps_a_helper_beside_a_quiet_decorator_selected_out_
         """,
     )
     assert loaders == {"reader", "shadow_search"}
+
+
+def test_loader_derivation_refuses_a_helper_rewritten_by_an_installer_called_through_a_name_bound_to_a_subscript_standing_on_a_loop_target_name_over_a_tuple(
+    tmp_path,
+):
+    # Repair pass twenty seven, red team family 84,
+    # form 84a. A loop binds a name to the tuple
+    # holding the installer, a further name is bound
+    # to a subscript standing on the loop name, and
+    # a call bearing the further name runs the
+    # installer. The pass twenty six selection
+    # reading resolved a name standing in a
+    # subscript's value position through the module
+    # level bindings alone, and the binding a loop
+    # target name carries there is the iterable its
+    # header walks, so the subscript selected out of
+    # the iterable one level above the element the
+    # name denotes and the callee expansion resolved
+    # nothing from the sequence it was handed,
+    # although the reach passage states a loop
+    # target name denotes an element at every seat
+    # that resolves a name to the value it denotes,
+    # closing with among them. The selection reading
+    # now resolves a loop target name beside the
+    # bindings route through the loop target element
+    # reading, so the subscript selects out of the
+    # element the name denotes on the placement
+    # index terms and the call counts against the
+    # installer.
+    loaders = _derived_loaders(
+        tmp_path,
+        """
+        ROOT = None
+
+
+        def reader(name):
+            return (ROOT / name).read_bytes()
+
+
+        def shadow_search(client, raw_response, name):
+            return reader(name)
+
+
+        def _install_shadow():
+            global shadow_search
+            shadow_search = lambda client, raw_response, name: None
+
+
+        for _elt in [(_install_shadow,)]:
+            pass
+
+
+        _fn = _elt[0]
+
+        _fn()
+        """,
+    )
+    assert loaders == {"reader"}
+
+
+def test_loader_derivation_refuses_a_helper_rewritten_by_an_installer_called_through_a_name_bound_to_a_subscript_standing_on_a_loop_target_name_over_a_list(
+    tmp_path,
+):
+    # Repair pass twenty seven, red team family 84,
+    # form 84b. The loop element stands as a list
+    # holding the installer rather than a tuple, and
+    # the same misresolution read the subscript as
+    # selecting out of the iterable the header
+    # walks. The selection reading now resolves the
+    # loop name through the elements it denotes on
+    # the same terms, so the selection yields the
+    # installer out of the denoted list and the call
+    # counts against it.
+    loaders = _derived_loaders(
+        tmp_path,
+        """
+        ROOT = None
+
+
+        def reader(name):
+            return (ROOT / name).read_bytes()
+
+
+        def shadow_search(client, raw_response, name):
+            return reader(name)
+
+
+        def _install_shadow():
+            global shadow_search
+            shadow_search = lambda client, raw_response, name: None
+
+
+        for _elt in [[_install_shadow]]:
+            pass
+
+
+        _fn = _elt[0]
+
+        _fn()
+        """,
+    )
+    assert loaders == {"reader"}
+
+
+def test_loader_derivation_refuses_a_helper_rewritten_through_a_call_method_of_an_instance_bound_by_a_subscript_standing_on_a_loop_target_name(
+    tmp_path,
+):
+    # Repair pass twenty seven, red team family 84,
+    # form 84c. The loop element is a tuple holding
+    # an instance of a class whose dunder call
+    # method calls the installer, and a name bound
+    # to the subscript standing on the loop name is
+    # called. The instance resolution is one of the
+    # seats the reach passage names in terms, and it
+    # resolves the bound subscript through the
+    # selection reading, which handed it the tuple
+    # whole at the pass twenty six head, in which it
+    # found no instantiation. The selection now
+    # yields the instance the element denotes, so
+    # the call counts into the dunder call method.
+    loaders = _derived_loaders(
+        tmp_path,
+        """
+        ROOT = None
+
+
+        def reader(name):
+            return (ROOT / name).read_bytes()
+
+
+        def shadow_search(client, raw_response, name):
+            return reader(name)
+
+
+        def _install_shadow():
+            global shadow_search
+            shadow_search = lambda client, raw_response, name: None
+
+
+        class _ShadowRunner:
+            def __call__(self):
+                _install_shadow()
+
+
+        for _elt in [(_ShadowRunner(),)]:
+            pass
+
+
+        _inst = _elt[0]
+
+        _inst()
+        """,
+    )
+    assert loaders == {"reader"}
+
+
+def test_loader_derivation_refuses_a_helper_rewritten_through_an_enter_method_of_a_manager_standing_as_a_subscript_on_a_loop_target_name_in_the_with_position(
+    tmp_path,
+):
+    # Repair pass twenty seven, red team family 84,
+    # form 84d. The subscript standing on the loop
+    # name stands in the with position itself, its
+    # element a context manager instance whose
+    # dunder enter method calls the installer. The
+    # operand resolution of the with statement is
+    # one of the seats the reach passage names in
+    # terms, and its manager reading resolves the
+    # subscript through the selection reading, which
+    # handed it the tuple whole and found no class
+    # in it. The selection now yields the manager
+    # instance the element denotes, so the enter
+    # method is counted at the statement.
+    loaders = _derived_loaders(
+        tmp_path,
+        """
+        ROOT = None
+
+
+        def reader(name):
+            return (ROOT / name).read_bytes()
+
+
+        def shadow_search(client, raw_response, name):
+            return reader(name)
+
+
+        def _install_shadow():
+            global shadow_search
+            shadow_search = lambda client, raw_response, name: None
+
+
+        class _ShadowManager:
+            def __enter__(self):
+                _install_shadow()
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+
+        for _elt in [(_ShadowManager(),)]:
+            pass
+
+
+        with _elt[0]:
+            pass
+        """,
+    )
+    assert loaders == {"reader"}
+
+
+def test_loader_derivation_refuses_a_helper_rewritten_through_an_enter_method_of_a_manager_bound_by_a_subscript_standing_on_a_loop_target_name(
+    tmp_path,
+):
+    # Repair pass twenty seven, red team family 84,
+    # form 84e. The manager reaches the with
+    # statement through a name bound to the
+    # subscript standing on the loop name, so the
+    # instance resolution the manager position
+    # consults reads the bound selection through the
+    # same misresolving selection reading and found
+    # no instance in the tuple it was handed. The
+    # selection now yields the instance the element
+    # denotes, so the enter method is counted.
+    loaders = _derived_loaders(
+        tmp_path,
+        """
+        ROOT = None
+
+
+        def reader(name):
+            return (ROOT / name).read_bytes()
+
+
+        def shadow_search(client, raw_response, name):
+            return reader(name)
+
+
+        def _install_shadow():
+            global shadow_search
+            shadow_search = lambda client, raw_response, name: None
+
+
+        class _ShadowManager:
+            def __enter__(self):
+                _install_shadow()
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+
+        for _elt in [(_ShadowManager(),)]:
+            pass
+
+
+        _mgr = _elt[0]
+
+        with _mgr:
+            pass
+        """,
+    )
+    assert loaders == {"reader"}
+
+
+def test_loader_derivation_refuses_a_helper_rewritten_through_a_class_getitem_method_of_a_class_reached_by_a_subscript_standing_on_a_selection_on_a_loop_target_name(
+    tmp_path,
+):
+    # Repair pass twenty seven, red team family 84,
+    # form 84f. The loop element is a tuple holding
+    # a base class whose dunder class getitem method
+    # calls the installer, and the appended code
+    # evaluates a subscript standing on a selection
+    # on the loop name. The execution counting
+    # resolves the inner selection through the
+    # selection reading, which handed it the tuple
+    # whole and found no class name in it, so the
+    # getitem went uncounted. The selection now
+    # yields the class the element denotes, so the
+    # method is counted wherever the reach reads the
+    # subscript as an execution.
+    loaders = _derived_loaders(
+        tmp_path,
+        """
+        ROOT = None
+
+
+        def reader(name):
+            return (ROOT / name).read_bytes()
+
+
+        def shadow_search(client, raw_response, name):
+            return reader(name)
+
+
+        def _install_shadow():
+            global shadow_search
+            shadow_search = lambda client, raw_response, name: None
+
+
+        class _ShadowBase:
+            @classmethod
+            def __class_getitem__(cls, item):
+                _install_shadow()
+                return cls
+
+
+        for _elt in [(_ShadowBase,)]:
+            pass
+
+
+        _elt[0][int]
+        """,
+    )
+    assert loaders == {"reader"}
+
+
+def test_loader_derivation_refuses_a_helper_rewritten_through_an_isub_method_of_an_instance_bound_by_a_subscript_standing_on_a_loop_target_name(
+    tmp_path,
+):
+    # Repair pass twenty seven, red team family 84,
+    # form 84g. The loop element is a tuple holding
+    # an accumulator instance whose dunder isub
+    # method calls the installer, a name is bound to
+    # the subscript standing on the loop name, and
+    # the name is the target of a subtractive
+    # augmented assignment. The augmented counting
+    # resolves its target through the instance
+    # resolution, a seat the reach passage names in
+    # terms, which read the bound selection through
+    # the misresolving selection reading and found
+    # no instance. The selection now yields the
+    # instance the element denotes, so the dispatch
+    # of the operation is counted.
+    loaders = _derived_loaders(
+        tmp_path,
+        """
+        ROOT = None
+
+
+        def reader(name):
+            return (ROOT / name).read_bytes()
+
+
+        def shadow_search(client, raw_response, name):
+            return reader(name)
+
+
+        def _install_shadow():
+            global shadow_search
+            shadow_search = lambda client, raw_response, name: None
+
+
+        class _ShadowAccumulator:
+            def __isub__(self, other):
+                _install_shadow()
+                return self
+
+
+        for _elt in [(_ShadowAccumulator(),)]:
+            pass
+
+
+        _acc = _elt[0]
+
+        _acc -= 1
+        """,
+    )
+    assert loaders == {"reader"}
+
+
+def test_loader_derivation_refuses_a_helper_rewritten_by_a_decorator_called_through_a_name_bound_to_a_subscript_standing_on_a_loop_target_name(
+    tmp_path,
+):
+    # Repair pass twenty seven, red team family 84,
+    # form 84h. The loop element is a tuple holding
+    # a loud decorator function, a name is bound to
+    # the subscript standing on the loop name, and
+    # the name stands in bare name form on a decoy
+    # definition. The decorator application counts
+    # through the bound callee expansion, a seat the
+    # reach passage names in terms, which read the
+    # bound selection through the misresolving
+    # selection reading and queued no callee for the
+    # tuple it was handed. The selection now yields
+    # the decorator the element denotes, so the
+    # application counts against it.
+    loaders = _derived_loaders(
+        tmp_path,
+        """
+        ROOT = None
+
+
+        def reader(name):
+            return (ROOT / name).read_bytes()
+
+
+        def shadow_search(client, raw_response, name):
+            return reader(name)
+
+
+        def _install_shadow():
+            global shadow_search
+            shadow_search = lambda client, raw_response, name: None
+
+
+        def _loud_decorator(fn):
+            _install_shadow()
+            return fn
+
+
+        for _elt in [(_loud_decorator,)]:
+            pass
+
+
+        _dec = _elt[0]
+
+
+        @_dec
+        def _decoy():
+            pass
+        """,
+    )
+    assert loaders == {"reader"}
+
+
+def test_loader_derivation_refuses_a_helper_rewritten_through_a_next_method_behind_an_iter_returning_a_selection_out_of_a_name_bound_to_a_subscript_selecting_a_name_bound_to_the_literal(
+    tmp_path,
+):
+    # Repair pass twenty seven, red team family 85,
+    # form 85a. The iter method binds a name to the
+    # tuple holding its first parameter, binds a
+    # further name to a subscript selecting that
+    # name out of a literal holding it, and returns
+    # a selection out of the further name. The pass
+    # twenty six selection helper kept only sequence
+    # nodes among the elements a selection returned
+    # and dropped the selected name where it stood,
+    # so the further name denoted no literal although
+    # the selection yields in the open the name the
+    # body binds to the literal, and the self return
+    # passage counts a bound value's yield through
+    # the body's own binding on the same terms. The
+    # helper now follows a selected element standing
+    # as a name through the body's own literal
+    # reading, so the selection yields the literal
+    # the name denotes and the return counts as
+    # returning the instance itself.
+    loaders = _derived_loaders(
+        tmp_path,
+        """
+        ROOT = None
+
+
+        def reader(name):
+            return (ROOT / name).read_bytes()
+
+
+        def shadow_search(client, raw_response, name):
+            return reader(name)
+
+
+        def _install_shadow():
+            global shadow_search
+            shadow_search = lambda client, raw_response, name: None
+
+
+        class _IterSelectionBoundName:
+            def __iter__(self):
+                pair = (self,)
+                held = (pair,)[0]
+                return held[0]
+
+            def __next__(self):
+                _install_shadow()
+                raise StopIteration
+
+
+        for _ in _IterSelectionBoundName():
+            pass
+        """,
+    )
+    assert loaders == {"reader"}
+
+
+def test_loader_derivation_refuses_a_helper_rewritten_through_a_next_method_behind_an_iter_returning_a_selection_behind_a_walrus_out_of_a_subscript_selecting_a_name_bound_to_the_literal(
+    tmp_path,
+):
+    # Repair pass twenty seven, red team family 85,
+    # form 85b. The selection stands in the return
+    # itself behind a walrus, the return reading a
+    # subscript on the value the walrus binds, which
+    # is itself a subscript selecting the name bound
+    # to the literal out of a literal holding it.
+    # The helper dropped the selected name on the
+    # same terms as form 85a, so the walrus value
+    # denoted no literal and the return read as a
+    # value the counting cannot name. The helper now
+    # follows the selected name through the body's
+    # own literal reading, so the return counts as
+    # returning the instance itself.
+    loaders = _derived_loaders(
+        tmp_path,
+        """
+        ROOT = None
+
+
+        def reader(name):
+            return (ROOT / name).read_bytes()
+
+
+        def shadow_search(client, raw_response, name):
+            return reader(name)
+
+
+        def _install_shadow():
+            global shadow_search
+            shadow_search = lambda client, raw_response, name: None
+
+
+        class _IterWalrusSelection:
+            def __iter__(self):
+                pair = (self,)
+                return (held := (pair,)[0])[0]
+
+            def __next__(self):
+                _install_shadow()
+                raise StopIteration
+
+
+        for _ in _IterWalrusSelection():
+            pass
+        """,
+    )
+    assert loaders == {"reader"}
+
+
+def test_loader_derivation_refuses_a_helper_rewritten_through_a_next_method_behind_an_iter_returning_a_selection_out_of_a_name_bound_to_a_conditional_selecting_a_name_bound_to_the_literal(
+    tmp_path,
+):
+    # Repair pass twenty seven, red team family 85,
+    # form 85c. The name the return selects out of
+    # is bound to a conditional expression whose arms
+    # each stand as the subscript selecting the name
+    # bound to the literal out of a literal holding
+    # it. The body's own literal reading followed
+    # the bound conditional into the selection on
+    # each arm, and the helper dropped the selected
+    # name there on the same terms as form 85a, so
+    # the name denoted no literal. The helper now
+    # follows the selected name through the body's
+    # own literal reading on either arm, so the
+    # return counts as returning the instance
+    # itself.
+    loaders = _derived_loaders(
+        tmp_path,
+        """
+        ROOT = None
+
+
+        def reader(name):
+            return (ROOT / name).read_bytes()
+
+
+        def shadow_search(client, raw_response, name):
+            return reader(name)
+
+
+        def _install_shadow():
+            global shadow_search
+            shadow_search = lambda client, raw_response, name: None
+
+
+        class _IterConditionalSelectionBound:
+            def __iter__(self):
+                pair = (self,)
+                held = (pair,)[0] if True else (pair,)[0]
+                return held[0]
+
+            def __next__(self):
+                _install_shadow()
+                raise StopIteration
+
+
+        for _ in _IterConditionalSelectionBound():
+            pass
+        """,
+    )
+    assert loaders == {"reader"}
+
+
+def test_loader_derivation_refuses_a_helper_rewritten_through_a_next_method_behind_an_iter_returning_a_selection_out_of_a_name_bound_to_a_subscript_selecting_through_a_further_name_bound_to_the_literal(
+    tmp_path,
+):
+    # Repair pass twenty seven, red team family 85,
+    # form 85d. The name the return selects out of
+    # is bound to a subscript standing on a further
+    # body local name bound to the literal holding
+    # the name bound to the literal holding the
+    # instance, so the selection selects the inner
+    # name out of a literal a further name denotes.
+    # The helper read the further name to its
+    # literal and then dropped the selected inner
+    # name on the same terms as form 85a. The helper
+    # now follows the selected name through the
+    # body's own literal reading, so the selection
+    # yields the literal the inner name denotes and
+    # the return counts as returning the instance
+    # itself.
+    loaders = _derived_loaders(
+        tmp_path,
+        """
+        ROOT = None
+
+
+        def reader(name):
+            return (ROOT / name).read_bytes()
+
+
+        def shadow_search(client, raw_response, name):
+            return reader(name)
+
+
+        def _install_shadow():
+            global shadow_search
+            shadow_search = lambda client, raw_response, name: None
+
+
+        class _IterDenotedSelectionBound:
+            def __iter__(self):
+                pair = (self,)
+                box = (pair,)
+                held = box[0]
+                return held[0]
+
+            def __next__(self):
+                _install_shadow()
+                raise StopIteration
+
+
+        for _ in _IterDenotedSelectionBound():
+            pass
+        """,
+    )
+    assert loaders == {"reader"}
+
+
+def test_loader_derivation_keeps_a_helper_beside_a_call_through_a_name_bound_to_a_subscript_standing_on_a_loop_target_name_selecting_a_quiet_callable(
+    tmp_path,
+):
+    # Repair pass twenty seven, the boundary control
+    # beside family 84. The same loop and selection
+    # binding as form 84a stands here on a function
+    # whose body only returns, called through the
+    # name bound to the subscript standing on the
+    # loop name after the candidate. The selection
+    # reading now resolves the loop name through the
+    # element it denotes and the call is counted
+    # into the quiet body, but it calls nothing and
+    # assigns nothing under a global declaration, so
+    # the counting this pass adds refuses nothing
+    # here and the faithful helper keeps its
+    # derivation beside the reader. The control
+    # marks the family turning on the callable
+    # behind the selection performing the rewrite,
+    # the repair widening the resolution while
+    # keeping the refusal keyed on what the resolved
+    # body does.
+    loaders = _derived_loaders(
+        tmp_path,
+        """
+        ROOT = None
+
+
+        def reader(name):
+            return (ROOT / name).read_bytes()
+
+
+        def shadow_search(client, raw_response, name):
+            return reader(name)
+
+
+        def _install_shadow():
+            global shadow_search
+            shadow_search = lambda client, raw_response, name: None
+
+
+        def _quiet():
+            return None
+
+
+        for _elt in [(_quiet,)]:
+            pass
+
+
+        _fn = _elt[0]
+
+        _fn()
+        """,
+    )
+    assert loaders == {"reader", "shadow_search"}
+
+
+def test_loader_derivation_keeps_a_helper_beside_an_iter_returning_a_distinct_iterator_through_a_selection_out_of_a_name_bound_to_a_subscript_selecting_a_name_bound_to_the_literal(
+    tmp_path,
+):
+    # Repair pass twenty seven, the boundary control
+    # beside family 85. The same selection binding
+    # as form 85a stands here on a tuple holding a
+    # distinct iterator rather than the instance
+    # itself, the iter method returning a selection
+    # out of the name bound to the subscript
+    # selecting the name bound to that literal. The
+    # helper now follows the selected name to the
+    # literal it denotes, and the literal holds a
+    # value that is not the instance, so the return
+    # still reads as handing the iteration to a
+    # value the counting cannot name as the instance
+    # and the loud next method never joins the
+    # reach, the faithful helper keeping its
+    # derivation beside the reader. The control
+    # marks the family turning on the selected name
+    # denoting the instance tuple, not on the
+    # selection shape alone, and keeps the fence
+    # where a name whose yielded literal selects a
+    # distinct value stands.
+    loaders = _derived_loaders(
+        tmp_path,
+        """
+        ROOT = None
+
+
+        def reader(name):
+            return (ROOT / name).read_bytes()
+
+
+        def shadow_search(client, raw_response, name):
+            return reader(name)
+
+
+        def _install_shadow():
+            global shadow_search
+            shadow_search = lambda client, raw_response, name: None
+
+
+        class _IterDistinctSelectionBound:
+            def __iter__(self):
+                pair = (iter([]),)
+                held = (pair,)[0]
+                return held[0]
+
+            def __next__(self):
+                _install_shadow()
+                raise StopIteration
+
+
+        for _ in _IterDistinctSelectionBound():
+            pass
+        """,
+    )
+    assert loaders == {"reader", "shadow_search"}
