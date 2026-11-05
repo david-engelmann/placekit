@@ -2867,3 +2867,492 @@ def test_loader_derivation_keeps_a_helper_beside_a_class_body_in_an_uncalled_fun
         """,
     )
     assert loaders == {"reader", "shadow_search"}
+
+
+def test_loader_derivation_refuses_a_helper_rewritten_through_a_set_name_hook_in_an_arm_of_a_class_body(
+    tmp_path,
+):
+    # Repair pass sixteen, red team form 26a. The set
+    # name hook runs for every descriptor standing in
+    # the namespace a class body builds, however the
+    # body placed it there, so a descriptor instance
+    # placed by an assignment standing in the arm of a
+    # conditional statement in the marked class body
+    # runs its hook as the class is created, the hook
+    # runs the installer, and the name a test calls
+    # denotes the lambda. The pass fifteen scan read a
+    # statement only where it stood directly in the
+    # body as an assignment or an annotated assignment,
+    # so the conditional statement standing in the body
+    # was read and the assignment in its arm was never
+    # asked for its value, though the reach itself
+    # reads the statements of a class body in their
+    # arms for the calls standing in them. The scan now
+    # reads the placements of a created class body on
+    # the reach statement terms through the shared
+    # assignment pair collector, so a placement in an
+    # arm counts beside a direct one, and the creation
+    # counts as a call into the set name methods of the
+    # class the arm instantiates.
+    loaders = _derived_loaders(
+        tmp_path,
+        """
+        ROOT = None
+
+
+        def reader(name):
+            return (ROOT / name).read_bytes()
+
+
+        def shadow_search(client, raw_response, name):
+            return reader(name)
+
+
+        def _install_shadow():
+            global shadow_search
+            shadow_search = lambda client, raw_response, name: None
+
+
+        class _ShadowDescriptor:
+            def __set_name__(self, owner, name):
+                _install_shadow()
+
+
+        class _DescriptorMarked:
+            if True:
+                marker = _ShadowDescriptor()
+        """,
+    )
+    assert loaders == {"reader"}
+
+
+def test_loader_derivation_refuses_a_helper_rewritten_through_a_set_name_hook_on_a_tuple_placed_descriptor(
+    tmp_path,
+):
+    # Repair pass sixteen, red team form 26b. A tuple
+    # assignment in a class body unpacks its elements
+    # into the namespace the body builds, so a
+    # descriptor instance held as one element of the
+    # tuple stands in the namespace and its set name
+    # hook runs as the class is created, the hook runs
+    # the installer, and the name denotes the lambda.
+    # The pass fifteen scan read the statement, since
+    # it is a direct assignment in the body, and asked
+    # its value for a call, and the value is a tuple,
+    # so no descriptor was credited, though the tuple
+    # holds the very instantiation call the scan looks
+    # for as its first element. The placement reading
+    # now resolves the elements of a tuple or a list an
+    # assignment unpacks to the instantiations they
+    # hold, so the creation counts as a call into the
+    # set name methods of the class the element
+    # instantiates.
+    loaders = _derived_loaders(
+        tmp_path,
+        """
+        ROOT = None
+
+
+        def reader(name):
+            return (ROOT / name).read_bytes()
+
+
+        def shadow_search(client, raw_response, name):
+            return reader(name)
+
+
+        def _install_shadow():
+            global shadow_search
+            shadow_search = lambda client, raw_response, name: None
+
+
+        class _ShadowDescriptor:
+            def __set_name__(self, owner, name):
+                _install_shadow()
+
+
+        class _DescriptorMarked:
+            marker, _pad = _ShadowDescriptor(), None
+        """,
+    )
+    assert loaders == {"reader"}
+
+
+def test_loader_derivation_refuses_a_helper_rewritten_through_a_set_name_hook_on_a_subscript_instantiated_descriptor(
+    tmp_path,
+):
+    # Repair pass sixteen, red team form 26c. A class
+    # whose class get item method returns the class
+    # itself can be instantiated through a subscription
+    # of its name, the standard generic idiom, so a
+    # descriptor instantiated that way in a marked
+    # class body stands in the namespace and its set
+    # name hook runs as the class is created, the hook
+    # runs the installer, and the name denotes the
+    # lambda. The pass fifteen scan read the statement
+    # and found its value is a call and asked the
+    # callee for a plain name, and the callee is a
+    # subscript expression, so no descriptor class was
+    # resolved, though the fifteenth repair taught
+    # every base reading to take a subscript as the
+    # plain name in its value position. The placement
+    # reading now resolves a callee standing in a
+    # subscript to the class in its value position on
+    # the same terms, so the creation counts as a call
+    # into the set name methods of that class.
+    loaders = _derived_loaders(
+        tmp_path,
+        """
+        ROOT = None
+
+
+        def reader(name):
+            return (ROOT / name).read_bytes()
+
+
+        def shadow_search(client, raw_response, name):
+            return reader(name)
+
+
+        def _install_shadow():
+            global shadow_search
+            shadow_search = lambda client, raw_response, name: None
+
+
+        class _ShadowDescriptor:
+            def __set_name__(self, owner, name):
+                _install_shadow()
+
+            @classmethod
+            def __class_getitem__(cls, item):
+                return cls
+
+
+        class _DescriptorMarked:
+            marker = _ShadowDescriptor[int]()
+        """,
+    )
+    assert loaders == {"reader"}
+
+
+def test_loader_derivation_refuses_a_helper_rewritten_through_an_assigned_subclass_hook(
+    tmp_path,
+):
+    # Repair pass sixteen, red team form 27a. A
+    # subclass hook dispatches on the entry standing in
+    # the base class namespace under the hook name,
+    # whatever statement bound it there, so a base
+    # whose body binds a module level function to the
+    # hook name by plain assignment runs that function
+    # when a child is defined under it, the function
+    # runs the installer, and the name a test calls
+    # denotes the lambda. The pass fifteen gathering
+    # collected a hook only where a member of the class
+    # body is a definition statement carrying the hook
+    # name, so it asked the base body for definitions
+    # and found an assignment instead, and no hook body
+    # and no hook write set was ever collected. A class
+    # body assignment binding a designated name now
+    # counts as the method standing there, a plain name
+    # value resolving through the module level
+    # definitions on the same terms as the descriptor
+    # resolution of the fourteenth repair, so the
+    # assigned hook is gathered with the defined ones
+    # and its body joins the reach.
+    loaders = _derived_loaders(
+        tmp_path,
+        """
+        ROOT = None
+
+
+        def reader(name):
+            return (ROOT / name).read_bytes()
+
+
+        def shadow_search(client, raw_response, name):
+            return reader(name)
+
+
+        def _install_shadow():
+            global shadow_search
+            shadow_search = lambda client, raw_response, name: None
+
+
+        def _shadow_hook(cls, **kwargs):
+            _install_shadow()
+
+
+        class _HookBase:
+            __init_subclass__ = _shadow_hook
+
+
+        class _HookChild(_HookBase):
+            pass
+        """,
+    )
+    assert loaders == {"reader"}
+
+
+def test_loader_derivation_refuses_a_helper_rewritten_through_an_assigned_set_name_method(
+    tmp_path,
+):
+    # Repair pass sixteen, red team form 27b. A set
+    # name method dispatches on the entry standing in
+    # the descriptor class namespace under the set name
+    # name, whatever statement bound it there, so a
+    # descriptor class whose body binds a module level
+    # function to that name by plain assignment runs
+    # that function for every class that carries an
+    # instance of it, the function runs the installer,
+    # and the name denotes the lambda. The placement is
+    # the direct instantiation the earlier counting
+    # credits in full, so the scan resolved the
+    # descriptor class and consulted its set name
+    # methods, and the gathering asked that class body
+    # for definition statements under the set name name
+    # and found an assignment instead, and returned no
+    # body and no write set, so the hook stood
+    # installed in the open and was read as no hook at
+    # all. An assignment binding the set name name now
+    # counts as the method standing there on the same
+    # terms as in form 27a, so the creation counts the
+    # assigned method with the defined ones.
+    loaders = _derived_loaders(
+        tmp_path,
+        """
+        ROOT = None
+
+
+        def reader(name):
+            return (ROOT / name).read_bytes()
+
+
+        def shadow_search(client, raw_response, name):
+            return reader(name)
+
+
+        def _install_shadow():
+            global shadow_search
+            shadow_search = lambda client, raw_response, name: None
+
+
+        def _shadow_set_name(self, owner, name):
+            _install_shadow()
+
+
+        class _ShadowDescriptor:
+            __set_name__ = _shadow_set_name
+
+
+        class _DescriptorMarked:
+            marker = _ShadowDescriptor()
+        """,
+    )
+    assert loaders == {"reader"}
+
+
+def test_loader_derivation_refuses_a_helper_rewritten_through_an_assigned_construction_method(
+    tmp_path,
+):
+    # Repair pass sixteen, red team form 27c. A
+    # construction method dispatches on the entry
+    # standing in the metaclass namespace under its
+    # name, whatever statement bound it there, so a
+    # metaclass whose body binds a module level
+    # function to the dunder init name by plain
+    # assignment runs that function as a class defined
+    # under it is created, the function runs the
+    # installer, and the name a test calls denotes the
+    # lambda. The pass fifteen reach followed the
+    # keyword to the metaclass and counted the creation
+    # as a call into its construction, and the
+    # construction gathering asked that class body for
+    # definition statements under the construction
+    # names and found an assignment instead, so the
+    # write set gathered for the metaclass name was
+    # empty and no callee body stood behind it. An
+    # assignment binding a construction name now counts
+    # as the method standing there, so the construction
+    # of the metaclass gathers the assigned method with
+    # the defined ones on either metaclass path.
+    loaders = _derived_loaders(
+        tmp_path,
+        """
+        ROOT = None
+
+
+        def reader(name):
+            return (ROOT / name).read_bytes()
+
+
+        def shadow_search(client, raw_response, name):
+            return reader(name)
+
+
+        def _install_shadow():
+            global shadow_search
+            shadow_search = lambda client, raw_response, name: None
+
+
+        def _shadow_meta_init(cls, name, bases, namespace):
+            _install_shadow()
+
+
+        class _ShadowMeta(type):
+            __init__ = _shadow_meta_init
+
+
+        class _MetaMarked(metaclass=_ShadowMeta):
+            pass
+        """,
+    )
+    assert loaders == {"reader"}
+
+
+def test_loader_derivation_refuses_a_helper_rewritten_by_a_definition_called_from_its_class_body(
+    tmp_path,
+):
+    # Repair pass sixteen, red team form 28b. A class
+    # body runs at its statement, so a plain function
+    # defined in a marked class body and called by a
+    # plain statement standing in the same body runs as
+    # the class is created, and where its body assigns
+    # the certified name under a global declaration the
+    # name a test calls denotes the lambda it leaves
+    # behind. The pass fifteen gathering walked the
+    # module from its top level statements and recorded
+    # a class definition into the class tables without
+    # descending into it, consulting the class body
+    # only for members carrying a designated name, so
+    # the plain definition stood in no table anywhere
+    # and the call standing beside it in the same body
+    # was a call the reach recorded and could not
+    # resolve. The gathering now enters a class body on
+    # the same terms as the module level, so a plain
+    # definition standing in one is gathered into the
+    # module tables under its name, its global write
+    # set counted and its body read when the reach
+    # calls it, while a definition the reach never
+    # calls refuses nothing.
+    loaders = _derived_loaders(
+        tmp_path,
+        """
+        ROOT = None
+
+
+        def reader(name):
+            return (ROOT / name).read_bytes()
+
+
+        def shadow_search(client, raw_response, name):
+            return reader(name)
+
+
+        class _RunAtLoad:
+            def _install_nested():
+                global shadow_search
+                shadow_search = lambda client, raw_response, name: None
+
+            _install_nested()
+        """,
+    )
+    assert loaders == {"reader"}
+
+
+def test_loader_derivation_keeps_a_helper_beside_a_hookless_descriptor_in_an_arm(
+    tmp_path,
+):
+    # Repair pass sixteen, the boundary control beside
+    # family 26. The same conditional placement as form
+    # 26a stands here with a descriptor class defining
+    # a get method and no set name method at all.
+    # Creating the marked class still builds its
+    # namespace with the instance standing in it, and
+    # the widened scan now reads the placement in the
+    # arm and resolves the class it instantiates, but
+    # the class carries no hook for the creation to
+    # call, so the counting this pass adds refuses
+    # nothing here and the faithful helper keeps its
+    # derivation beside the reader. The control marks
+    # the family turning on the placement hiding a hook
+    # that exists, the refusal staying keyed on the
+    # execution and not on the placement alone.
+    loaders = _derived_loaders(
+        tmp_path,
+        """
+        ROOT = None
+
+
+        def reader(name):
+            return (ROOT / name).read_bytes()
+
+
+        def shadow_search(client, raw_response, name):
+            return reader(name)
+
+
+        def _install_shadow():
+            global shadow_search
+            shadow_search = lambda client, raw_response, name: None
+
+
+        class _QuietDescriptor:
+            def __get__(self, instance, owner):
+                return None
+
+
+        class _DescriptorMarked:
+            if True:
+                marker = _QuietDescriptor()
+        """,
+    )
+    assert loaders == {"reader", "shadow_search"}
+
+
+def test_loader_derivation_keeps_a_helper_beside_an_assigned_hook_that_calls_nothing(
+    tmp_path,
+):
+    # Repair pass sixteen, the boundary control beside
+    # family 27. The same base and child shape as form
+    # 27a stands here with the hook name bound to a
+    # module level function whose body only returns.
+    # Defining the child still dispatches on the entry
+    # under the hook name, and the assigned function is
+    # now gathered with the defined hooks and its body
+    # joins the reach, but it reaches no installer and
+    # assigns nothing under a global declaration, so
+    # the counting this pass adds refuses nothing here
+    # and the faithful helper keeps its derivation
+    # beside the reader. The control marks the family
+    # turning on the assigned callable performing the
+    # rewrite, the repair reading the assigned callable
+    # on the same terms as the defined method rather
+    # than treating every assignment to a designated
+    # name as a rewrite.
+    loaders = _derived_loaders(
+        tmp_path,
+        """
+        ROOT = None
+
+
+        def reader(name):
+            return (ROOT / name).read_bytes()
+
+
+        def shadow_search(client, raw_response, name):
+            return reader(name)
+
+
+        def _quiet_hook(cls, **kwargs):
+            return None
+
+
+        class _HookBase:
+            __init_subclass__ = _quiet_hook
+
+
+        class _HookChild(_HookBase):
+            pass
+        """,
+    )
+    assert loaders == {"reader", "shadow_search"}
