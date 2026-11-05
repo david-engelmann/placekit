@@ -271,6 +271,31 @@ its header parts while its body inside a reached
 body stays deferred. The pins below cover those
 forms, plus the boundary control that marks where
 the family ended.
+
+The landing red team then evaded the pass thirteen
+analysis in one more family, in repair pass fourteen,
+in two further executions of class creation the
+counting still did not name. Creating a class calls
+the set name method of every descriptor standing in
+the namespace its body builds, so an installer called
+from the set name hook of a descriptor class a class
+body instantiates ran as the creation ran, though no
+reading gathered that method at all. And a class
+whose statement names no metaclass is constructed by
+the metaclass it inherits from its bases, so a name
+rewritten by a metaclass reached only through a base
+class was never counted, though the construction of
+that metaclass stood gathered from the base that
+named it. A class creation now counts as a call into
+the set name methods of the descriptor classes whose
+instances stand assigned in its body, resolved by
+plain name through their base chains, and, when its
+keywords name no metaclass, as a call into the
+construction of the most derived metaclass its bases
+stand under, counting every candidate the base chains
+leave unordered between themselves. The pins below
+cover those forms, plus the control that keeps a
+hookless descriptor honest.
 """
 
 from __future__ import annotations
@@ -2257,3 +2282,154 @@ def test_loader_derivation_refuses_a_helper_rewritten_in_a_subclass_body(tmp_pat
         """,
     )
     assert loaders == {"reader"}
+
+
+def test_loader_derivation_refuses_a_helper_rewritten_through_a_set_name_hook(tmp_path):
+    # Repair pass fourteen, red team form 21a. Creating
+    # a class calls the dunder set name method of every
+    # descriptor standing in the namespace its body
+    # builds, so the marked class standing after the
+    # helper runs the hook of the descriptor its body
+    # instantiates, the hook runs the installer, and
+    # the name a test calls denotes the lambda the
+    # installer leaves behind. The pass thirteen
+    # counting named the subclass hooks of the bases
+    # and the construction of a keyword named
+    # metaclass, and the creation counting consulted
+    # neither the namespace the body built nor the
+    # descriptor it names, so the installer call inside
+    # the hook body was never read, and the set name
+    # method was gathered by no reading at all. A class
+    # creation now counts as a call into the set name
+    # methods of the descriptor classes whose instances
+    # stand assigned in the created class body, resolved
+    # by plain name through their base chains, whose
+    # bodies join the reach.
+    loaders = _derived_loaders(
+        tmp_path,
+        """
+        ROOT = None
+
+
+        def reader(name):
+            return (ROOT / name).read_bytes()
+
+
+        def shadow_search(client, raw_response, name):
+            return reader(name)
+
+
+        def _install_shadow():
+            global shadow_search
+            shadow_search = lambda client, raw_response, name: None
+
+
+        class _ShadowDescriptor:
+            def __set_name__(self, owner, name):
+                _install_shadow()
+
+
+        class _DescriptorMarked:
+            marker = _ShadowDescriptor()
+        """,
+    )
+    assert loaders == {"reader"}
+
+
+def test_loader_derivation_refuses_a_helper_rewritten_by_an_inherited_metaclass(
+    tmp_path,
+):
+    # Repair pass fourteen, red team form 21b. A class
+    # whose statement names no metaclass keyword is
+    # constructed by the most derived metaclass among
+    # its bases, so the child standing after the helper
+    # is constructed by the metaclass its base stands
+    # under, and that construction runs the installer
+    # and leaves the name denoting the lambda. The
+    # pass thirteen counting consulted only the
+    # keyword, so a class naming none counted no
+    # construction call at all, though the metaclass
+    # and its construction stood gathered from the
+    # base definition. The creation of the base
+    # standing before the helper runs the same
+    # construction and is honestly overwritten when
+    # the helper definition binds the name after it,
+    # which is why the segment orders its definitions
+    # as it does and why the refusal keys on the child
+    # creation after the candidate. A class creation
+    # naming no metaclass now counts as a call into
+    # the construction gathered for the metaclass it
+    # inherits, resolved through its bases by plain
+    # name.
+    loaders = _derived_loaders(
+        tmp_path,
+        """
+        ROOT = None
+
+
+        def reader(name):
+            return (ROOT / name).read_bytes()
+
+
+        class _ShadowMeta(type):
+            def __init__(cls, name, bases, namespace):
+                _install_shadow()
+
+
+        def _install_shadow():
+            global shadow_search
+            shadow_search = lambda client, raw_response, name: None
+
+
+        class _MetaBase(metaclass=_ShadowMeta):
+            pass
+
+
+        def shadow_search(client, raw_response, name):
+            return reader(name)
+
+
+        class _MetaChild(_MetaBase):
+            pass
+        """,
+    )
+    assert loaders == {"reader"}
+
+
+def test_loader_derivation_keeps_a_helper_beside_a_hookless_descriptor(tmp_path):
+    # Repair pass fourteen, the boundary control. The
+    # same marked class shape as form 21a stands here,
+    # with a descriptor class that defines no set name
+    # method at all. Creating the marked class still
+    # runs the instantiation standing in its body, and
+    # that call was already read before this pass, but
+    # no hook execution follows it, so the counting
+    # this pass adds refuses nothing here and the
+    # faithful helper keeps its derivation beside the
+    # reader. The control marks the family turning on
+    # the hook the creation performs and not on the
+    # descriptor merely standing in the namespace.
+    loaders = _derived_loaders(
+        tmp_path,
+        """
+        ROOT = None
+
+
+        def reader(name):
+            return (ROOT / name).read_bytes()
+
+
+        def shadow_search(client, raw_response, name):
+            return reader(name)
+
+
+        class _PlainDescriptor:
+            def __get__(self, instance, owner):
+                return None
+
+
+        class _DescriptorMarked:
+            marker = _PlainDescriptor()
+        """,
+    )
+    assert loaders == {"reader", "shadow_search"}
