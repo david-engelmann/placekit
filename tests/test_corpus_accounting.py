@@ -548,7 +548,33 @@ def _later_call_rewrites(module_body, position, name) -> bool:
     following a chain of such bindings to the class it
     ends at, so a class counts under every name the
     module binds to it and not only under the name its
-    definition statement carries. The
+    definition statement carries. The reach resolves
+    the callee of a plain call through the same
+    bindings, because a call dispatches on the callable
+    the name denotes however the name came to be bound
+    to it. A name bound to a plain name counts as a
+    call into the definition standing at the end of the
+    chain of such bindings, its body read for the calls
+    it makes in turn and its write set counted on the
+    terms of a direct call, and a name bound to a
+    lambda counts as a call into the lambda body read
+    where it stands in the binding. A call naming an
+    instance counts beside these as a call into the
+    dunder call methods of the class the instance
+    stands in, its own or inherited through its base
+    classes, the methods gathered for every module
+    level class beside the seat the metaclass counting
+    consults, the instance resolved through the
+    bindings to the instantiation the name denotes,
+    following a name bound to a further name to its
+    instantiation in turn, on the terms the placement
+    reading resolves a placed name by. The alias
+    resolution's sentence denying a name bound to an
+    instantiation the standing of a class name governs
+    the places a name is turned into a class, and the
+    call locus asks which body a call runs, so an
+    instance name counts at a call for the call methods
+    of its class and at no class turning point. The
     parts of a statement that evaluate
     as the statement itself runs are read beside the
     calls standing in it. A definition standing in an
@@ -558,7 +584,21 @@ def _later_call_rewrites(module_body, position, name) -> bool:
     runs, so its decorator expressions, its default
     values, and its annotations are read as executions
     while its body stays deferred until a call reaches
-    it. A lambda standing in an executing position
+    it, and each decorator standing on the statement in
+    bare name form is applied to the object the
+    statement defines as the statement completes, an
+    execution the grammar designates that wears no call
+    shape in the source, so the application is counted
+    beside the expressions as a call into the value the
+    name denotes, resolved as the reach resolves its
+    callees, a definition name to its body, a class
+    name to its construction and to the dunder call
+    method of the metaclass it stands under, and an
+    instance name to the dunder call methods of the
+    class it stands in, while a decorator in any other
+    form is read for the calls standing inside the
+    expression alone, the value it computes being one
+    the counting cannot name. A lambda standing in an executing position
     performs its default values the same way, and a
     call whose callee is a lambda runs that lambda body
     as the call runs, so the reach reads the body
@@ -568,17 +608,22 @@ def _later_call_rewrites(module_body, position, name) -> bool:
     its header the same way, its decorator expressions,
     its base expressions, and its keyword values, at
     the module level and inside a body the reach has
-    entered alike, and its body is read on the same
-    terms in both positions, on the ground the closing
-    words of this reading state, only the body of a
-    definition standing in either position staying
+    entered alike, with each decorator standing on it
+    in bare name form applied to the class as its
+    statement completes and counted as a call into the
+    value the name denotes on the same terms as a
+    decorator on a definition, and its body is read on
+    the same terms in both positions, on the ground the
+    closing words of this reading state, only the body
+    of a definition standing in either position staying
     deferred. The candidate is refused when the reach
     calls
     a definition or a construction whose write set
     holds the name, or runs a subclass hook, a set
-    name hook, or the dunder call method of the
-    metaclass a called class stands under, whose write
-    set holds it.
+    name hook, the dunder call method of the
+    metaclass a called class stands under, or the
+    dunder call method of the class an instance a call
+    names stands in, whose write set holds it.
 
     The refusal keys on the execution, so an installer
     no call reaches refuses nothing, and a call standing
@@ -981,9 +1026,68 @@ def _later_call_rewrites(module_body, position, name) -> bool:
             return classes
         return []
 
+    def instance_call_classes(callee_name, seen_names=frozenset()):
+        """The classes a called name's instances stand in, through its bindings.
+
+        A call naming an instance dispatches on the dunder
+        call method of the class the instance stands in, so
+        the counting resolves the callee name through the
+        module level bindings to the instantiation it
+        denotes, on the terms the placement reading
+        resolves a placed name by. A binding value that
+        instantiates a class denotes an instance of the
+        class the instantiation names, resolved through
+        the bindings standing behind that name as at every
+        class turning point, and a name bound to a further
+        name denotes what that name denotes in turn. A
+        name bound to any other value denotes no instance
+        whose class the counting can name. The alias
+        resolution's sentence denying a name bound to an
+        instantiation the standing of a class name governs
+        the places a name is turned into a class, and the
+        call locus asks which body a call runs, so a name
+        counts here for the call methods of a class while
+        counting for nothing at the class turning points.
+        """
+        classes = []
+        if callee_name in seen_names:
+            return classes
+        for bound_value in module_bindings.get(callee_name, []):
+            if isinstance(bound_value, ast.Call):
+                resolved = denoted_class_name(bound_value.func)
+                if resolved is not None:
+                    classes.append(resolved)
+            elif isinstance(bound_value, ast.Name):
+                classes.extend(
+                    instance_call_classes(
+                        bound_value.id, seen_names | {callee_name}
+                    )
+                )
+        return classes
+
     def calls(statements):
         found = []
         created = []
+
+        def visit_decorator(expression):
+            """Read one decorator standing on a definition or a class.
+
+            A decorator standing in bare name form holds no
+            call inside it to read, and its application to
+            the object the statement defines as the statement
+            completes is the execution the statement performs
+            with it, so the name is counted as a call into
+            the value it denotes, resolved in the reach as
+            its callees resolve. A decorator in any other
+            form is read for the calls standing inside the
+            expression, and the value the expression computes
+            is one the counting cannot name, so its
+            application counts nothing here.
+            """
+            if isinstance(expression, ast.Name):
+                found.append(expression.id)
+            else:
+                visit(expression)
 
         def visit_arguments(arguments):
             for default in arguments.defaults:
@@ -1007,7 +1111,7 @@ def _later_call_rewrites(module_body, position, name) -> bool:
         def visit(node):
             if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 for decorator in node.decorator_list:
-                    visit(decorator)
+                    visit_decorator(decorator)
                 visit_arguments(node.args)
                 if node.returns is not None:
                     visit(node.returns)
@@ -1021,7 +1125,9 @@ def _later_call_rewrites(module_body, position, name) -> bool:
                 return
             if isinstance(node, ast.ClassDef):
                 created.append(node)
-                for part in (*node.decorator_list, *node.bases, *node.keywords):
+                for decorator in node.decorator_list:
+                    visit_decorator(decorator)
+                for part in (*node.bases, *node.keywords):
                     visit(part)
                 for member in node.body:
                     visit(member)
@@ -1095,6 +1201,19 @@ def _later_call_rewrites(module_body, position, name) -> bool:
                 return True
             for body in call_bodies:
                 queue.append(calls(body))
+            for instance_class in instance_call_classes(called):
+                instance_bodies, instance_writes = metaclass_calls.get(
+                    instance_class, ([], set())
+                )
+                if name in instance_writes:
+                    return True
+                for body in instance_bodies:
+                    queue.append(calls(body))
+            for bound_value in module_bindings.get(called, []):
+                if isinstance(bound_value, ast.Name):
+                    queue.append(([bound_value.id], []))
+                elif isinstance(bound_value, ast.Lambda):
+                    queue.append(calls([bound_value.body]))
     return False
 
 
@@ -1143,7 +1262,23 @@ def _derive_loaders(filename: str) -> dict:
     class counting through the reach as a call into
     the dunder call method of the metaclass it stands
     under beside its construction, counted at the call
-    and not at the creation of the class, and the
+    and not at the creation of the class, a plain call
+    resolving its callee name through the module level
+    assignment bindings standing behind it, a name
+    bound to a plain name counting as a call into the
+    definition standing at the end of the chain of
+    such bindings and a name bound to a lambda
+    counting as a call into the lambda body read where
+    it stands in the binding, a call naming an instance
+    counting as a call into the dunder call methods of
+    the class the instance stands in, resolved through
+    the bindings to the instantiation the name denotes
+    and following a name bound to a further name to
+    its instantiation in turn, and each decorator
+    standing on a definition or a class in an executing
+    position in bare name form counting as a call into
+    the value the name denotes, resolved as the reach
+    resolves its callees, and the
     reach closing over the calls
     the statements after it make, through the bodies
     those calls run, the headers a definition statement
@@ -1299,7 +1434,22 @@ def _loader_function_names(filename: str) -> set[str]:
     into its construction and into the dunder call
     method of the metaclass it stands under, counted
     at the call and not at the creation of the class,
-    and the reach is read from
+    a plain call resolving its callee name through
+    the module level assignment bindings standing
+    behind it, a name bound to a plain name counting
+    as a call into the definition standing at the end
+    of the chain of such bindings and a name bound to
+    a lambda counting as a call into the lambda body
+    read where it stands in the binding, a call naming
+    an instance counting as a call into the dunder
+    call methods of the class the instance stands in,
+    resolved through the bindings to the instantiation
+    the name denotes and following a name bound to a
+    further name to its instantiation in turn, and
+    each decorator standing on a definition or a class
+    in an executing position in bare name form counting
+    as a call into the value the name denotes, resolved
+    as the reach resolves its callees, and the reach is read from
     the statements standing after the candidate, bare
     or in an arm of a compound statement among them,
     counting the bodies of the classes standing at
