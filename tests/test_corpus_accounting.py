@@ -431,29 +431,45 @@ def _later_call_rewrites(module_body, position, name) -> bool:
     write set of a class gathers from its dunder
     prepare method beside its dunder new method and
     its dunder init method, each standing as a
-    definition in the class body or bound there by an
-    assignment to the method name, a plain name value
+    definition in the class body or bound there under
+    the method name on the statement terms the reach
+    reads a body on, an assignment standing directly
+    in the body or in an arm of a compound statement
+    among its statements or a walrus binding standing
+    in the body, a plain name value
     resolving through the module level definitions and
     a lambda value read where it stands, and from the
     same methods of the module level base classes it
-    names, resolved by plain name to the end of the
-    chain, and stands for
+    names, each name resolving to the class it denotes
+    to the end of the chain, and stands for
     the class name beside the write sets of the plain
     definitions, and the bodies a call into either can
     run stand beside them for the reach to read their
-    calls from. The subclass hooks of a class stand
+    calls from. A call naming a class also runs the
+    dunder call method of the metaclass that class
+    stands under, the method that performs the
+    construction at all, gathered from that metaclass
+    and the module level base classes it names on the
+    same terms as its construction methods, and
+    counted at the call rather than at the creation of
+    the class, since the method fires at instantiation
+    and not at creation, so the names it assigns under
+    a global declaration are counted beside the
+    construction the same call runs and its body joins
+    the reach to be read for the calls it makes in
+    turn. The subclass hooks of a class stand
     beside its construction methods for the reach, and
     its set name methods stand beside them, gathered
     from the class and the module level base classes
     it names in the same way, each hook standing as a
-    definition in the class body or bound there by an
-    assignment to the hook name on the same terms as a
-    construction method. Defining a subclass
+    definition in the class body or bound there under
+    the hook name on the same terms as a construction
+    method. Defining a subclass
     calls the dunder init subclass method of each base
     the subclass names, so the hooks
     a class definition can run gather from the module
-    level base classes it names, resolved by plain name
-    through the base chain to its end, each hook
+    level base classes it names, resolved through the
+    base chain to its end, each hook
     counting the names its body assigns under a global
     declaration and its body standing as a body the
     reach can read calls from.
@@ -520,7 +536,19 @@ def _later_call_rewrites(module_body, position, name) -> bool:
     expression as the plain name standing in its value
     position, so one base counts the same in either of
     its grammatical forms, while a base whose value
-    position holds no plain name counts nothing. The
+    position holds no plain name counts nothing. And a
+    name resolves through the module level assignment
+    bindings standing behind it at every point the
+    counting turns a name into a class, a base, the
+    value of a metaclass keyword, the callee of an
+    instantiation, and a call naming a class alike, a
+    name bound to a class name denoting that class and
+    a name bound to a subscript of a class name
+    denoting the class in its value position,
+    following a chain of such bindings to the class it
+    ends at, so a class counts under every name the
+    module binds to it and not only under the name its
+    definition statement carries. The
     parts of a statement that evaluate
     as the statement itself runs are read beside the
     calls standing in it. A definition standing in an
@@ -547,8 +575,10 @@ def _later_call_rewrites(module_body, position, name) -> bool:
     deferred. The candidate is refused when the reach
     calls
     a definition or a construction whose write set
-    holds the name, or runs a subclass hook or a set
-    name hook whose write set holds it.
+    holds the name, or runs a subclass hook, a set
+    name hook, or the dunder call method of the
+    metaclass a called class stands under, whose write
+    set holds it.
 
     The refusal keys on the execution, so an installer
     no call reaches refuses nothing, and a call standing
@@ -603,6 +633,26 @@ def _later_call_rewrites(module_body, position, name) -> bool:
     for statement in module_body:
         gather(statement)
 
+    module_bindings = {}
+
+    def collect_bindings(node):
+        if isinstance(
+            node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda)
+        ):
+            return
+        if isinstance(node, ast.Assign):
+            for target in node.targets:
+                for bound in _target_names(target):
+                    module_bindings.setdefault(bound, []).append(node.value)
+        elif isinstance(node, ast.AnnAssign) and node.value is not None:
+            for bound in _target_names(node.target):
+                module_bindings.setdefault(bound, []).append(node.value)
+        for child in ast.iter_child_nodes(node):
+            collect_bindings(child)
+
+    for statement in module_body:
+        collect_bindings(statement)
+
     def base_name(expression):
         """The plain name a base expression resolves to, if any.
 
@@ -623,48 +673,117 @@ def _later_call_rewrites(module_body, position, name) -> bool:
             return base_name(expression.value)
         return None
 
+    def aliased_class(name, seen=frozenset()):
+        """The class name a name denotes through its module level bindings.
+
+        A name bound at module level to a plain class name
+        denotes that class, and a name bound to a subscript
+        of a class name denotes the class standing in the
+        value position of the subscript, so the resolution
+        follows a chain of such bindings to the class it
+        ends at and returns the definition name of that
+        class. A name bound to any other value, an
+        instantiation among them, denotes that value and
+        not a class, and resolves to nothing here, as
+        does a name bound to no class at all.
+        """
+        if name in class_nodes:
+            return name
+        if name in seen:
+            return None
+        for bound_value in module_bindings.get(name, []):
+            resolved = None
+            if isinstance(bound_value, ast.Name):
+                resolved = aliased_class(bound_value.id, seen | {name})
+            elif isinstance(bound_value, ast.Subscript):
+                inner = base_name(bound_value)
+                if inner is not None:
+                    resolved = aliased_class(inner, seen | {name})
+            if resolved is not None:
+                return resolved
+        return None
+
+    def denoted_class_name(expression):
+        """The class name an expression denotes where a name becomes a class.
+
+        The plain name the expression carries, a bare name
+        or the name standing in the value position of a
+        subscript, resolved through the module level
+        assignment bindings standing behind it, so an
+        alias counts as the class it stands for at every
+        point the counting turns a name into a class, the
+        base readings, the metaclass keyword and the
+        candidates behind it, and the callee of an
+        instantiation among them. A name no binding
+        resolves to a class stands as the plain name
+        itself, which the class tables hold only where a
+        definition statement carries it.
+        """
+        plain = base_name(expression)
+        if plain is None:
+            return None
+        resolved = aliased_class(plain)
+        return resolved if resolved is not None else plain
+
     def method_installations(members, names):
         """The bodies and write sets of the designated methods a body installs.
 
-        A designated method stands in a class body as a
-        definition carrying the designated name or as an
-        assignment binding that name, and the interpreter
-        dispatches on the entry standing under the name
-        either way, so the gatherings collect both forms.
-        An assignment whose value is a plain name resolves
-        through the module level definitions of that name
-        and gathers the body it resolves to on the same
-        terms as a definition standing there, and an
-        assignment whose value is a lambda reads the
-        lambda body where it stands. An assignment binding
-        a designated name to any other value installs
-        nothing the reading can see, and a statement
-        binding no designated name installs nothing here.
+        A designated method stands in a class body under
+        its designated name, and the interpreter dispatches
+        on the entry standing under the name however the
+        body bound it, so the gatherings collect the method
+        on the statement terms the reach reads a body on.
+        A definition carrying the designated name counts
+        wherever it stands in the body, directly among its
+        statements or in an arm of a compound statement
+        among them. An assignment binding the designated
+        name counts on the same terms, standing directly
+        in the body or in an arm of a compound statement
+        among its statements or as a walrus binding
+        standing in the body, its pairs read through the
+        shared assignment pair collector the placement
+        reading consults. An assignment whose value is a
+        plain name resolves through the module level
+        definitions of that name and gathers the body it
+        resolves to on the same terms as a definition
+        standing there, and an assignment whose value is
+        a lambda reads the lambda body where it stands.
+        An assignment binding a designated name to any
+        other value installs nothing the reading can see,
+        and a statement binding no designated name
+        installs nothing here.
         """
         bodies = []
         write_set = set()
-        for member in members:
-            if isinstance(member, ast.FunctionDef) and member.name in names:
-                bodies.append(member.body)
-                write_set.update(_global_write_set(member))
-                continue
-            value = None
-            bound = []
-            if isinstance(member, ast.Assign):
-                value = member.value
-                for target in member.targets:
-                    bound.extend(_target_names(target))
-            elif isinstance(member, ast.AnnAssign) and member.value is not None:
-                value = member.value
-                bound = _target_names(member.target)
-            if value is None or not any(bound_name in names for bound_name in bound):
-                continue
+
+        def add_definition(node):
+            bodies.append(node.body)
+            write_set.update(_global_write_set(node))
+
+        def add_value(value):
             if isinstance(value, ast.Name):
                 for definition in definition_nodes.get(value.id, []):
-                    bodies.append(definition.body)
-                    write_set.update(_global_write_set(definition))
+                    add_definition(definition)
             elif isinstance(value, ast.Lambda):
                 bodies.append([value.body])
+
+        def collect_definitions(node):
+            if isinstance(
+                node, (ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda)
+            ):
+                return
+            if isinstance(node, ast.FunctionDef):
+                if node.name in names:
+                    add_definition(node)
+                return
+            for child in ast.iter_child_nodes(node):
+                collect_definitions(child)
+
+        for member in members:
+            collect_definitions(member)
+        for targets, value in _assignment_pairs(members):
+            if any(target in names for target in targets):
+                add_value(value)
         return bodies, write_set
 
     def gather_construction(class_name, node, seen):
@@ -676,7 +795,7 @@ def _later_call_rewrites(module_body, position, name) -> bool:
         for body in found_bodies:
             callees.setdefault(class_name, []).append(body)
         for base in node.bases:
-            resolved = base_name(base)
+            resolved = denoted_class_name(base)
             if (
                 resolved is not None
                 and resolved in class_nodes
@@ -689,11 +808,36 @@ def _later_call_rewrites(module_body, position, name) -> bool:
         for class_node in nodes:
             gather_construction(class_name, class_node, {class_name})
 
+    metaclass_calls = {}
+
+    def gather_metaclass_calls(class_name, node, seen):
+        found_bodies, found_writes = method_installations(
+            node.body, ("__call__",)
+        )
+        bodies, write_set = metaclass_calls.setdefault(class_name, ([], set()))
+        bodies.extend(found_bodies)
+        write_set.update(found_writes)
+        for base in node.bases:
+            resolved = denoted_class_name(base)
+            if (
+                resolved is not None
+                and resolved in class_nodes
+                and resolved not in seen
+            ):
+                for base_node in class_nodes[resolved]:
+                    gather_metaclass_calls(
+                        class_name, base_node, seen | {resolved}
+                    )
+
+    for class_name, nodes in class_nodes.items():
+        for class_node in nodes:
+            gather_metaclass_calls(class_name, class_node, {class_name})
+
     def subclass_hooks(node, seen):
         bodies = []
         write_set = set()
         for base in node.bases:
-            resolved = base_name(base)
+            resolved = denoted_class_name(base)
             if (
                 resolved is not None
                 and resolved in class_nodes
@@ -717,7 +861,7 @@ def _later_call_rewrites(module_body, position, name) -> bool:
         bodies = list(bodies)
         write_set = set(write_set)
         for base in node.bases:
-            resolved = base_name(base)
+            resolved = denoted_class_name(base)
             if (
                 resolved is not None
                 and resolved in class_nodes
@@ -734,15 +878,13 @@ def _later_call_rewrites(module_body, position, name) -> bool:
     def metaclass_candidates(node, seen):
         for keyword in node.keywords:
             if keyword.arg == "metaclass":
-                if (
-                    isinstance(keyword.value, ast.Name)
-                    and keyword.value.id in class_nodes
-                ):
-                    return {keyword.value.id}
+                resolved = denoted_class_name(keyword.value)
+                if resolved is not None and resolved in class_nodes:
+                    return {resolved}
                 return set()
         candidates = set()
         for base in node.bases:
-            resolved = base_name(base)
+            resolved = denoted_class_name(base)
             if (
                 resolved is not None
                 and resolved in class_nodes
@@ -758,7 +900,7 @@ def _later_call_rewrites(module_body, position, name) -> bool:
         ancestors = set()
         for node in class_nodes.get(class_name, []):
             for base in node.bases:
-                resolved = base_name(base)
+                resolved = denoted_class_name(base)
                 if (
                     resolved is not None
                     and resolved in class_nodes
@@ -782,27 +924,20 @@ def _later_call_rewrites(module_body, position, name) -> bool:
             )
         }
 
+    def metaclass_call_executions(class_name):
+        bodies = []
+        write_set = set()
+        resolved = aliased_class(class_name)
+        for node in class_nodes.get(resolved or class_name, []):
+            for metaclass_name in counted_metaclasses(node):
+                call_bodies, call_writes = metaclass_calls.get(
+                    metaclass_name, ([], set())
+                )
+                bodies.extend(call_bodies)
+                write_set.update(call_writes)
+        return bodies, write_set
+
     targets = {key for key, write_set in writes.items() if name in write_set}
-
-    module_bindings = {}
-
-    def collect_bindings(node):
-        if isinstance(
-            node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda)
-        ):
-            return
-        if isinstance(node, ast.Assign):
-            for target in node.targets:
-                for bound in _target_names(target):
-                    module_bindings.setdefault(bound, []).append(node.value)
-        elif isinstance(node, ast.AnnAssign) and node.value is not None:
-            for bound in _target_names(node.target):
-                module_bindings.setdefault(bound, []).append(node.value)
-        for child in ast.iter_child_nodes(node):
-            collect_bindings(child)
-
-    for statement in module_body:
-        collect_bindings(statement)
 
     def placed_descriptor_classes(value, seen_names=frozenset()):
         """The class names whose instances a placed value puts in a namespace.
@@ -810,7 +945,10 @@ def _later_call_rewrites(module_body, position, name) -> bool:
         A call names the class it instantiates, its callee
         standing in bare name form or in a subscript naming
         the class in its value position, as the base
-        readings resolve one. An element of a tuple or a
+        readings resolve one, the name it carries resolved
+        through the module level bindings standing behind
+        it, so a callee bound to a class or to a subscript
+        of one names that class. An element of a tuple or a
         list an assignment unpacks places what the element
         places. A plain name places what the module level
         bound to it where a binding value instantiates a
@@ -820,7 +958,7 @@ def _later_call_rewrites(module_body, position, name) -> bool:
         places nothing through it.
         """
         if isinstance(value, ast.Call):
-            resolved = base_name(value.func)
+            resolved = denoted_class_name(value.func)
             return [resolved] if resolved is not None else []
         if isinstance(value, (ast.Tuple, ast.List)):
             classes = []
@@ -831,7 +969,7 @@ def _later_call_rewrites(module_body, position, name) -> bool:
             classes = []
             for bound_value in module_bindings.get(value.id, []):
                 if isinstance(bound_value, ast.Call):
-                    resolved = base_name(bound_value.func)
+                    resolved = denoted_class_name(bound_value.func)
                     if resolved is not None:
                         classes.append(resolved)
                 elif isinstance(bound_value, ast.Name):
@@ -934,23 +1072,28 @@ def _later_call_rewrites(module_body, position, name) -> bool:
             for keyword in node.keywords:
                 if keyword.arg == "metaclass":
                     names_a_metaclass = True
-                    if (
-                        isinstance(keyword.value, ast.Name)
-                        and keyword.value.id in class_nodes
-                    ):
-                        named_metaclass = keyword.value.id
+                    resolved = denoted_class_name(keyword.value)
+                    if resolved is not None and resolved in class_nodes:
+                        named_metaclass = resolved
             if named_metaclass is not None:
                 queue.append(([named_metaclass], []))
             elif not names_a_metaclass:
                 for candidate in counted_metaclasses(node):
                     queue.append(([candidate], []))
         for called in found:
-            if called in targets:
+            resolved = aliased_class(called)
+            counted = resolved if resolved is not None else called
+            if counted in targets:
                 return True
             if called in seen:
                 continue
             seen.add(called)
-            for body in callees.get(called, []):
+            for body in callees.get(counted, []):
+                queue.append(calls(body))
+            call_bodies, call_writes = metaclass_call_executions(counted)
+            if name in call_writes:
+                return True
+            for body in call_bodies:
                 queue.append(calls(body))
     return False
 
@@ -985,12 +1128,23 @@ def _derive_loaders(filename: str) -> dict:
     wherever they stand, the dunder prepare method
     beside the dunder new method and the dunder init
     method, each designated method counting where it
-    stands as a definition and where a class body
-    assignment binds its name, a plain name value
+    stands as a definition anywhere in the class body
+    on the statement terms the body is read on and
+    where an assignment in the body binds its name on
+    the same terms, a plain name value
     resolving through the module level definitions and
     a lambda value read where it stands, and all three
     inherited through the module level base classes a
-    class names, and the reach closing over the calls
+    class names, each name resolving through the
+    module level assignment bindings to the class it
+    denotes, a name bound to a class name or to a
+    subscript of one counting as that class wherever a
+    name is turned into a class, and a call naming a
+    class counting through the reach as a call into
+    the dunder call method of the metaclass it stands
+    under beside its construction, counted at the call
+    and not at the creation of the class, and the
+    reach closing over the calls
     the statements after it make, through the bodies
     those calls run, the headers a definition statement
     performs as it runs, the headers a class statement
@@ -1131,14 +1285,21 @@ def _loader_function_names(filename: str) -> set[str]:
     and the dunder init method, each designated
     method, the construction methods, the subclass
     hooks, and the set name methods alike, counting
-    where it stands as a definition and where a class
-    body assignment binds its name to a plain name
+    where it stands as a definition anywhere in the
+    class body on the statement terms the body is read
+    on and where an assignment in the body binds its
+    name on the same terms to a plain name
     resolving through the module level definitions or
     to a lambda read where it stands, and all three
     gathered through the module level base classes a
-    class names, resolved by plain name to the end of
-    the chain, a call naming a class counting as a call
-    into its construction, and the reach is read from
+    class names, each name resolving through the
+    module level assignment bindings to the class it
+    denotes to the end of the chain, a call naming a
+    class counting as a call
+    into its construction and into the dunder call
+    method of the metaclass it stands under, counted
+    at the call and not at the creation of the class,
+    and the reach is read from
     the statements standing after the candidate, bare
     or in an arm of a compound statement among them,
     counting the bodies of the classes standing at
@@ -1158,10 +1319,13 @@ def _loader_function_names(filename: str) -> set[str]:
     of classes at module level, and the executions a
     class creation performs, a call into the subclass
     hooks of the module level bases the class names,
-    resolved by plain name through the base chain, a
+    resolved through the base chain, a
     base standing in a subscript counting as the plain
     name in its value position in that reading and in
-    every base reading beside it, a call into the set
+    every base reading beside it, and a name bound at
+    module level to a class name or to a subscript of
+    one counting as that class wherever a name is
+    turned into a class, a call into the set
     name hooks of the descriptor classes whose
     instances stand assigned in the class body, placed
     there on the statement terms of the body itself,
@@ -1173,7 +1337,7 @@ def _loader_function_names(filename: str) -> set[str]:
     its value position, or by a plain name the module
     level bound to an instantiation of the class,
     their own or inherited through their module level
-    base classes resolved by plain name in the same
+    base classes resolved in the same
     way, and a call into the
     construction of the metaclass its keyword names
     or, where it names none, of the most derived
