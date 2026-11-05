@@ -4637,3 +4637,1036 @@ def test_loader_derivation_keeps_a_helper_beside_a_quiet_instance_called_through
         """,
     )
     assert loaders == {"reader", "shadow_search"}
+
+
+def test_loader_derivation_refuses_a_helper_rewritten_by_a_walrus_bound_installer_alias(
+    tmp_path,
+):
+    # Repair pass nineteen, red team form 35a. A walrus
+    # statement after the candidate binds a plain name to
+    # the installer itself, and a call bearing that name
+    # dispatches on the installer exactly as a call
+    # bearing a name a plain assignment bound does. The
+    # resolution at the call locus followed the chain of
+    # such bindings for a name an assignment bound, while
+    # the collector standing behind every name resolution
+    # recorded only plain and annotated assignments, so
+    # the walrus bound name resolved to nothing and the
+    # call counted nothing. The collector now gathers
+    # its bindings through the shared assignment pair
+    # collector on the same statement terms, so a name
+    # bound in either form resolves as the same name.
+    loaders = _derived_loaders(
+        tmp_path,
+        """
+        ROOT = None
+
+
+        def reader(name):
+            return (ROOT / name).read_bytes()
+
+
+        def shadow_search(client, raw_response, name):
+            return reader(name)
+
+
+        def _install_shadow():
+            global shadow_search
+            shadow_search = lambda client, raw_response, name: None
+
+
+        (_alias_installer := _install_shadow)
+
+
+        _alias_installer()
+        """,
+    )
+    assert loaders == {"reader"}
+
+
+def test_loader_derivation_refuses_a_helper_rewritten_by_a_walrus_bound_lambda(
+    tmp_path,
+):
+    # Repair pass nineteen, red team form 35b. A walrus
+    # statement binds a plain name to a lambda whose body
+    # calls the installer, and a call bearing that name
+    # runs the lambda body exactly as a call bearing a
+    # name an assignment bound to the same lambda does.
+    # The call counting read a lambda standing behind a
+    # bound name in place for a name the collector held,
+    # while the collector never recorded the walrus
+    # binding, so the call resolved to no body. The
+    # bindings now stand gathered through the pair
+    # collector, so the lambda behind a walrus bound name
+    # is read where it stands in the binding, on the
+    # terms of an assigned lambda.
+    loaders = _derived_loaders(
+        tmp_path,
+        """
+        ROOT = None
+
+
+        def reader(name):
+            return (ROOT / name).read_bytes()
+
+
+        def shadow_search(client, raw_response, name):
+            return reader(name)
+
+
+        def _install_shadow():
+            global shadow_search
+            shadow_search = lambda client, raw_response, name: None
+
+
+        (_alias_lambda := lambda: _install_shadow())
+
+
+        _alias_lambda()
+        """,
+    )
+    assert loaders == {"reader"}
+
+
+def test_loader_derivation_refuses_a_helper_rewritten_through_a_subclass_hook_behind_a_walrus_bound_base(
+    tmp_path,
+):
+    # Repair pass nineteen, red team form 35c. A walrus
+    # statement binds a plain name to a class carrying a
+    # subclass hook whose body calls the installer, and a
+    # subclass defined on that name runs the hook of the
+    # class the name denotes exactly as a subclass
+    # defined on a name an assignment bound does. The
+    # base resolution turned a name into a class through
+    # the bindings standing behind it, while the
+    # collector never recorded the walrus binding, so
+    # the base resolved to no class and no hook was
+    # counted. The bindings now stand gathered through
+    # the pair collector, so the aliased class resolves
+    # at the base locus on the terms of an assigned
+    # alias.
+    loaders = _derived_loaders(
+        tmp_path,
+        """
+        ROOT = None
+
+
+        def reader(name):
+            return (ROOT / name).read_bytes()
+
+
+        def shadow_search(client, raw_response, name):
+            return reader(name)
+
+
+        def _install_shadow():
+            global shadow_search
+            shadow_search = lambda client, raw_response, name: None
+
+
+        class _HookBase:
+            def __init_subclass__(cls, **kwargs):
+                _install_shadow()
+
+
+        (_AliasBase := _HookBase)
+
+
+        class _HookChild(_AliasBase):
+            pass
+        """,
+    )
+    assert loaders == {"reader"}
+
+
+def test_loader_derivation_refuses_a_helper_rewritten_by_a_walrus_bound_instance_called_by_name(
+    tmp_path,
+):
+    # Repair pass nineteen, red team form 35d. A walrus
+    # statement binds a plain name to an instance of a
+    # class whose dunder call method calls the
+    # installer, and a call bearing that name dispatches
+    # on the dunder call method of its class
+    # exactly as a call bearing a name an assignment
+    # bound to the same instantiation does. The instance
+    # resolution at the call locus resolved a name
+    # through the bindings to the instantiation it
+    # denotes, while the collector never recorded the
+    # walrus binding, so the name resolved to no
+    # instantiation and no call method was counted. The
+    # bindings now stand gathered through the pair
+    # collector, so the instance behind a walrus bound
+    # name resolves on the terms of an assigned
+    # instance.
+    loaders = _derived_loaders(
+        tmp_path,
+        """
+        ROOT = None
+
+
+        def reader(name):
+            return (ROOT / name).read_bytes()
+
+
+        def shadow_search(client, raw_response, name):
+            return reader(name)
+
+
+        def _install_shadow():
+            global shadow_search
+            shadow_search = lambda client, raw_response, name: None
+
+
+        class _Runner:
+            def __call__(self):
+                _install_shadow()
+
+
+        (_runner := _Runner())
+
+
+        _runner()
+        """,
+    )
+    assert loaders == {"reader"}
+
+
+def test_loader_derivation_refuses_a_helper_rewritten_through_a_set_name_hook_on_a_descriptor_bound_by_a_loop_target(
+    tmp_path,
+):
+    # Repair pass nineteen, red team form 35e. A loop
+    # target after the candidate binds a plain name to an
+    # element of the list it walks, an instance of a
+    # descriptor class whose set name method calls the
+    # installer, and a class body placing that name puts
+    # the instance in the namespace the body builds, so
+    # the creation of the class dispatches the set name
+    # method on it exactly as a body placing a name an
+    # assignment bound to the instantiation does. The
+    # pair collection already gathered a loop target as
+    # a binding of the iterable it walks, and the
+    # placement reading accepted a derivation of the
+    # same shape inside a class body, while the
+    # placement reading at the creation locus resolved a
+    # placed name only against bindings whose value
+    # instantiates a class or names a further name, so
+    # the target bound name placed nothing. A name a
+    # loop target binds denotes an element of the
+    # iterable rather than the iterable itself, and the
+    # placement reading now reads such a name on those
+    # terms, through the bindings the pair collector
+    # gathers.
+    loaders = _derived_loaders(
+        tmp_path,
+        """
+        ROOT = None
+
+
+        def reader(name):
+            return (ROOT / name).read_bytes()
+
+
+        def shadow_search(client, raw_response, name):
+            return reader(name)
+
+
+        def _install_shadow():
+            global shadow_search
+            shadow_search = lambda client, raw_response, name: None
+
+
+        class _ShadowDescriptor:
+            def __set_name__(self, owner, name):
+                _install_shadow()
+
+
+        for _placed in [_ShadowDescriptor()]:
+            pass
+
+
+        class _DescriptorMarked:
+            marker = _placed
+        """,
+    )
+    assert loaders == {"reader"}
+
+
+def test_loader_derivation_refuses_a_helper_rewritten_through_a_with_managers_enter_method(
+    tmp_path,
+):
+    # Repair pass nineteen, red team form 36a. A with
+    # statement after the candidate over an inline
+    # manager whose dunder enter method calls the
+    # installer performs the enter method as the
+    # statement runs, before the guarded body, whether
+    # the body completes, raises, or is abandoned, so
+    # the rewrite stands before any guarded statement
+    # completes. The reach counted the construction of
+    # the manager at that statement in full and read the
+    # guarded body beside it, while no reading gathered
+    # a method under the enter or exit names, so the
+    # protocol execution the statement performs counted
+    # nothing. The protocol methods of module level
+    # classes now stand gathered on the installation
+    # reading's terms, and a with statement in an
+    # executing position counts as a call into them.
+    loaders = _derived_loaders(
+        tmp_path,
+        """
+        ROOT = None
+
+
+        def reader(name):
+            return (ROOT / name).read_bytes()
+
+
+        def shadow_search(client, raw_response, name):
+            return reader(name)
+
+
+        def _install_shadow():
+            global shadow_search
+            shadow_search = lambda client, raw_response, name: None
+
+
+        class _EnterCtx:
+            def __enter__(self):
+                _install_shadow()
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+
+        with _EnterCtx():
+            pass
+        """,
+    )
+    assert loaders == {"reader"}
+
+
+def test_loader_derivation_refuses_a_helper_rewritten_through_a_with_managers_exit_method(
+    tmp_path,
+):
+    # Repair pass nineteen, red team form 36b. The exit
+    # side of the same protocol. A with statement over a
+    # manager whose dunder exit method calls the
+    # installer performs the exit method as the statement
+    # completes, on the normal path and on the raised
+    # path alike, and the counting gathered no method
+    # under the exit name either, so the execution
+    # counted nothing beside the construction. The exit
+    # method now stands gathered with the enter method
+    # on the installation reading's terms, and the with
+    # statement counts as a call into both.
+    loaders = _derived_loaders(
+        tmp_path,
+        """
+        ROOT = None
+
+
+        def reader(name):
+            return (ROOT / name).read_bytes()
+
+
+        def shadow_search(client, raw_response, name):
+            return reader(name)
+
+
+        def _install_shadow():
+            global shadow_search
+            shadow_search = lambda client, raw_response, name: None
+
+
+        class _ExitCtx:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                _install_shadow()
+                return False
+
+
+        with _ExitCtx():
+            pass
+        """,
+    )
+    assert loaders == {"reader"}
+
+
+def test_loader_derivation_refuses_a_helper_rewritten_through_a_bound_with_managers_enter_method(
+    tmp_path,
+):
+    # Repair pass nineteen, red team form 36c. The
+    # manager stands bound to a plain name ahead of the
+    # with statement, and the statement performs the
+    # enter method of the class the bound instantiation
+    # denotes exactly as the inline form does. The
+    # counting counted the construction where the
+    # binding stands and nothing at the statement, while
+    # the manager position is the operand the statement
+    # dispatches on. The statement now resolves its
+    # manager as an instantiation standing in the
+    # statement or through the bindings to the
+    # instantiation its name denotes, on the terms the
+    # instance resolution of the call locus reads a name
+    # by.
+    loaders = _derived_loaders(
+        tmp_path,
+        """
+        ROOT = None
+
+
+        def reader(name):
+            return (ROOT / name).read_bytes()
+
+
+        def shadow_search(client, raw_response, name):
+            return reader(name)
+
+
+        def _install_shadow():
+            global shadow_search
+            shadow_search = lambda client, raw_response, name: None
+
+
+        class _EnterCtx:
+            def __enter__(self):
+                _install_shadow()
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+
+        _mgr = _EnterCtx()
+
+
+        with _mgr:
+            pass
+        """,
+    )
+    assert loaders == {"reader"}
+
+
+def test_loader_derivation_refuses_a_helper_rewritten_through_an_inherited_with_managers_enter_method(
+    tmp_path,
+):
+    # Repair pass nineteen, red team form 36d. The enter
+    # method stands on a base class and the manager
+    # instantiates a subclass that inherits it, so the
+    # statement dispatches on the inherited method
+    # exactly as it dispatches on the class its own.
+    # The gathering of the protocol methods follows the
+    # base chains on the installation reading's terms,
+    # counting installations in a base as installations
+    # of the class that names it, so the inherited
+    # method stands gathered for the subclass beside
+    # its construction methods.
+    loaders = _derived_loaders(
+        tmp_path,
+        """
+        ROOT = None
+
+
+        def reader(name):
+            return (ROOT / name).read_bytes()
+
+
+        def shadow_search(client, raw_response, name):
+            return reader(name)
+
+
+        def _install_shadow():
+            global shadow_search
+            shadow_search = lambda client, raw_response, name: None
+
+
+        class _EnterBase:
+            def __enter__(self):
+                _install_shadow()
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+
+        class _EnterChild(_EnterBase):
+            pass
+
+
+        with _EnterChild():
+            pass
+        """,
+    )
+    assert loaders == {"reader"}
+
+
+def test_loader_derivation_refuses_a_helper_rewritten_through_a_class_getitem_in_a_base_expression(
+    tmp_path,
+):
+    # Repair pass nineteen, red team form 37a. A class
+    # definition after the candidate names a base in a
+    # subscript whose value position is a module level
+    # class carrying a dunder class getitem method, a
+    # classmethod whose body calls the installer, and
+    # evaluating the subscript performs that method as
+    # the header of the definition runs, ahead of the
+    # creation itself. The base reading took the
+    # subscript as the plain name in its value position
+    # for every purpose it turned a name into a class,
+    # which is the resolution of the base and not an
+    # account of the evaluation the subscript performs,
+    # and no reading gathered a method under the class
+    # getitem name. The method now stands gathered on
+    # the installation reading's terms, and a subscript
+    # whose value position resolves to such a class
+    # counts as a call into it wherever the reach reads
+    # the subscript as an execution, the base position
+    # among them.
+    loaders = _derived_loaders(
+        tmp_path,
+        """
+        ROOT = None
+
+
+        def reader(name):
+            return (ROOT / name).read_bytes()
+
+
+        def shadow_search(client, raw_response, name):
+            return reader(name)
+
+
+        def _install_shadow():
+            global shadow_search
+            shadow_search = lambda client, raw_response, name: None
+
+
+        class _GIBase:
+            @classmethod
+            def __class_getitem__(cls, item):
+                _install_shadow()
+                return cls
+
+
+        class _GIChild(_GIBase[int]):
+            pass
+        """,
+    )
+    assert loaders == {"reader"}
+
+
+def test_loader_derivation_refuses_a_helper_rewritten_through_a_class_getitem_in_an_annotation(
+    tmp_path,
+):
+    # Repair pass nineteen, red team form 37b. The same
+    # subscript stands in the annotation of a definition
+    # after the candidate, and the header reading
+    # performs the annotations of a definition as its
+    # statement runs, so the subscript evaluation and
+    # the class getitem execution it dispatches stand
+    # counted in full while the counting read the header
+    # and counted nothing for the subscript standing in
+    # it. The counting now stands at the subscript
+    # itself, in any expression standing in an executing
+    # position alike, so the annotation position counts
+    # on the same terms as the base position.
+    loaders = _derived_loaders(
+        tmp_path,
+        """
+        ROOT = None
+
+
+        def reader(name):
+            return (ROOT / name).read_bytes()
+
+
+        def shadow_search(client, raw_response, name):
+            return reader(name)
+
+
+        def _install_shadow():
+            global shadow_search
+            shadow_search = lambda client, raw_response, name: None
+
+
+        class _GIBase:
+            @classmethod
+            def __class_getitem__(cls, item):
+                _install_shadow()
+                return cls
+
+
+        def _annotated(value: _GIBase[int]):
+            pass
+        """,
+    )
+    assert loaders == {"reader"}
+
+
+def test_loader_derivation_refuses_a_helper_rewritten_through_a_for_loops_iter_method(
+    tmp_path,
+):
+    # Repair pass nineteen, red team form 38a. A for
+    # statement after the candidate over an inline
+    # iterable whose dunder iter method calls the
+    # installer performs the iter method as the
+    # statement begins, before the first element is
+    # drawn, whether the loop body then runs or not.
+    # The reach read the construction of the iterable at
+    # that statement and the calls standing in the loop
+    # body beside it, while no reading gathered a method
+    # under the iter name, so the protocol execution the
+    # statement performs counted nothing. The iteration
+    # methods of module level classes now stand gathered
+    # on the installation reading's terms, and a for
+    # statement in an executing position counts as a
+    # call into them.
+    loaders = _derived_loaders(
+        tmp_path,
+        """
+        ROOT = None
+
+
+        def reader(name):
+            return (ROOT / name).read_bytes()
+
+
+        def shadow_search(client, raw_response, name):
+            return reader(name)
+
+
+        def _install_shadow():
+            global shadow_search
+            shadow_search = lambda client, raw_response, name: None
+
+
+        class _Iter:
+            def __iter__(self):
+                _install_shadow()
+                return iter([])
+
+
+        for _ in _Iter():
+            pass
+        """,
+    )
+    assert loaders == {"reader"}
+
+
+def test_loader_derivation_refuses_a_helper_rewritten_through_a_self_iterators_next_method(
+    tmp_path,
+):
+    # Repair pass nineteen, red team form 38b. The
+    # iterable is its own iterator, its dunder iter
+    # method returning the instance itself, so the loop
+    # draws its elements by performing the dunder next
+    # method of the same class, whose body calls the
+    # installer on the first element drawn. A next
+    # method dispatches on the value an iter method
+    # returns, and return values stand on the ground the
+    # counting does not model, while the shape whose
+    # iter method returns the instance itself names its
+    # iterator in the open, in the one return shape the
+    # statement itself determines. The counting claims
+    # exactly that width, counting the next method of
+    # the class the statement starts from where the
+    # gathered iter method returns its first parameter,
+    # and no wider shape.
+    loaders = _derived_loaders(
+        tmp_path,
+        """
+        ROOT = None
+
+
+        def reader(name):
+            return (ROOT / name).read_bytes()
+
+
+        def shadow_search(client, raw_response, name):
+            return reader(name)
+
+
+        def _install_shadow():
+            global shadow_search
+            shadow_search = lambda client, raw_response, name: None
+
+
+        class _SelfIter:
+            def __iter__(self):
+                self._done = False
+                return self
+
+            def __next__(self):
+                if self._done:
+                    raise StopIteration
+                self._done = True
+                _install_shadow()
+                return 0
+
+
+        for _ in _SelfIter():
+            pass
+        """,
+    )
+    assert loaders == {"reader"}
+
+
+def test_loader_derivation_refuses_a_helper_rewritten_through_a_bound_iterables_iter_method(
+    tmp_path,
+):
+    # Repair pass nineteen, red team form 38c. The
+    # iterable stands bound to a plain name ahead of the
+    # for statement, and the statement performs the iter
+    # method of the class the bound instantiation
+    # denotes exactly as the inline form does. The
+    # counting counted the construction where the
+    # binding stands and nothing at the statement, while
+    # the iterable position is the operand the statement
+    # dispatches on. The statement now resolves its
+    # iterable as an instantiation standing in the
+    # statement or through the bindings to the
+    # instantiation its name denotes, on the terms the
+    # instance resolution of the call locus reads a name
+    # by.
+    loaders = _derived_loaders(
+        tmp_path,
+        """
+        ROOT = None
+
+
+        def reader(name):
+            return (ROOT / name).read_bytes()
+
+
+        def shadow_search(client, raw_response, name):
+            return reader(name)
+
+
+        def _install_shadow():
+            global shadow_search
+            shadow_search = lambda client, raw_response, name: None
+
+
+        class _Iter:
+            def __iter__(self):
+                _install_shadow()
+                return iter([])
+
+
+        _it = _Iter()
+
+
+        for _ in _it:
+            pass
+        """,
+    )
+    assert loaders == {"reader"}
+
+
+def test_loader_derivation_refuses_a_helper_rewritten_through_a_set_name_hook_on_a_descriptor_selected_from_a_tuple(
+    tmp_path,
+):
+    # Repair pass nineteen, red team form 39a. A class
+    # body after the candidate places a descriptor by a
+    # subscript selecting the element out of a tuple
+    # standing in the assignment, and the creation of
+    # the class dispatches the set name method of the
+    # class that element instantiates exactly as a body
+    # placing the instantiation itself does. The
+    # placement reading resolved an instantiation
+    # standing in the value position, an element of a
+    # tuple an assignment unpacks, and a name the module
+    # level bound to an instantiation, while a subscript
+    # standing in the value position resolved to no
+    # class, although the subscript is an indexing the
+    # counting can perform, over a literal the source
+    # carries in full. The reading now resolves a
+    # subscript selecting an element of a literal tuple
+    # or list, the element read from a constant index
+    # where the subscript carries one and every element
+    # where it does not.
+    loaders = _derived_loaders(
+        tmp_path,
+        """
+        ROOT = None
+
+
+        def reader(name):
+            return (ROOT / name).read_bytes()
+
+
+        def shadow_search(client, raw_response, name):
+            return reader(name)
+
+
+        def _install_shadow():
+            global shadow_search
+            shadow_search = lambda client, raw_response, name: None
+
+
+        class _ShadowDescriptor:
+            def __set_name__(self, owner, name):
+                _install_shadow()
+
+
+        class _TupleMarked:
+            marker = (_ShadowDescriptor(),)[0]
+        """,
+    )
+    assert loaders == {"reader"}
+
+
+def test_loader_derivation_refuses_a_helper_rewritten_through_a_set_name_hook_on_a_descriptor_in_a_conditional_arm(
+    tmp_path,
+):
+    # Repair pass nineteen, red team form 39b. A class
+    # body after the candidate places a descriptor by an
+    # instantiation standing in an arm of a conditional
+    # expression, and the creation dispatches the set
+    # name method of the class the taken arm
+    # instantiates. The reach reads both arms of a
+    # conditional expression standing in an executing
+    # position, on the ground that an expression the
+    # counting cannot fold is read in full rather than
+    # missed, while the placement reading read neither
+    # arm, so the placement resolved to no class. The
+    # reading now resolves an instantiation standing in
+    # either arm on the reach's own terms, so a
+    # condition the counting cannot fold over refuses
+    # here rather than missing the placement, and the
+    # repair does not go data dependent to do it.
+    loaders = _derived_loaders(
+        tmp_path,
+        """
+        ROOT = None
+
+
+        def reader(name):
+            return (ROOT / name).read_bytes()
+
+
+        def shadow_search(client, raw_response, name):
+            return reader(name)
+
+
+        def _install_shadow():
+            global shadow_search
+            shadow_search = lambda client, raw_response, name: None
+
+
+        class _ShadowDescriptor:
+            def __set_name__(self, owner, name):
+                _install_shadow()
+
+
+        class _CondMarked:
+            marker = _ShadowDescriptor() if True else None
+        """,
+    )
+    assert loaders == {"reader"}
+
+
+def test_loader_derivation_keeps_a_helper_beside_a_walrus_bound_quiet_name(
+    tmp_path,
+):
+    # Repair pass nineteen, the boundary control beside
+    # family 35. The same walrus shape as form 35a
+    # stands here with the bound name denoting a quiet
+    # definition whose body only returns, the name bound
+    # and called after the candidate. The call now
+    # resolves the walrus bound name through the pair
+    # collected bindings exactly as an assigned name,
+    # and its body joins the reach, but it calls nothing
+    # and assigns nothing under a global declaration, so
+    # the counting this pass adds refuses nothing here
+    # and the faithful helper keeps its derivation
+    # beside the reader. The control marks the family
+    # turning on the bound value performing the rewrite,
+    # the repair counting the binding as the binding it
+    # is while keeping the refusal keyed on what the
+    # resolved body does.
+    loaders = _derived_loaders(
+        tmp_path,
+        """
+        ROOT = None
+
+
+        def reader(name):
+            return (ROOT / name).read_bytes()
+
+
+        def shadow_search(client, raw_response, name):
+            return reader(name)
+
+
+        def _install_shadow():
+            global shadow_search
+            shadow_search = lambda client, raw_response, name: None
+
+
+        def _quiet():
+            return None
+
+
+        (_alias_quiet := _quiet)
+
+
+        _alias_quiet()
+        """,
+    )
+    assert loaders == {"reader", "shadow_search"}
+
+
+def test_loader_derivation_keeps_a_helper_beside_a_quiet_with_manager(
+    tmp_path,
+):
+    # Repair pass nineteen, the boundary control beside
+    # family 36. The same manager shape as form 36a
+    # stands here with a class whose dunder enter method
+    # only returns the instance and whose dunder exit
+    # method only returns false, the manager entered by
+    # a with statement after the candidate. The statement
+    # now counts as a call into both protocol methods
+    # and their bodies join the reach, but they call
+    # nothing and assign nothing under a global
+    # declaration, so the counting this pass adds
+    # refuses nothing here and the faithful helper keeps
+    # its derivation beside the reader. The control
+    # marks the family turning on a protocol method
+    # performing the rewrite, the repair counting the
+    # protocol execution as the call it is while keeping
+    # the refusal keyed on what the method body does.
+    loaders = _derived_loaders(
+        tmp_path,
+        """
+        ROOT = None
+
+
+        def reader(name):
+            return (ROOT / name).read_bytes()
+
+
+        def shadow_search(client, raw_response, name):
+            return reader(name)
+
+
+        def _install_shadow():
+            global shadow_search
+            shadow_search = lambda client, raw_response, name: None
+
+
+        class _QuietCtx:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+
+        with _QuietCtx():
+            pass
+        """,
+    )
+    assert loaders == {"reader", "shadow_search"}
+
+
+def test_loader_derivation_keeps_a_helper_beside_a_delegating_class_getitem(
+    tmp_path,
+):
+    # Repair pass nineteen, the boundary control beside
+    # family 37. The same subscript shape as form 37a
+    # stands here with a dunder class getitem method
+    # that only returns the class it stands on, the
+    # subscript standing in the base expression of a
+    # class defined after the candidate. The subscript
+    # now counts as a call into the method and its body
+    # joins the reach, but it calls nothing and assigns
+    # nothing under a global declaration, so the
+    # counting this pass adds refuses nothing here and
+    # the faithful helper keeps its derivation beside
+    # the reader. The control marks the family turning
+    # on the getitem method performing the rewrite, the
+    # repair counting the subscript evaluation as the
+    # execution it is while keeping the refusal keyed on
+    # what the method body does.
+    loaders = _derived_loaders(
+        tmp_path,
+        """
+        ROOT = None
+
+
+        def reader(name):
+            return (ROOT / name).read_bytes()
+
+
+        def shadow_search(client, raw_response, name):
+            return reader(name)
+
+
+        def _install_shadow():
+            global shadow_search
+            shadow_search = lambda client, raw_response, name: None
+
+
+        class _GIBase:
+            @classmethod
+            def __class_getitem__(cls, item):
+                return cls
+
+
+        class _GIChild(_GIBase[int]):
+            pass
+        """,
+    )
+    assert loaders == {"reader", "shadow_search"}
+
+
+def test_loader_derivation_keeps_a_helper_beside_a_quiet_iterable(
+    tmp_path,
+):
+    # Repair pass nineteen, the boundary control beside
+    # family 38. The same iterable shape as form 38a
+    # stands here with a class whose dunder iter method
+    # only returns an empty iterator, the iterable
+    # walked by a for statement after the candidate. The
+    # statement now counts as a call into the iter
+    # method and its body joins the reach, but it calls
+    # nothing and assigns nothing under a global
+    # declaration, so the counting this pass adds refuses
+    # nothing here and the faithful helper keeps its
+    # derivation beside the reader. The control marks
+    # the family turning on a protocol method performing
+    # the rewrite, the repair counting the iteration as
+    # the execution it is while keeping the refusal
+    # keyed on what the method body does.
+    loaders = _derived_loaders(
+        tmp_path,
+        """
+        ROOT = None
+
+
+        def reader(name):
+            return (ROOT / name).read_bytes()
+
+
+        def shadow_search(client, raw_response, name):
+            return reader(name)
+
+
+        def _install_shadow():
+            global shadow_search
+            shadow_search = lambda client, raw_response, name: None
+
+
+        class _Iter:
+            def __iter__(self):
+                return iter([])
+
+
+        for _ in _Iter():
+            pass
+        """,
+    )
+    assert loaders == {"reader", "shadow_search"}
