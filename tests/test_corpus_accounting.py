@@ -434,9 +434,12 @@ def _later_call_rewrites(module_body, position, name) -> bool:
     definitions, and the bodies a call into either can
     run stand beside them for the reach to read their
     calls from. The subclass hooks of a class stand
-    beside its construction methods for the reach.
-    Defining a subclass calls the dunder init subclass
-    method of each base the subclass names, so the hooks
+    beside its construction methods for the reach, and
+    its set name methods stand beside them, gathered
+    from the class and the module level base classes
+    it names in the same way. Defining a subclass
+    calls the dunder init subclass method of each base
+    the subclass names, so the hooks
     a class definition can run gather from the module
     level base classes it names, resolved by plain name
     through the base chain to its end, each hook
@@ -456,7 +459,7 @@ def _later_call_rewrites(module_body, position, name) -> bool:
     the reach constructs brings the calls of its
     construction methods into the reach beside its
     write set. A class definition standing in an
-    executing position performs two executions more
+    executing position performs four executions more
     that wear no call shape in the source. It calls the
     subclass hooks of the bases it names, whose bodies
     join the reach as the body of a called definition
@@ -465,6 +468,23 @@ def _later_call_rewrites(module_body, position, name) -> bool:
     the reach counts the keyword as a call into the
     construction write set gathered for that name,
     whose method bodies join the reach the same way.
+    It calls the set name method of each descriptor
+    standing in the namespace its body builds, the
+    method of the class its body instantiates by plain
+    name, its own or inherited through that class's
+    module level base classes, whose write set is
+    counted and whose body joins the reach the same
+    way. And when its keywords name no metaclass it is
+    constructed by the metaclass its bases stand under,
+    the most derived among them, resolved for each base
+    through its own keyword or the bases it stands
+    under in turn, so the reach counts the creation as
+    a call into the construction gathered for that
+    metaclass the same way, counting every candidate
+    the base chains leave unordered between themselves,
+    since the refusal errs in the guard's safe direction
+    and a genuine conflict between incomparable
+    metaclasses fails loudly at creation in any case.
     The parts of a statement that evaluate
     as the statement itself runs are read beside the
     calls standing in it. A definition standing in an
@@ -488,8 +508,8 @@ def _later_call_rewrites(module_body, position, name) -> bool:
     stays deferred on the same terms as a definition's
     body. The candidate is refused when the reach calls
     a definition or a construction whose write set
-    holds the name, or runs a subclass hook whose write
-    set holds it.
+    holds the name, or runs a subclass hook or a set
+    name hook whose write set holds it.
 
     The refusal keys on the execution, so an installer
     no call reaches refuses nothing, and a call standing
@@ -580,6 +600,77 @@ def _later_call_rewrites(module_body, position, name) -> bool:
                     write_set.update(child_writes)
         return bodies, write_set
 
+    def set_name_methods(node, seen):
+        bodies = []
+        write_set = set()
+        for member in node.body:
+            if (
+                isinstance(member, ast.FunctionDef)
+                and member.name == "__set_name__"
+            ):
+                bodies.append(member.body)
+                write_set.update(_global_write_set(member))
+        for base in node.bases:
+            if (
+                isinstance(base, ast.Name)
+                and base.id in class_nodes
+                and base.id not in seen
+            ):
+                for base_node in class_nodes[base.id]:
+                    child_bodies, child_writes = set_name_methods(
+                        base_node, seen | {base.id}
+                    )
+                    bodies.extend(child_bodies)
+                    write_set.update(child_writes)
+        return bodies, write_set
+
+    def metaclass_candidates(node, seen):
+        for keyword in node.keywords:
+            if keyword.arg == "metaclass":
+                if (
+                    isinstance(keyword.value, ast.Name)
+                    and keyword.value.id in class_nodes
+                ):
+                    return {keyword.value.id}
+                return set()
+        candidates = set()
+        for base in node.bases:
+            if (
+                isinstance(base, ast.Name)
+                and base.id in class_nodes
+                and base.id not in seen
+            ):
+                for base_node in class_nodes[base.id]:
+                    candidates.update(
+                        metaclass_candidates(base_node, seen | {base.id})
+                    )
+        return candidates
+
+    def class_ancestors(class_name, seen):
+        ancestors = set()
+        for node in class_nodes.get(class_name, []):
+            for base in node.bases:
+                if (
+                    isinstance(base, ast.Name)
+                    and base.id in class_nodes
+                    and base.id not in seen
+                ):
+                    ancestors.add(base.id)
+                    ancestors.update(class_ancestors(base.id, seen | {base.id}))
+        return ancestors
+
+    def counted_metaclasses(node):
+        candidates = metaclass_candidates(node, frozenset())
+        return {
+            candidate
+            for candidate in candidates
+            if not any(
+                other != candidate
+                and candidate in class_ancestors(other, frozenset())
+                for other in candidates
+            )
+        }
+
     targets = {key for key, write_set in writes.items() if name in write_set}
 
     def calls(statements, enter_class_bodies):
@@ -658,13 +749,40 @@ def _later_call_rewrites(module_body, position, name) -> bool:
                 return True
             for body in hook_bodies:
                 queue.append(calls(body, False))
-            for keyword in node.keywords:
+            for statement in node.body:
+                value = (
+                    statement.value
+                    if isinstance(statement, (ast.Assign, ast.AnnAssign))
+                    else None
+                )
                 if (
-                    keyword.arg == "metaclass"
-                    and isinstance(keyword.value, ast.Name)
-                    and keyword.value.id in class_nodes
+                    isinstance(value, ast.Call)
+                    and isinstance(value.func, ast.Name)
+                    and value.func.id in class_nodes
                 ):
-                    queue.append(([keyword.value.id], []))
+                    for descriptor_node in class_nodes[value.func.id]:
+                        set_bodies, set_writes = set_name_methods(
+                            descriptor_node, {value.func.id}
+                        )
+                        if name in set_writes:
+                            return True
+                        for body in set_bodies:
+                            queue.append(calls(body, False))
+            named_metaclass = None
+            names_a_metaclass = False
+            for keyword in node.keywords:
+                if keyword.arg == "metaclass":
+                    names_a_metaclass = True
+                    if (
+                        isinstance(keyword.value, ast.Name)
+                        and keyword.value.id in class_nodes
+                    ):
+                        named_metaclass = keyword.value.id
+            if named_metaclass is not None:
+                queue.append(([named_metaclass], []))
+            elif not names_a_metaclass:
+                for candidate in counted_metaclasses(node):
+                    queue.append(([candidate], []))
         for called in found:
             if called in targets:
                 return True
@@ -710,11 +828,15 @@ def _derive_loaders(filename: str) -> dict:
     performs as it runs, the headers a class statement
     performs as it runs, the executions a class creation
     performs through the subclass hooks of the bases it
-    names and through the construction of the metaclass
-    its keyword names, and the bodies of the lambdas
-    a statement invokes, because the proofs judge one
-    body and each of those shapes can leave the name
-    denoting a callable that body never runs in.
+    names, through the set name hooks of the descriptor
+    classes whose instances stand assigned in its body,
+    and through the construction of the metaclass its
+    keyword names or, where it names none, of the most
+    derived metaclass its bases stand under, and the
+    bodies of the lambdas a statement invokes, because
+    the proofs judge one body and each of those shapes
+    can leave the name denoting a callable that body
+    never runs in.
     """
     path = Path(__file__).parent / filename
     source = path.read_text()
@@ -840,8 +962,14 @@ def _loader_function_names(filename: str) -> set[str]:
     the executions a class creation performs, a call
     into the subclass hooks of the module level bases
     the class names, resolved by plain name through
-    the base chain, and a call into the construction
-    of the metaclass its keyword names, and the body
+    the base chain, a call into the set name hooks of
+    the descriptor classes whose instances stand
+    assigned in the class body, their own or inherited
+    through their module level base classes resolved
+    by plain name in the same way, and a call into the
+    construction of the metaclass its keyword names
+    or, where it names none, of the most derived
+    metaclass its bases stand under, and the body
     of a lambda a call invokes where it stands, because
     the name then denotes what the execution leaves
     behind rather than the body under proof. The refusal
