@@ -512,7 +512,9 @@ def _later_call_rewrites(module_body, position, name) -> bool:
     in it through the bindings, a subscript selecting an element out of
     a tuple or a list standing in the assignment or
     denoted by a plain name standing in it through
-    the bindings, an
+    the bindings, the selection composing through a
+    further subscript standing as its value on the
+    same terms, an
     instantiation standing in an arm of a conditional
     expression the assignment evaluates, an
     instantiation standing as an operand of a boolean
@@ -640,6 +642,8 @@ def _later_call_rewrites(module_body, position, name) -> bool:
     selecting an instantiation out of a literal, the
     selected element denoting the instance on the
     index terms the placement reading selects on,
+    the selection composing through a further
+    subscript standing behind it on the same terms,
     on the terms the placement
     reading resolves a placed name by. The alias
     resolution's sentence denying a name bound to an
@@ -718,7 +722,9 @@ def _later_call_rewrites(module_body, position, name) -> bool:
     standing in the subscript or denoted by a plain
     name standing in it through the bindings, the
     element read on the index terms the placement
-    reading selects on, on the terms the call locus resolves an
+    reading selects on, the selection composing
+    through a further subscript standing in the
+    position on the same terms, on the terms the call locus resolves an
     instance name by, and the iterable position of a
     for statement denotes its instantiation on the
     same terms. A for statement iterates the
@@ -740,7 +746,12 @@ def _later_call_rewrites(module_body, position, name) -> bool:
     standing in the subscript or denoted by a name
     the body itself binds to one on the binding
     terms this passage states for the body's own
-    names, the element
+    names, or standing in the subscript as the value
+    a walrus expression yields, as an operand of a
+    boolean expression, in an arm of a conditional
+    expression, or behind an inner subscript
+    selecting it out of a further literal so
+    standing, the element
     read on the index terms the placement reading
     selects on, a name counting as bound to the
     first parameter where its body binds it by a
@@ -803,8 +814,12 @@ def _later_call_rewrites(module_body, position, name) -> bool:
     value it yields, and a subscript standing in
     the value position resolving to the classes of
     the elements it selects out of a literal it
-    stands on, on the index terms the placement
-    reading selects on, on the reach's
+    stands on, the literal standing in the inner
+    selection itself or yielded there by an arm of
+    a conditional expression, an operand of a
+    boolean expression, or the value a walrus
+    expression yields, on the index terms the
+    placement reading selects on, on the reach's
     expression terms beside the bare name and
     subscript forms the denotation reading takes,
     performs the dunder class
@@ -1150,14 +1165,17 @@ def _later_call_rewrites(module_body, position, name) -> bool:
         A subscript selects an element out of the value
         it stands on, so where that value stands as a
         literal tuple or a list, or as a plain name the
-        module level bindings resolve to one, the
-        subscript evaluates to the element its index
-        selects, the element standing at a constant
-        index where the subscript carries one and every
-        element where it does not, on the index terms
-        the placement reading selects on. Where the
-        value itself stands as a subscript, the
-        subscript evaluates to what the inner
+        module level bindings resolve to one, or as an
+        expression yielding one through an arm of a
+        conditional expression, an operand of a boolean
+        expression, or the value a walrus expression
+        yields, the subscript evaluates to the element
+        its index selects, the element standing at a
+        constant index where the subscript carries one
+        and every element where it does not, on the
+        index terms the placement reading selects on.
+        Where the value itself stands as a subscript,
+        the subscript evaluates to what the inner
         subscript's selection evaluates to in turn, read
         on the same terms. A subscript standing on any
         other value evaluates to nothing this reading
@@ -1203,7 +1221,11 @@ def _later_call_rewrites(module_body, position, name) -> bool:
         base and annotation positions it serves. A
         subscript standing in the position resolves to
         the classes of the elements it selects out of a
-        literal it stands on, the selection read on the
+        literal it stands on, the literal standing in
+        the inner selection itself or yielded there by
+        an arm of a conditional expression, an operand
+        of a boolean expression, or the value a walrus
+        expression yields, the selection read on the
         index terms the placement reading selects on,
         because the outer subscript performs the class
         getitem of the class the selection yields.
@@ -1595,15 +1617,52 @@ def _later_call_rewrites(module_body, position, name) -> bool:
                             for bound_name, element in element_pairs:
                                 alias_pairs.append(([bound_name], element))
 
+            def selection_literal_nodes(value):
+                """The literal sequence nodes a selection value denotes.
+
+                The literal standing in the subscript
+                itself, a name the body binds to one on
+                the terms the body's own literal reading
+                follows, the literal the value a walrus
+                expression yields denotes, a literal an
+                operand of a boolean expression denotes,
+                a literal an arm of a conditional
+                expression denotes, or a literal an inner
+                subscript selects out of a further
+                literal so denoted, each read on the same
+                terms, because the value each such form
+                yields is the sequence the selection
+                stands on. A value standing in any other
+                form denotes no literal this reading can
+                name.
+                """
+                if isinstance(value, (ast.Tuple, ast.List)):
+                    return [value]
+                if isinstance(value, ast.Name):
+                    return local_literal_nodes(value.id)
+                if isinstance(value, ast.NamedExpr):
+                    return selection_literal_nodes(value.value)
+                if isinstance(value, ast.BoolOp):
+                    nodes = []
+                    for operand in value.values:
+                        nodes.extend(selection_literal_nodes(operand))
+                    return nodes
+                if isinstance(value, ast.IfExp):
+                    nodes = selection_literal_nodes(value.body)
+                    nodes.extend(selection_literal_nodes(value.orelse))
+                    return nodes
+                if isinstance(value, ast.Subscript):
+                    return [
+                        element
+                        for element in selected_elements(value)
+                        if isinstance(element, (ast.Tuple, ast.List))
+                    ]
+                return []
+
             def selected_elements(expression):
-                literals = []
-                if isinstance(expression.value, (ast.Tuple, ast.List)):
-                    literals = [expression.value]
-                elif isinstance(expression.value, ast.Name):
-                    literals = local_literal_nodes(expression.value.id)
                 selected = []
                 index = expression.slice
-                for literal in literals:
+                for literal in selection_literal_nodes(expression.value):
                     elements = literal.elts
                     if (
                         isinstance(index, ast.Constant)
@@ -1880,12 +1939,33 @@ def _later_call_rewrites(module_body, position, name) -> bool:
         at, so a subscript selecting through the name
         selects through the denoted literal on the same
         terms as a literal standing in the assignment
-        itself. A name bound to any other value, and an
-        expression standing in any other form, carries
-        nothing the selection can read.
+        itself. A conditional expression carries the
+        elements of the literals its arms carry, a
+        boolean expression the elements of the literals
+        its operands carry, and a walrus expression the
+        elements of the literal the value it yields
+        carries, each read on the same terms, because
+        the value such an expression yields stands
+        where the expression itself stands. A name
+        bound to any other value, and an expression
+        standing in any other form, carries nothing
+        the selection can read.
         """
         if isinstance(expression, (ast.Tuple, ast.List)):
             return [expression.elts]
+        if isinstance(expression, ast.IfExp):
+            sequences = literal_sequences(expression.body, seen_names)
+            sequences.extend(
+                literal_sequences(expression.orelse, seen_names)
+            )
+            return sequences
+        if isinstance(expression, ast.BoolOp):
+            sequences = []
+            for operand in expression.values:
+                sequences.extend(literal_sequences(operand, seen_names))
+            return sequences
+        if isinstance(expression, ast.NamedExpr):
+            return literal_sequences(expression.value, seen_names)
         if isinstance(expression, ast.Name) and expression.id not in seen_names:
             sequences = []
             for bound_value in module_bindings.get(expression.id, []):
@@ -1927,7 +2007,13 @@ def _later_call_rewrites(module_body, position, name) -> bool:
         expression places what it places in either
         operand, as the reach reads both operands of such
         an expression and the value the expression yields
-        is one of its operands. A
+        is one of its operands. An element a subscript
+        selects through a further subscript standing as
+        its value places what the element the composed
+        selection yields places, the selections composing
+        on the same index terms, because a subscript
+        evaluates to what its own selection evaluates to.
+        A
         plain name places what the module level
         bound to it where a binding value instantiates a
         class, and a name bound to a further name places
@@ -1959,25 +2045,11 @@ def _later_call_rewrites(module_body, position, name) -> bool:
                 classes.extend(placed_descriptor_classes(element, seen_names))
             return classes
         if isinstance(value, ast.Subscript):
-            index = value.slice
             classes = []
-            for elements in literal_sequences(value.value, seen_names):
-                if (
-                    isinstance(index, ast.Constant)
-                    and isinstance(index.value, int)
-                    and not isinstance(index.value, bool)
-                    and -len(elements) <= index.value < len(elements)
-                ):
-                    classes.extend(
-                        placed_descriptor_classes(
-                            elements[index.value], seen_names
-                        )
-                    )
-                else:
-                    for element in elements:
-                        classes.extend(
-                            placed_descriptor_classes(element, seen_names)
-                        )
+            for element in subscript_selected_values(value):
+                classes.extend(
+                    placed_descriptor_classes(element, seen_names)
+                )
             return classes
         if isinstance(value, ast.IfExp):
             classes = placed_descriptor_classes(value.body, seen_names)
@@ -2077,7 +2149,10 @@ def _later_call_rewrites(module_body, position, name) -> bool:
         or denoted by a plain name standing in it denotes
         the instance the selected element denotes, the
         element read on the index terms the placement
-        reading selects on.
+        reading selects on, and a subscript standing on
+        a further subscript denotes the instance the
+        element the composed selection yields denotes,
+        the selections composing on the same terms.
         """
         classes = []
         if callee_name in seen_names:
@@ -2097,28 +2172,17 @@ def _later_call_rewrites(module_body, position, name) -> bool:
                     )
                 )
             elif isinstance(bound_value, ast.Subscript):
-                index = bound_value.slice
-                for elements in literal_sequences(bound_value.value):
-                    if (
-                        isinstance(index, ast.Constant)
-                        and isinstance(index.value, int)
-                        and not isinstance(index.value, bool)
-                        and -len(elements) <= index.value < len(elements)
-                    ):
-                        selected = [elements[index.value]]
-                    else:
-                        selected = list(elements)
-                    for element in selected:
-                        if isinstance(element, ast.Call):
-                            resolved = denoted_class_name(element.func)
-                            if resolved is not None:
-                                classes.append(resolved)
-                        elif isinstance(element, ast.Name):
-                            classes.extend(
-                                instance_call_classes(
-                                    element.id, seen_names | {callee_name}
-                                )
+                for element in subscript_selected_values(bound_value):
+                    if isinstance(element, ast.Call):
+                        resolved = denoted_class_name(element.func)
+                        if resolved is not None:
+                            classes.append(resolved)
+                    elif isinstance(element, ast.Name):
+                        classes.extend(
+                            instance_call_classes(
+                                element.id, seen_names | {callee_name}
                             )
+                        )
         return classes
 
     def calls(statements):
@@ -2144,8 +2208,10 @@ def _later_call_rewrites(module_body, position, name) -> bool:
             the literal standing in the subscript or
             denoted by a plain name standing in it through
             the bindings, the element read on the index
-            terms the placement reading selects on, and
-            the class the instantiation names is the
+            terms the placement reading selects on, the
+            selection composing through a further subscript
+            standing in the position on the same terms,
+            and the class the instantiation names is the
             class whose protocol methods the statement
             performs.
             """
@@ -2166,21 +2232,9 @@ def _later_call_rewrites(module_body, position, name) -> bool:
                     classes.extend(manager_classes(operand))
                 return classes
             if isinstance(expression, ast.Subscript):
-                index = expression.slice
                 classes = []
-                for elements in literal_sequences(expression.value):
-                    if (
-                        isinstance(index, ast.Constant)
-                        and isinstance(index.value, int)
-                        and not isinstance(index.value, bool)
-                        and -len(elements) <= index.value < len(elements)
-                    ):
-                        classes.extend(
-                            manager_classes(elements[index.value])
-                        )
-                    else:
-                        for element in elements:
-                            classes.extend(manager_classes(element))
+                for element in subscript_selected_values(expression):
+                    classes.extend(manager_classes(element))
                 return classes
             return []
 
@@ -2561,7 +2615,9 @@ def _derive_loaders(filename: str) -> dict:
     and following a name bound to a further name to
     its instantiation in turn, or bound to a
     subscript selecting an instantiation out of a
-    literal, and each decorator
+    literal, the selection composing through a
+    further subscript standing behind it on the same
+    terms, and each decorator
     standing on a definition or a class in an executing
     position in bare name form counting as a call into
     the value the name denotes, resolved as the reach
@@ -2587,7 +2643,10 @@ def _derive_loaders(filename: str) -> dict:
     the bindings, by a
     subscript selecting an element out of a tuple or
     a list standing in the assignment or denoted by
-    a plain name standing in it through the bindings, by an
+    a plain name standing in it through the bindings,
+    the selection composing through a further
+    subscript standing as its value on the same
+    terms, by an
     instantiation standing in an arm of a conditional
     expression the assignment evaluates, by an
     instantiation standing as an operand of a boolean
@@ -2625,6 +2684,9 @@ def _derive_loaders(filename: str) -> dict:
     subscript standing in the position selects, the
     literal standing in the subscript or denoted by
     a plain name standing in it through the bindings,
+    the selection composing through a further
+    subscript standing in the position on the same
+    terms,
     gathered on the same installation terms
     through the base classes the class names, a for
     statement counting as a call into the dunder iter
@@ -2642,7 +2704,12 @@ def _derive_loaders(filename: str) -> dict:
     subscript selects out of a literal tuple or
     list holding it, the literal standing in the
     subscript or denoted by a name the body binds
-    to one, and into the dunder
+    to one, or standing in the subscript as the
+    value a walrus expression yields, as an operand
+    of a boolean expression, in an arm of a
+    conditional expression, or behind an inner
+    subscript selecting it out of a further literal,
+    and into the dunder
     getitem method of the same class where no dunder
     iter method stands in its chain, the sequence
     fallback the statement performs in the iter
@@ -2666,7 +2733,11 @@ def _derive_loaders(filename: str) -> dict:
     expression resolving to the class of the value
     it yields, and a subscript standing in the
     value position resolving to the classes of the
-    elements it selects out of a literal,
+    elements it selects out of a literal, the
+    literal standing in the inner selection itself
+    or yielded there by an arm of a conditional
+    expression, an operand of a boolean expression,
+    or the value a walrus expression yields,
     counting as a call into the dunder class getitem
     method of that class wherever the reach reads the
     subscript as an execution, and the bodies of the lambdas a statement
@@ -2833,7 +2904,9 @@ def _loader_function_names(filename: str) -> set[str]:
     the name denotes and following a name bound to a
     further name to its instantiation in turn, or
     bound to a subscript selecting an instantiation
-    out of a literal, and
+    out of a literal, the selection composing through
+    a further subscript standing behind it on the
+    same terms, and
     each decorator standing on a definition or a class
     in an executing position in bare name form counting
     as a call into the value the name denotes, resolved
@@ -2875,7 +2948,9 @@ def _loader_function_names(filename: str) -> set[str]:
     standing in it through the bindings, by a subscript selecting an
     element out of a tuple or a list standing in the
     assignment or denoted by a plain name standing in
-    it through the bindings, by an instantiation standing in an arm
+    it through the bindings, the selection composing
+    through a further subscript standing as its value
+    on the same terms, by an instantiation standing in an arm
     of a conditional expression the assignment
     evaluates, by an instantiation standing as an
     operand of a boolean expression the assignment
@@ -2910,7 +2985,9 @@ def _loader_function_names(filename: str) -> set[str]:
     element of a tuple or list a subscript in the
     position selects, the literal standing in the
     subscript or denoted by a plain name through the
-    bindings, the dunder iter method of the class a
+    bindings, the selection composing through a
+    further subscript standing in the position on
+    the same terms, the dunder iter method of the class a
     for statement's iterable denotes on the same
     terms and the dunder next method of the same
     class where its gathered iter method returns the
@@ -2924,7 +3001,11 @@ def _loader_function_names(filename: str) -> set[str]:
     element a subscript selects out of a literal
     tuple or list holding it, the literal standing
     in the subscript or denoted by a name the body
-    binds to one,
+    binds to one, or standing in the subscript as
+    the value a walrus expression yields, as an
+    operand of a boolean expression, in an arm of
+    a conditional expression, or behind an inner
+    subscript selecting it out of a further literal,
     the dunder getitem method of the same class
     where no dunder iter method stands in its chain,
     the in place method of the operation an
@@ -2944,7 +3025,11 @@ def _loader_function_names(filename: str) -> set[str]:
     expression resolving to the class of the value
     it yields, and a subscript standing in the
     value position resolving to the classes of the
-    elements it selects out of a literal, each
+    elements it selects out of a literal, the
+    literal standing in the inner selection itself
+    or yielded there by an arm of a conditional
+    expression, an operand of a boolean expression,
+    or the value a walrus expression yields, each
     gathered on the same installation terms through
     the base classes the class names, and the body
     of a lambda a call invokes where it stands, because
