@@ -72,7 +72,12 @@ postal field at exactly the point the reading that touches it
 always read it, and wraps the core answers back into the
 result types this module has always returned. Validation
 stays here because it is a property of the caller supplied
-Python values, and the core never sees a Python object.
+Python values, and the core never sees a Python object. One
+boundary travels with the delegation and is stated here
+rather than left to surprise. Where a caller supplied
+operation returns a wrong answer instead of raising, the
+readings follow the values as sent to the core rather than
+the answer the operation gave.
 """
 
 from __future__ import annotations
@@ -260,6 +265,25 @@ def _checked_components(
     """Validate one caller supplied component list and return it
     materialised as a tuple.
 
+    The plain capture the core conversion consumes rides out
+    through _checked_components_and_plain, and this form keeps
+    the tuple only shape the helpers that hand components back
+    have always used.
+    """
+    checked, _plain = _checked_components_and_plain(components)
+    return checked
+
+
+def _checked_components_and_plain(
+    components: Sequence[AddressComponent],
+) -> tuple[
+    tuple[AddressComponent, ...],
+    list[tuple[Optional[str], Optional[str], tuple[Optional[str], ...]]],
+]:
+    """Validate one caller supplied component list and return it
+    materialised as a tuple, with the plain field values the
+    validation read captured beside it.
+
     The input is read exactly once, under the same bounded
     ceiling the client applies to caller iterables, and every
     helper works from the materialised tuple this returns. A
@@ -288,27 +312,37 @@ def _checked_components(
     items = _materialize_bounded(
         "components", components, MAX_MATERIALIZED_ITEMS
     )
+    plain = []
     for component in items:
         if not isinstance(component, AddressComponent):
             raise ConfigError(
                 "components must hold AddressComponent values, "
                 f"got {_safe_repr(component)}"
             )
-        if component.long_text is not None and not isinstance(
-            component.long_text, str
-        ):
-            raise ConfigError(
-                "component long_text must be a string, "
-                f"got {_safe_repr(component.long_text)}"
-            )
-        if component.short_text is not None and not isinstance(
-            component.short_text, str
-        ):
-            raise ConfigError(
-                "component short_text must be a string, "
-                f"got {_safe_repr(component.short_text)}"
-            )
-        if not isinstance(component.types, (list, tuple)):
+        # The field values are captured as the validation reads
+        # them, at exactly the reads the funnel has always made,
+        # so the conversion further down never reads a caller
+        # text again. A field a caller reads through a counting
+        # or raising getter therefore sees the same read count
+        # the pre port funnel produced.
+        long_text = component.long_text
+        if long_text is not None:
+            long_text = component.long_text
+            if not isinstance(long_text, str):
+                raise ConfigError(
+                    "component long_text must be a string, "
+                    f"got {_safe_repr(long_text)}"
+                )
+        short_text = component.short_text
+        if short_text is not None:
+            short_text = component.short_text
+            if not isinstance(short_text, str):
+                raise ConfigError(
+                    "component short_text must be a string, "
+                    f"got {_safe_repr(short_text)}"
+                )
+        types_value = component.types
+        if not isinstance(types_value, (list, tuple)):
             # The element posture matches the sequence posture
             # above. Construction refuses a bare string in the
             # types field and nothing else, so a hand built
@@ -317,15 +351,18 @@ def _checked_components(
             # test in the search then raised a bare TypeError.
             raise ConfigError(
                 "component types must be a list of strings, "
-                f"got {_safe_repr(component.types)}"
+                f"got {_safe_repr(types_value)}"
             )
+        type_items = []
         for item in component.types:
             if item is not None and not isinstance(item, str):
                 raise ConfigError(
                     "component types must hold strings, "
                     f"got {_safe_repr(item)}"
                 )
-    return tuple(items)
+            type_items.append(item)
+        plain.append((long_text, short_text, tuple(type_items)))
+    return tuple(items), plain
 
 
 def _checked_postal_address(
@@ -375,9 +412,15 @@ def _postal_field(
     return value or None
 
 
-def _checked_place(place: Place) -> tuple[AddressComponent, ...]:
+def _checked_place_and_plain(
+    place: Place,
+) -> tuple[
+    tuple[AddressComponent, ...],
+    list[tuple[Optional[str], Optional[str], tuple[Optional[str], ...]]],
+]:
     """Validate one Place argument and return its components
-    checked and materialised.
+    checked and materialised, with the plain capture beside
+    them.
 
     Every Place taking helper enters through here, so a value
     that is not a Place at all raises ConfigError instead of a
@@ -416,25 +459,54 @@ def _checked_place(place: Place) -> tuple[AddressComponent, ...]:
             "place address_components must be a list or tuple, "
             f"got {_safe_repr(components)}"
         )
-    return _checked_components(components)
+    return _checked_components_and_plain(components)
 
 
-def _plain_components(
-    checked: Sequence[AddressComponent],
-) -> list[tuple[Optional[str], Optional[str], tuple[Optional[str], ...]]]:
-    """Convert checked components into the plain core shape.
+def _encode_text(text: Optional[str]) -> Optional[bytes]:
+    """Encode one checked text for the core crossing.
+
+    The core works on byte strings, and the surrogatepass codec
+    carries a lone surrogate as its three byte form and back,
+    so a text holding one crosses exactly and returns exactly,
+    where an encoding that refuses surrogates would fail the
+    whole reading on a value every funnel accepts.
+    """
+    if text is None:
+        return None
+    return text.encode("utf-8", "surrogatepass")
+
+
+def _decode_text(data: Optional[bytes]) -> Optional[str]:
+    """Decode one text the core hands back, on the same codec
+    terms as _encode_text, so a surrogate it carried returns as
+    the surrogate the caller sent."""
+    if data is None:
+        return None
+    return data.decode("utf-8", "surrogatepass")
+
+
+def _core_components(
+    plain: Sequence[
+        tuple[Optional[str], Optional[str], tuple[Optional[str], ...]]
+    ],
+) -> list[tuple[Optional[bytes], Optional[bytes], tuple[Optional[bytes], ...]]]:
+    """Convert the plain capture into the core shape.
 
     The core works on one triple per component, its long text,
-    its short text and its type names, so no Python object
-    crosses the boundary. The conversion reads only fields the
-    funnel has already validated, and it runs inside the entry
-    guard of the helper that owns the call, so a value that
-    raises while it is being read surfaces with the same
-    ConfigError discipline as any other read in this module.
+    its short text and its type names, encoded as byte strings,
+    so no Python object crosses the boundary. The conversion
+    works only from the values the validation funnel captured
+    while it read each field, so it adds no read of any caller
+    field, and it runs inside the entry guard of the helper
+    that owns the call.
     """
     return [
-        (component.long_text, component.short_text, tuple(component.types))
-        for component in checked
+        (
+            _encode_text(long_text),
+            _encode_text(short_text),
+            tuple(_encode_text(item) for item in type_items),
+        )
+        for long_text, short_text, type_items in plain
     ]
 
 
@@ -456,6 +528,47 @@ def _exercise_membership(
     """
     for component in checked:
         type_name in component.types
+
+
+def _exercise_first_match(
+    checked: Sequence[AddressComponent], type_name: str
+) -> bool:
+    """Run the membership test the way the old first match scan
+    ran it, and report whether a match landed.
+
+    The old scan stopped at the first component whose types
+    hold the name, so a component past the landing one was
+    never tested. The exercise walks in scan order and stops
+    at the same component, and the landing report drives the
+    exercise order at the composite flag sites, where the old
+    composition short circuited from one scan to the next. The
+    results are the core's to compute and are discarded beyond
+    that ordering.
+    """
+    for component in checked:
+        if type_name in component.types:
+            return True
+    return False
+
+
+def _exercise_text_scan(
+    checked: Sequence[AddressComponent], type_name: str
+) -> bool:
+    """Run the tests the way the old long text scan ran them,
+    and report whether a reading landed.
+
+    The old scan tested membership component by component and
+    stopped at the first match whose long text is nonempty, so
+    a component past the landing one was never tested, and a
+    match with an empty text was tested and passed over. The
+    exercise walks the same order with the same two tests and
+    stops at the same component. The results are the core's to
+    compute and are discarded beyond that ordering.
+    """
+    for component in checked:
+        if type_name in component.types and component.long_text:
+            return True
+    return False
 
 
 # Routing into a stated answer or the generic chain matches the
@@ -503,10 +616,10 @@ def find_components(
     component that carries it as a companion type.
     """
     _checked_type_name(type_name)
-    checked = _checked_components(components)
+    checked, plain = _checked_components_and_plain(components)
     _exercise_membership(checked, type_name)
     indices = _placekit.address_matching_indices(
-        _plain_components(checked), type_name
+        _core_components(plain), _encode_text(type_name)
     )
     return tuple(checked[index] for index in indices)
 
@@ -577,16 +690,27 @@ def untyped_components(
     and no helper guesses a type for them.
     """
     checked = _checked_components(components)
-    indices = _placekit.address_untyped_indices(_plain_components(checked))
-    return tuple(checked[index] for index in indices)
+    # The old bucket test is the truthiness of the caller types
+    # object itself, a test no core reading over extracted
+    # values can stand in for, so the bucket is decided here on
+    # the caller objects, the way the pre port helper decided
+    # it. A types list whose length lies at zero lands in the
+    # bucket and a types list whose truth test raises surfaces
+    # here, both as the old helper answered.
+    return tuple(
+        component for component in checked if not component.types
+    )
 
 
 def _country_code_from_components(
     checked: Sequence[AddressComponent],
+    plain: Sequence[
+        tuple[Optional[str], Optional[str], tuple[Optional[str], ...]]
+    ],
 ) -> Optional[str]:
     _exercise_membership(checked, types.TYPE_COUNTRY)
     indices = _placekit.address_matching_indices(
-        _plain_components(checked), types.TYPE_COUNTRY
+        _core_components(plain), _encode_text(types.TYPE_COUNTRY)
     )
     for index in indices:
         if checked[index].short_text:
@@ -605,13 +729,18 @@ def country_code_from_components(
     The value comes back as sent and is never uppercased or
     mapped to another code.
     """
-    return _country_code_from_components(_checked_components(components))
+    checked, plain = _checked_components_and_plain(components)
+    return _country_code_from_components(checked, plain)
 
 
 def _country_code(
-    place: Place, checked: Sequence[AddressComponent]
+    place: Place,
+    checked: Sequence[AddressComponent],
+    plain: Sequence[
+        tuple[Optional[str], Optional[str], tuple[Optional[str], ...]]
+    ],
 ) -> Optional[str]:
-    code = _country_code_from_components(checked)
+    code = _country_code_from_components(checked, plain)
     if code is not None:
         return code
     return postal_region_code(place.postal_address)
@@ -626,7 +755,8 @@ def country_code(place: Place) -> Optional[str]:
     back to the region code of the postal address, and it
     returns None when neither carrier yields a value.
     """
-    return _country_code(place, _checked_place(place))
+    checked, plain = _checked_place_and_plain(place)
+    return _country_code(place, checked, plain)
 
 
 @_entry_guard
@@ -638,12 +768,17 @@ def administrative_area(place: Place) -> Optional[str]:
     across request languages while the component text stayed
     stable.
     """
-    checked = _checked_place(place)
-    _exercise_membership(checked, types.TYPE_ADMINISTRATIVE_AREA_LEVEL_1)
-    return _placekit.address_first_long_text(
-        _plain_components(checked),
-        types.TYPE_ADMINISTRATIVE_AREA_LEVEL_1,
+    checked, plain = _checked_place_and_plain(place)
+    _exercise_text_scan(checked, types.TYPE_ADMINISTRATIVE_AREA_LEVEL_1)
+    index = _placekit.address_first_long_text_index(
+        _core_components(plain),
+        _encode_text(types.TYPE_ADMINISTRATIVE_AREA_LEVEL_1),
     )
+    if index is None:
+        return None
+    # The reading hands back the matched component's own long
+    # text object, the way the old scan returned it untouched.
+    return checked[index].long_text
 
 
 @_entry_guard
@@ -667,26 +802,38 @@ def postal_code_from_postal_address(
 
 
 def _postal_code(
-    place: Place, checked: Sequence[AddressComponent]
+    place: Place,
+    checked: Sequence[AddressComponent],
+    plain: Sequence[
+        tuple[Optional[str], Optional[str], tuple[Optional[str], ...]]
+    ],
 ) -> PostalCodeResult:
-    country = _country_code(place, checked)
-    route = _routing_country(country)
-    if route == "JP":
-        _exercise_membership(checked, types.TYPE_SUBLOCALITY_LEVEL_2)
-    if route == "AE":
-        _exercise_membership(checked, types.TYPE_SUBLOCALITY_LEVEL_1)
-    _exercise_membership(checked, types.TYPE_POSTAL_CODE)
-    component_value = _placekit.address_first_long_text(
-        _plain_components(checked), types.TYPE_POSTAL_CODE
+    country = _country_code(place, checked, plain)
+    # The old postal read never routed and never tested a
+    # sublocality needle, so no routing read and no district
+    # exercise stands here. Its own scan is the postal code
+    # long text scan, exercised on its own terms.
+    _exercise_text_scan(checked, types.TYPE_POSTAL_CODE)
+    index = _placekit.address_first_long_text_index(
+        _core_components(plain), _encode_text(types.TYPE_POSTAL_CODE)
     )
+    component_text = plain[index][0] if index is not None else None
+    component_object = checked[index].long_text if index is not None else None
     postal_value = postal_code_from_postal_address(place.postal_address)
     row = _placekit.address_postal_code_result(
-        country, component_value, postal_value
+        _encode_text(country),
+        _encode_text(component_text),
+        _encode_text(postal_value),
     )
-    # The core echoes the country code it was handed as a plain
-    # value. The result carries the code as sent, so the caller
-    # supplied object itself goes back into the row.
-    return PostalCodeResult(row[0], row[1], row[2], country, row[4], row[5])
+    # The result carries the caller supplied objects themselves
+    # wherever the old composition carried them. The headline
+    # value is the component object when a component value
+    # stands and the postal object otherwise, the competing
+    # value is the postal object when the core reports one,
+    # and the country slot carries the code as sent.
+    value = component_object if component_text is not None else postal_value
+    competing = postal_value if row[4] is not None else None
+    return PostalCodeResult(value, row[1], row[2], country, competing, row[5])
 
 
 @_entry_guard
@@ -702,30 +849,42 @@ def postal_code(place: Place) -> PostalCodeResult:
     status reports absence, which the recorded Dubai set proves
     can be a property of a country rather than a gap.
     """
-    return _postal_code(place, _checked_place(place))
+    checked, plain = _checked_place_and_plain(place)
+    return _postal_code(place, checked, plain)
 
 
 def _city_resolutions(
-    place: Place, checked: Sequence[AddressComponent]
+    place: Place,
+    checked: Sequence[AddressComponent],
+    plain: Sequence[
+        tuple[Optional[str], Optional[str], tuple[Optional[str], ...]]
+    ],
 ) -> tuple[CityResolution, ...]:
-    country = _country_code(place, checked)
+    country = _country_code(place, checked, plain)
     route = _routing_country(country)
+    # Each chain exercises the scans the old chain ran, on
+    # their own terms. The British chain ran both of its text
+    # scans in full, the precedence chains ran the locality
+    # scan alone, and the generic chain ran its scans in order
+    # and stopped exercising further needles at the first scan
+    # that landed, because the old chain returned there.
     if route in CONTESTED_COUNTRIES:
-        chain = (types.TYPE_LOCALITY, types.TYPE_POSTAL_TOWN)
+        _exercise_text_scan(checked, types.TYPE_LOCALITY)
+        _exercise_text_scan(checked, types.TYPE_POSTAL_TOWN)
     elif route in PRECEDENCE_COUNTRIES:
-        chain = (types.TYPE_LOCALITY,)
+        _exercise_text_scan(checked, types.TYPE_LOCALITY)
     else:
-        chain = (
+        for type_name in (
             types.TYPE_LOCALITY,
             types.TYPE_POSTAL_TOWN,
             types.TYPE_SUBLOCALITY_LEVEL_1,
             types.TYPE_SUBLOCALITY_LEVEL_2,
-        )
-    for type_name in chain:
-        _exercise_membership(checked, type_name)
-    plain = _plain_components(checked)
+        ):
+            if _exercise_text_scan(checked, type_name):
+                break
+    encoded = _core_components(plain)
     needs_postal, rows = _placekit.address_city_resolutions(
-        plain, False, country, None
+        encoded, False, _encode_text(country), None
     )
     if needs_postal:
         # The chain reached the postal locality carrier, so the
@@ -733,13 +892,20 @@ def _city_resolutions(
         # touches it, and the chain runs again with it in hand.
         locality = postal_locality(place.postal_address)
         needs_postal, rows = _placekit.address_city_resolutions(
-            plain, True, country, locality
+            encoded, True, _encode_text(country), _encode_text(locality)
         )
     # The core echoes the country code it was handed as a plain
     # value. Each result carries the code as sent, so the caller
     # supplied object itself goes back into every row.
     return tuple(
-        CityResolution(row[0], row[1], row[2], country, row[4], row[5])
+        CityResolution(
+            _decode_text(row[0]),
+            row[1],
+            row[2],
+            country,
+            _decode_text(row[4]),
+            row[5],
+        )
         for row in rows
     )
 
@@ -753,7 +919,8 @@ def city_resolutions(place: Place) -> tuple[CityResolution, ...]:
     mailing town differ, where it holds both values in that
     order and each carries the other in its competing fields.
     """
-    return _city_resolutions(place, _checked_place(place))
+    checked, plain = _checked_place_and_plain(place)
+    return _city_resolutions(place, checked, plain)
 
 
 @_entry_guard
@@ -774,20 +941,24 @@ def resolve_city(place: Place) -> CityResolution:
 
 
 def _resolve_district(
-    place: Place, checked: Sequence[AddressComponent]
+    place: Place,
+    checked: Sequence[AddressComponent],
+    plain: Sequence[
+        tuple[Optional[str], Optional[str], tuple[Optional[str], ...]]
+    ],
 ) -> DistrictResolution:
-    country = _country_code(place, checked)
+    country = _country_code(place, checked, plain)
     route = _routing_country(country)
     if route == "JP":
-        _exercise_membership(checked, types.TYPE_SUBLOCALITY_LEVEL_2)
+        _exercise_text_scan(checked, types.TYPE_SUBLOCALITY_LEVEL_2)
     if route == "AE":
-        _exercise_membership(checked, types.TYPE_SUBLOCALITY_LEVEL_1)
+        _exercise_text_scan(checked, types.TYPE_SUBLOCALITY_LEVEL_1)
     row = _placekit.address_district_resolution(
-        _plain_components(checked), country
+        _core_components(plain), _encode_text(country)
     )
     # The core echoes the country code as a plain value and the
     # result carries the code as sent, as in the city reading.
-    return DistrictResolution(row[0], row[1], row[2], country)
+    return DistrictResolution(_decode_text(row[0]), row[1], row[2], country)
 
 
 @_entry_guard
@@ -802,7 +973,8 @@ def resolve_district(place: Place) -> DistrictResolution:
     sublocality is never a district source under any
     circumstance.
     """
-    return _resolve_district(place, _checked_place(place))
+    checked, plain = _checked_place_and_plain(place)
+    return _resolve_district(place, checked, plain)
 
 
 @_entry_guard
@@ -834,21 +1006,46 @@ def has_subpremise(components: Sequence[AddressComponent]) -> bool:
     return find_component(components, types.TYPE_SUBPREMISE) is not None
 
 
-def _component_flags(checked: Sequence[AddressComponent]) -> tuple[bool, ...]:
-    for type_name in (
-        types.TYPE_STREET_NUMBER,
-        types.TYPE_ROUTE,
-        types.TYPE_PREMISE,
-        types.TYPE_SUBPREMISE,
-        types.TYPE_POSTAL_CODE,
-        types.TYPE_COUNTRY,
-        types.TYPE_LOCALITY,
-        types.TYPE_POSTAL_TOWN,
-        types.TYPE_SUBLOCALITY_LEVEL_1,
-        types.TYPE_SUBLOCALITY_LEVEL_2,
-    ):
-        _exercise_membership(checked, type_name)
-    return _placekit.address_component_flags(_plain_components(checked))
+def _flags_core(
+    plain: Sequence[
+        tuple[Optional[str], Optional[str], tuple[Optional[str], ...]]
+    ],
+) -> tuple[bool, ...]:
+    """Ask the core for the component flag row over the plain
+    capture.
+
+    The exercise at each site runs over the caller objects on
+    that site's own scan terms, and the core then computes the
+    flags over the extracted type names. The row runs from
+    street number presence through the no street level flag,
+    in the order the AddressFlags fields consume them.
+    """
+    return _placekit.address_component_flags(_core_components(plain))
+
+
+def _exercise_flag_helpers(checked: Sequence[AddressComponent]) -> None:
+    """Run the flag scans' membership tests in the old
+    composition order, on each scan's own terms.
+
+    The composite reading runs the component helpers first, in
+    field order, and the old composition short circuited inside
+    the premise level sequence and inside the no street level
+    chain, so the exercise mirrors those short circuits and
+    then lets the composed postal, country and city readings
+    exercise themselves in their own order.
+    """
+    _exercise_first_match(checked, types.TYPE_STREET_NUMBER)
+    _exercise_first_match(checked, types.TYPE_ROUTE)
+    _exercise_first_match(checked, types.TYPE_PREMISE)
+    _exercise_first_match(checked, types.TYPE_SUBPREMISE)
+    if _exercise_first_match(checked, types.TYPE_PREMISE):
+        if not _exercise_first_match(checked, types.TYPE_STREET_NUMBER):
+            _exercise_first_match(checked, types.TYPE_ROUTE)
+    _exercise_membership(checked, types.TYPE_ROUTE)
+    if not _exercise_first_match(checked, types.TYPE_STREET_NUMBER):
+        if not _exercise_first_match(checked, types.TYPE_ROUTE):
+            if not _exercise_first_match(checked, types.TYPE_PREMISE):
+                _exercise_first_match(checked, types.TYPE_SUBPREMISE)
 
 
 @_entry_guard
@@ -858,7 +1055,9 @@ def spans_multiple_routes(components: Sequence[AddressComponent]) -> bool:
     Only route components with a nonempty long text count, so
     one named route beside one empty route reads as one route.
     """
-    return _component_flags(_checked_components(components))[5]
+    checked, plain = _checked_components_and_plain(components)
+    _exercise_membership(checked, types.TYPE_ROUTE)
+    return _flags_core(plain)[5]
 
 
 @_entry_guard
@@ -869,7 +1068,12 @@ def has_no_street_level(components: Sequence[AddressComponent]) -> bool:
     or a subpremise component, and the flag is true only when
     none of the four exists.
     """
-    return _component_flags(_checked_components(components))[6]
+    checked, plain = _checked_components_and_plain(components)
+    if not _exercise_first_match(checked, types.TYPE_STREET_NUMBER):
+        if not _exercise_first_match(checked, types.TYPE_ROUTE):
+            if not _exercise_first_match(checked, types.TYPE_PREMISE):
+                _exercise_first_match(checked, types.TYPE_SUBPREMISE)
+    return _flags_core(plain)[6]
 
 
 @_entry_guard
@@ -881,7 +1085,11 @@ def is_premise_level(place: Place) -> bool:
     which is the Japanese block addressing shape the recorded
     corpus holds.
     """
-    return _component_flags(_checked_place(place))[4]
+    checked, plain = _checked_place_and_plain(place)
+    if _exercise_first_match(checked, types.TYPE_PREMISE):
+        if not _exercise_first_match(checked, types.TYPE_STREET_NUMBER):
+            _exercise_first_match(checked, types.TYPE_ROUTE)
+    return _flags_core(plain)[4]
 
 
 @_entry_guard
@@ -894,7 +1102,8 @@ def address_flags(place: Place) -> AddressFlags:
     when a country read yields a value, and the city carrier
     flag is true exactly when city resolution yields a value.
     """
-    checked = _checked_place(place)
+    checked, plain = _checked_place_and_plain(place)
+    _exercise_flag_helpers(checked)
     (
         street_number,
         route,
@@ -903,7 +1112,7 @@ def address_flags(place: Place) -> AddressFlags:
         premise_level,
         spans,
         no_street_level,
-    ) = _component_flags(checked)
+    ) = _flags_core(plain)
     return AddressFlags(
         has_street_number=street_number,
         has_route=route,
@@ -912,11 +1121,13 @@ def address_flags(place: Place) -> AddressFlags:
         is_premise_level=premise_level,
         spans_multiple_routes=spans,
         has_no_street_level=no_street_level,
-        has_postal_code=_postal_code(place, checked).status == POSTAL_PRESENT,
+        has_postal_code=(
+            _postal_code(place, checked, plain).status == POSTAL_PRESENT
+        ),
         has_postal_address=place.postal_address is not None,
-        has_country=_country_code(place, checked) is not None,
+        has_country=_country_code(place, checked, plain) is not None,
         has_city_carrier=(
-            _city_resolutions(place, checked)[0].value is not None
+            _city_resolutions(place, checked, plain)[0].value is not None
         ),
     )
 
@@ -944,10 +1155,18 @@ def split_compound_code(compound_code: Optional[str]) -> Optional[PlusCodeParts]
         )
     if not compound_code:
         return None
-    parts = _placekit.address_split_compound_code(compound_code)
-    if parts is None:
+    # The split runs here on the caller string itself, the way
+    # the pre port helper ran it, because its partition and its
+    # strip are calls on that object and no core reading over
+    # an extracted value can stand in for them. A partition
+    # that raises surfaces from the caller object and a strip
+    # that answers with other text shapes the answer, both as
+    # the old helper behaved.
+    code_part, separator, rest = compound_code.partition(" ")
+    locality_text = rest.strip()
+    if not separator or not code_part or not locality_text:
         return None
-    return PlusCodeParts(code_part=parts[0], locality_text=parts[1])
+    return PlusCodeParts(code_part=code_part, locality_text=locality_text)
 
 
 @_entry_guard
