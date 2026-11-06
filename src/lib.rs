@@ -675,6 +675,17 @@ fn mask_sorted_order(keys: Vec<(u8, Vec<u8>)>) -> Vec<usize> {
     placekit_core::mask::sorted_order(&keys)
 }
 
+/// Whether the trace of one payload walk stays within the depth
+/// limit. The Python layer walks the payload itself, through the
+/// caller container protocols, and sends one event per container
+/// visit as a kind tag and a depth. Only the verdict crosses, and
+/// the trace is capped at the first visit past the limit, so no
+/// container past that visit was touched (Round 55).
+#[pyfunction]
+fn models_payload_depth_within_limit(trace: Vec<(u8, u32)>) -> bool {
+    placekit_core::models::payload_depth_within_limit(&trace)
+}
+
 /// Body fields the typed requests declare as booleans, by wire name.
 /// The generic converter below applies Python truthiness to these,
 /// so the string "false" used to reach the API as true (R5-R2). The
@@ -1280,6 +1291,7 @@ fn _placekit(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(mask_valid_path, m)?)?;
     m.add_function(wrap_pyfunction!(mask_unique_indices, m)?)?;
     m.add_function(wrap_pyfunction!(mask_sorted_order, m)?)?;
+    m.add_function(wrap_pyfunction!(models_payload_depth_within_limit, m)?)?;
     Ok(())
 }
 

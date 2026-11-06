@@ -29,6 +29,7 @@ __all__ = [
     "mask_sorted_order",
     "mask_unique_indices",
     "mask_valid_path",
+    "models_payload_depth_within_limit",
 ]
 
 def address_matching_indices(
@@ -94,6 +95,7 @@ def address_split_compound_code(
 def mask_valid_path(path: bytes) -> bool: ...
 def mask_unique_indices(paths: list[bytes]) -> list[int]: ...
 def mask_sorted_order(keys: list[tuple[int, bytes]]) -> list[int]: ...
+def models_payload_depth_within_limit(trace: list[tuple[int, int]]) -> bool: ...
 
 @final
 class CallHandle:
