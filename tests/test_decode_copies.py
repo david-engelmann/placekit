@@ -518,14 +518,34 @@ def test_place_level_readings_validate_the_components_once(monkeypatch):
 def test_address_flags_pays_one_scan_per_composed_reading(monkeypatch):
     place = _corpus_place()
     scans = {"cores": 0, "public": 0}
-    for core in ("_scan_components", "_scan_component", "_scan_long_text"):
-        real = getattr(address, core)
+    # Since the Round 53 port the scans run in the Rust core, so
+    # the counted surface is the core boundary itself, the twelve
+    # address functions on the extension module. The pin keeps
+    # its shape and its count discipline from the Python scan
+    # cores it counted before the port.
+    from placekit import _placekit
 
-        def counting(checked, type_name, _real=real):
+    for name in (
+        "address_matching_indices",
+        "address_untyped_indices",
+        "address_first_long_text",
+        "address_first_short_text",
+        "address_long_texts",
+        "address_short_texts",
+        "address_country_code",
+        "address_city_resolutions",
+        "address_district_resolution",
+        "address_postal_code_result",
+        "address_component_flags",
+        "address_split_compound_code",
+    ):
+        real = getattr(_placekit, name)
+
+        def counting(*args, _real=real):
             scans["cores"] += 1
-            return _real(checked, type_name)
+            return _real(*args)
 
-        monkeypatch.setattr(address, core, counting)
+        monkeypatch.setattr(_placekit, name, counting)
     real_find = address.find_components
 
     def counting_find(components, type_name):
@@ -534,12 +554,15 @@ def test_address_flags_pays_one_scan_per_composed_reading(monkeypatch):
 
     monkeypatch.setattr(address, "find_components", counting_find)
     address.address_flags(place)
-    # The flags compose from the scan cores over the one checked
-    # list, twelve core scans for the richest corpus place, and
-    # no reading routes back through the public find helpers,
-    # which rescan the list on every call. Before the sharing,
-    # one flags call paid 16.2 find_components scans over the
-    # same list, and this pin keeps that shape from returning
-    # while every other test stays green.
+    # The flags compose from core readings over the one checked
+    # list, seven core crossings for the richest corpus place
+    # (the flags reading itself, then the postal, country and
+    # city readings the snapshot composes, the country read
+    # paying once per reading that asks for it), and no reading
+    # routes back through the public find helpers, which rescan
+    # the list on every call. Before the sharing, one flags call
+    # paid 16.2 find_components scans over the same list, and
+    # this pin keeps that shape from returning while every other
+    # test stays green.
     assert scans["public"] == 0
-    assert scans["cores"] == 12
+    assert scans["cores"] == 7
