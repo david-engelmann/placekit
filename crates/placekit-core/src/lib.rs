@@ -6,11 +6,13 @@
 //! tested and reused on its own. The `placekit` Python package is a thin
 //! PyO3 binding over it.
 
+pub mod address;
 pub mod client;
 pub mod errors;
 pub mod mask;
 pub mod models;
 
+pub use address::ComponentData;
 pub use client::{Client, ClientBuilder, DEFAULT_BASE_URL};
 pub use errors::Error;
 pub use mask::FieldMask;

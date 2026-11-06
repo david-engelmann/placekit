@@ -38,7 +38,7 @@ use futures_util::FutureExt;
 use placekit_core::models::{
     AutocompleteRequest, NearbySearchRequest, PhotoMedia, TextSearchRequest,
 };
-use placekit_core::{Client as CoreClient, Error as CoreError, FieldMask};
+use placekit_core::{Client as CoreClient, ComponentData, Error as CoreError, FieldMask};
 use pyo3::create_exception;
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
@@ -437,6 +437,190 @@ fn mask_from(py: Python<'_>, fields: Option<Vec<String>>) -> PyResult<Option<Fie
         None => Ok(None),
         Some(paths) => FieldMask::new(paths).map(Some).map_err(|e| to_pyerr(py, e)),
     }
+}
+
+/// One address component as the Python layer hands it over, a
+/// `(long_text, short_text, types)` triple of plain values. The
+/// Python `placekit.address` module validates and materialises
+/// caller values through its own funnels first, so what arrives
+/// here is already checked data and the conversion into the
+/// core's [`ComponentData`] cannot fail on shape.
+type PyComponent = (Option<String>, Option<String>, Vec<Option<String>>);
+
+fn components_from(py_components: Vec<PyComponent>) -> Vec<ComponentData> {
+    py_components
+        .into_iter()
+        .map(|(long_text, short_text, types)| ComponentData {
+            long_text,
+            short_text,
+            types,
+        })
+        .collect()
+}
+
+/// A city resolution as a plain tuple for the Python layer to
+/// wrap in its `CityResolution` dataclass, in field order.
+type PyCityResolution = (
+    Option<String>,
+    Option<String>,
+    String,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+);
+
+fn city_to_py(resolution: placekit_core::address::CityResolution) -> PyCityResolution {
+    (
+        resolution.value,
+        resolution.carrier.map(str::to_owned),
+        resolution.confidence.to_owned(),
+        resolution.country_code,
+        resolution.competing_value,
+        resolution.competing_carrier.map(str::to_owned),
+    )
+}
+
+/// The indices of every component whose types contain the name.
+#[pyfunction]
+fn address_matching_indices(components: Vec<PyComponent>, type_name: &str) -> Vec<usize> {
+    placekit_core::address::matching_indices(&components_from(components), type_name)
+}
+
+/// The indices of every component whose types list is empty.
+#[pyfunction]
+fn address_untyped_indices(components: Vec<PyComponent>) -> Vec<usize> {
+    placekit_core::address::untyped_indices(&components_from(components))
+}
+
+/// The first nonempty long text among the matches for a type.
+#[pyfunction]
+fn address_first_long_text(components: Vec<PyComponent>, type_name: &str) -> Option<String> {
+    placekit_core::address::first_long_text(&components_from(components), type_name)
+}
+
+/// The first nonempty short text among the matches for a type.
+#[pyfunction]
+fn address_first_short_text(components: Vec<PyComponent>, type_name: &str) -> Option<String> {
+    placekit_core::address::first_short_text(&components_from(components), type_name)
+}
+
+/// The nonempty long texts of every match, in list order.
+#[pyfunction]
+fn address_long_texts(components: Vec<PyComponent>, type_name: &str) -> Vec<String> {
+    placekit_core::address::long_texts(&components_from(components), type_name)
+}
+
+/// The nonempty short texts of every match, in list order.
+#[pyfunction]
+fn address_short_texts(components: Vec<PyComponent>, type_name: &str) -> Vec<String> {
+    placekit_core::address::short_texts(&components_from(components), type_name)
+}
+
+/// The short text of the first country component with one.
+#[pyfunction]
+fn address_country_code(components: Vec<PyComponent>) -> Option<String> {
+    placekit_core::address::country_code_from_components(&components_from(components))
+}
+
+/// Every city reading for one component set and country code.
+///
+/// The last two arguments carry the lazy read state the core
+/// documents. `postal_locality_read` false says the field has
+/// not been read yet, and the answer then comes back as
+/// `(true, [])` when the chain reaches the postal carrier, so
+/// the Python layer reads the field at exactly the point the
+/// old implementation read it and calls again with the flag set
+/// and the read value (or `None`) in hand.
+#[pyfunction]
+fn address_city_resolutions(
+    components: Vec<PyComponent>,
+    postal_locality_read: bool,
+    country_code: Option<String>,
+    postal_locality: Option<String>,
+) -> (bool, Vec<PyCityResolution>) {
+    let postal = if postal_locality_read {
+        placekit_core::address::PostalLocality::Read(postal_locality)
+    } else {
+        placekit_core::address::PostalLocality::Unread
+    };
+    match placekit_core::address::city_resolutions(
+        &components_from(components),
+        country_code.as_deref(),
+        &postal,
+    ) {
+        placekit_core::address::CityResolutions::Done(done) => {
+            (false, done.into_iter().map(city_to_py).collect())
+        }
+        placekit_core::address::CityResolutions::NeedsPostalLocality => (true, Vec::new()),
+    }
+}
+
+/// The district reading for one component set and country code,
+/// as a `(value, carrier, confidence, country_code)` tuple.
+#[pyfunction]
+fn address_district_resolution(
+    components: Vec<PyComponent>,
+    country_code: Option<String>,
+) -> (Option<String>, Option<String>, String, Option<String>) {
+    let district = placekit_core::address::district_resolution(
+        &components_from(components),
+        country_code.as_deref(),
+    );
+    (
+        district.value,
+        district.carrier.map(str::to_owned),
+        district.confidence.to_owned(),
+        district.country_code,
+    )
+}
+
+/// The postal code reading composed from the two carrier
+/// values, as a `(value, carrier, status, country_code,
+/// competing_value, competing_carrier)` tuple.
+#[pyfunction]
+fn address_postal_code_result(
+    country_code: Option<String>,
+    component_value: Option<String>,
+    postal_value: Option<String>,
+) -> PyCityResolution {
+    let result =
+        placekit_core::address::postal_code_result(country_code, component_value, postal_value);
+    (
+        result.value,
+        result.carrier.map(str::to_owned),
+        result.status.to_owned(),
+        result.country_code,
+        result.competing_value,
+        result.competing_carrier.map(str::to_owned),
+    )
+}
+
+/// The component level presence flags for one component set, as
+/// a `(has_street_number, has_route, has_premise, has_subpremise,
+/// is_premise_level, spans_multiple_routes, has_no_street_level)`
+/// tuple.
+#[pyfunction]
+fn address_component_flags(
+    components: Vec<PyComponent>,
+) -> (bool, bool, bool, bool, bool, bool, bool) {
+    let flags = placekit_core::address::component_flags(&components_from(components));
+    (
+        flags.has_street_number,
+        flags.has_route,
+        flags.has_premise,
+        flags.has_subpremise,
+        flags.is_premise_level,
+        flags.spans_multiple_routes,
+        flags.has_no_street_level,
+    )
+}
+
+/// Split a compound plus code at its first space, returning the
+/// `(code_part, locality_text)` pair or `None` when the input is
+/// not a compound form.
+#[pyfunction]
+fn address_split_compound_code(compound_code: &str) -> Option<(String, String)> {
+    placekit_core::address::split_compound_code(compound_code)
 }
 
 /// Body fields the typed requests declare as booleans, by wire name.
@@ -1028,6 +1212,18 @@ fn _placekit(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyCallHandle>()?;
     m.add("PlacesError", m.py().get_type::<PlacesError>())?;
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;
+    m.add_function(wrap_pyfunction!(address_matching_indices, m)?)?;
+    m.add_function(wrap_pyfunction!(address_untyped_indices, m)?)?;
+    m.add_function(wrap_pyfunction!(address_first_long_text, m)?)?;
+    m.add_function(wrap_pyfunction!(address_first_short_text, m)?)?;
+    m.add_function(wrap_pyfunction!(address_long_texts, m)?)?;
+    m.add_function(wrap_pyfunction!(address_short_texts, m)?)?;
+    m.add_function(wrap_pyfunction!(address_country_code, m)?)?;
+    m.add_function(wrap_pyfunction!(address_city_resolutions, m)?)?;
+    m.add_function(wrap_pyfunction!(address_district_resolution, m)?)?;
+    m.add_function(wrap_pyfunction!(address_postal_code_result, m)?)?;
+    m.add_function(wrap_pyfunction!(address_component_flags, m)?)?;
+    m.add_function(wrap_pyfunction!(address_split_compound_code, m)?)?;
     Ok(())
 }
 
