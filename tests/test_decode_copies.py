@@ -477,13 +477,18 @@ def test_forked_child_token_reset_restores_then_refuses_again(tmp_path):
 
 def _counted_validations(monkeypatch):
     calls = {"n": 0}
-    real = address._checked_components
+    # The counted surface is the one validation funnel every
+    # reading passes through. Since the Round 53 repair the
+    # funnel is the pair form, which returns the plain capture
+    # the core conversion consumes beside the checked tuple, so
+    # the count discipline rides on that name.
+    real = address._checked_components_and_plain
 
     def counting(components):
         calls["n"] += 1
         return real(components)
 
-    monkeypatch.setattr(address, "_checked_components", counting)
+    monkeypatch.setattr(address, "_checked_components_and_plain", counting)
     return calls
 
 
@@ -519,16 +524,20 @@ def test_address_flags_pays_one_scan_per_composed_reading(monkeypatch):
     place = _corpus_place()
     scans = {"cores": 0, "public": 0}
     # Since the Round 53 port the scans run in the Rust core, so
-    # the counted surface is the core boundary itself, the twelve
+    # the counted surface is the core boundary itself, the
     # address functions on the extension module. The pin keeps
     # its shape and its count discipline from the Python scan
-    # cores it counted before the port.
+    # cores it counted before the port. The repair pass added
+    # the first long text index form to the boundary, which the
+    # postal reading crosses in place of the text form, and the
+    # counted set names it with the rest.
     from placekit import _placekit
 
     for name in (
         "address_matching_indices",
         "address_untyped_indices",
         "address_first_long_text",
+        "address_first_long_text_index",
         "address_first_short_text",
         "address_long_texts",
         "address_short_texts",
