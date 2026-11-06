@@ -12381,3 +12381,481 @@ def test_loader_derivation_keeps_a_helper_beside_a_manager_standing_as_a_subscri
         """,
     )
     assert loaders == {"reader", "shadow_search"}
+
+
+def test_loader_derivation_refuses_a_helper_rewritten_through_a_class_getitem_method_of_a_class_reached_through_a_name_bound_to_a_subscript_standing_on_a_name_bound_to_a_conditional_expression_over_a_loop_target_name(
+    tmp_path,
+):
+    # Repair pass twenty nine, red team family 87,
+    # form 87a. The loop element is a tuple holding
+    # a base class whose dunder class getitem
+    # method calls the installer, a first name is
+    # bound to a conditional expression over the
+    # loop name, a second name is bound to a
+    # subscript standing on the first name, and the
+    # appended code evaluates the second name
+    # subscripted by int. The pass twenty eight
+    # name branch inspected the syntactic category
+    # of the subscript's base, and the base here is
+    # a plain name, so the branch never fired
+    # although the selection reading resolves the
+    # subscript itself. The branch now qualifies a
+    # base standing as a name bound to a yielding
+    # form, the yielded loop target name standing
+    # in the value position on the yielding
+    # principle, so the selection the name denotes
+    # is read on the same terms and the method is
+    # counted, while a name bound to a subscript
+    # standing on a literal still resolves through
+    # the denotation alone at this seat.
+    loaders = _derived_loaders(
+        tmp_path,
+        """
+        ROOT = None
+
+
+        def reader(name):
+            return (ROOT / name).read_bytes()
+
+
+        def shadow_search(client, raw_response, name):
+            return reader(name)
+
+
+        def _install_shadow():
+            global shadow_search
+            shadow_search = lambda client, raw_response, name: None
+
+
+        class _ShadowBase:
+            @classmethod
+            def __class_getitem__(cls, item):
+                _install_shadow()
+                return cls
+
+
+        for _elt in [(_ShadowBase,)]:
+            pass
+
+
+        _held = _elt if True else ()
+
+        _sel = _held[0]
+
+        _sel[int]
+        """,
+    )
+    assert loaders == {"reader"}
+
+
+def test_loader_derivation_refuses_a_helper_rewritten_through_a_class_getitem_method_of_a_class_reached_through_a_name_bound_to_a_subscript_standing_on_a_name_bound_to_a_boolean_expression_over_a_loop_target_name(
+    tmp_path,
+):
+    # Repair pass twenty nine, red team family 87,
+    # form 87b. The loop element is a tuple holding
+    # a base class whose dunder class getitem
+    # method calls the installer, a first name is
+    # bound to a boolean expression over the loop
+    # name, a second name is bound to a subscript
+    # standing on the first name, and the appended
+    # code evaluates the second name subscripted by
+    # int. The base of the qualifying subscript is
+    # a plain name bound to a yielding form, so the
+    # pass twenty eight trigger, which inspected
+    # the category of the base itself, never fired.
+    # The branch now qualifies a base standing as
+    # a name bound to a yielding form on the same
+    # terms as form 87a, and the method is counted.
+    loaders = _derived_loaders(
+        tmp_path,
+        """
+        ROOT = None
+
+
+        def reader(name):
+            return (ROOT / name).read_bytes()
+
+
+        def shadow_search(client, raw_response, name):
+            return reader(name)
+
+
+        def _install_shadow():
+            global shadow_search
+            shadow_search = lambda client, raw_response, name: None
+
+
+        class _ShadowBase:
+            @classmethod
+            def __class_getitem__(cls, item):
+                _install_shadow()
+                return cls
+
+
+        for _elt in [(_ShadowBase,)]:
+            pass
+
+
+        _held = _elt or ()
+
+        _sel = _held[0]
+
+        _sel[int]
+        """,
+    )
+    assert loaders == {"reader"}
+
+
+def test_loader_derivation_refuses_a_helper_rewritten_through_a_class_getitem_method_of_a_class_reached_through_a_name_bound_to_a_subscript_standing_on_a_name_bound_to_a_walrus_expression_over_a_loop_target_name(
+    tmp_path,
+):
+    # Repair pass twenty nine, red team family 87,
+    # form 87c. The loop element is a tuple holding
+    # a base class whose dunder class getitem
+    # method calls the installer, a first name is
+    # bound to a walrus expression yielding the
+    # loop name, a second name is bound to a
+    # subscript standing on the first name, and the
+    # appended code evaluates the second name
+    # subscripted by int. The base of the
+    # qualifying subscript is a plain name bound to
+    # a yielding form, so the pass twenty eight
+    # trigger never fired. The branch now
+    # qualifies a base standing as a name bound to
+    # a yielding form on the same terms as form
+    # 87a, and the method is counted.
+    loaders = _derived_loaders(
+        tmp_path,
+        """
+        ROOT = None
+
+
+        def reader(name):
+            return (ROOT / name).read_bytes()
+
+
+        def shadow_search(client, raw_response, name):
+            return reader(name)
+
+
+        def _install_shadow():
+            global shadow_search
+            shadow_search = lambda client, raw_response, name: None
+
+
+        class _ShadowBase:
+            @classmethod
+            def __class_getitem__(cls, item):
+                _install_shadow()
+                return cls
+
+
+        for _elt in [(_ShadowBase,)]:
+            pass
+
+
+        _held = (held := _elt)
+
+        _sel = _held[0]
+
+        _sel[int]
+        """,
+    )
+    assert loaders == {"reader"}
+
+
+def test_loader_derivation_refuses_a_helper_rewritten_through_a_class_getitem_method_of_a_class_reached_through_a_name_bound_to_a_conditional_expression_over_a_name_bound_to_a_subscript_standing_on_a_walrus_expression_over_a_loop_target_name(
+    tmp_path,
+):
+    # Repair pass twenty nine, red team family 87,
+    # form 87d. The loop element is a tuple holding
+    # a base class whose dunder class getitem
+    # method calls the installer, a first name is
+    # bound to a subscript standing on a walrus
+    # expression over the loop name, a second name
+    # is bound to a conditional expression over the
+    # first name, and the appended code evaluates
+    # the second name subscripted by int. The pass
+    # twenty eight name branch inspected the
+    # syntactic category of the outer name's
+    # binding, and the binding here is a yielding
+    # form rather than the qualifying subscript
+    # itself, so the branch never fired although
+    # the value the form yields is the very name
+    # the branch resolves standing unmediated. The
+    # branch now follows a name bound through a
+    # yielding form to the value the form yields, a
+    # name so yielded resolved on the same terms in
+    # turn, so the method is counted, while a name
+    # bound by plain assignment to such a name
+    # still resolves through the denotation alone
+    # at this seat.
+    loaders = _derived_loaders(
+        tmp_path,
+        """
+        ROOT = None
+
+
+        def reader(name):
+            return (ROOT / name).read_bytes()
+
+
+        def shadow_search(client, raw_response, name):
+            return reader(name)
+
+
+        def _install_shadow():
+            global shadow_search
+            shadow_search = lambda client, raw_response, name: None
+
+
+        class _ShadowBase:
+            @classmethod
+            def __class_getitem__(cls, item):
+                _install_shadow()
+                return cls
+
+
+        for _elt in [(_ShadowBase,)]:
+            pass
+
+
+        _sel0 = (held := _elt)[0]
+
+        _sel = _sel0 if True else _sel0
+
+        _sel[int]
+        """,
+    )
+    assert loaders == {"reader"}
+
+
+def test_loader_derivation_refuses_a_helper_rewritten_through_a_class_getitem_method_of_a_class_reached_through_a_name_bound_to_a_walrus_expression_over_a_name_bound_to_a_subscript_standing_on_a_walrus_expression_over_a_loop_target_name(
+    tmp_path,
+):
+    # Repair pass twenty nine, red team family 87,
+    # form 87e. The loop element is a tuple holding
+    # a base class whose dunder class getitem
+    # method calls the installer, a first name is
+    # bound to a subscript standing on a walrus
+    # expression over the loop name, a second name
+    # is bound to a walrus expression yielding the
+    # first name, and the appended code evaluates
+    # the second name subscripted by int. The outer
+    # name's binding is a yielding form rather than
+    # the qualifying subscript itself, so the pass
+    # twenty eight trigger never fired. The branch
+    # now follows a name bound through a yielding
+    # form to the value the form yields on the same
+    # terms as form 87d, and the method is counted.
+    loaders = _derived_loaders(
+        tmp_path,
+        """
+        ROOT = None
+
+
+        def reader(name):
+            return (ROOT / name).read_bytes()
+
+
+        def shadow_search(client, raw_response, name):
+            return reader(name)
+
+
+        def _install_shadow():
+            global shadow_search
+            shadow_search = lambda client, raw_response, name: None
+
+
+        class _ShadowBase:
+            @classmethod
+            def __class_getitem__(cls, item):
+                _install_shadow()
+                return cls
+
+
+        for _elt in [(_ShadowBase,)]:
+            pass
+
+
+        _sel0 = (held := _elt)[0]
+
+        _sel = (held := _sel0)
+
+        _sel[int]
+        """,
+    )
+    assert loaders == {"reader"}
+
+
+def test_loader_derivation_refuses_a_helper_rewritten_through_a_class_getitem_method_of_a_class_reached_through_a_name_bound_to_a_boolean_expression_over_a_name_bound_to_a_subscript_standing_on_a_walrus_expression_over_a_loop_target_name(
+    tmp_path,
+):
+    # Repair pass twenty nine, red team family 87,
+    # form 87f. The loop element is a tuple holding
+    # a base class whose dunder class getitem
+    # method calls the installer, a first name is
+    # bound to a subscript standing on a walrus
+    # expression over the loop name, a second name
+    # is bound to a boolean expression over the
+    # first name, and the appended code evaluates
+    # the second name subscripted by int. The outer
+    # name's binding is a yielding form rather than
+    # the qualifying subscript itself, so the pass
+    # twenty eight trigger never fired. The branch
+    # now follows a name bound through a yielding
+    # form to the value the form yields on the same
+    # terms as form 87d, and the method is counted.
+    loaders = _derived_loaders(
+        tmp_path,
+        """
+        ROOT = None
+
+
+        def reader(name):
+            return (ROOT / name).read_bytes()
+
+
+        def shadow_search(client, raw_response, name):
+            return reader(name)
+
+
+        def _install_shadow():
+            global shadow_search
+            shadow_search = lambda client, raw_response, name: None
+
+
+        class _ShadowBase:
+            @classmethod
+            def __class_getitem__(cls, item):
+                _install_shadow()
+                return cls
+
+
+        for _elt in [(_ShadowBase,)]:
+            pass
+
+
+        _sel0 = (held := _elt)[0]
+
+        _sel = _sel0 or _sel0
+
+        _sel[int]
+        """,
+    )
+    assert loaders == {"reader"}
+
+
+def test_loader_derivation_keeps_a_helper_beside_a_quiet_class_reached_through_a_name_bound_to_a_subscript_standing_on_a_name_bound_to_a_conditional_expression_over_a_loop_target_name(
+    tmp_path,
+):
+    # Repair pass twenty nine, the boundary control
+    # beside family 87 at the class getitem seat.
+    # The same inner hop shape as form 87a stands
+    # here on a class whose dunder class getitem
+    # method only returns the class, reached
+    # through a name bound to a subscript standing
+    # on a name bound to a conditional expression
+    # over the loop name. The widened branch now
+    # resolves the name to the class the selection
+    # yields and the method is counted at the
+    # statement, but it calls nothing and assigns
+    # nothing under a global declaration, so the
+    # counting this pass adds refuses nothing here
+    # and the faithful helper keeps its derivation
+    # beside the reader. The control marks the
+    # family turning on the method behind the
+    # resolution performing the rewrite.
+    loaders = _derived_loaders(
+        tmp_path,
+        """
+        ROOT = None
+
+
+        def reader(name):
+            return (ROOT / name).read_bytes()
+
+
+        def shadow_search(client, raw_response, name):
+            return reader(name)
+
+
+        def _install_shadow():
+            global shadow_search
+            shadow_search = lambda client, raw_response, name: None
+
+
+        class _QuietBase:
+            @classmethod
+            def __class_getitem__(cls, item):
+                return cls
+
+
+        for _elt in [(_QuietBase,)]:
+            pass
+
+
+        _held = _elt if True else ()
+
+        _sel = _held[0]
+
+        _sel[int]
+        """,
+    )
+    assert loaders == {"reader", "shadow_search"}
+
+
+def test_loader_derivation_keeps_a_helper_beside_a_class_getitem_method_reached_through_a_name_bound_to_a_subscript_standing_on_a_literal(
+    tmp_path,
+):
+    # Repair pass twenty nine, the fence control
+    # beside family 87 at the class getitem seat.
+    # A name is bound to a subscript standing on a
+    # literal holding a base class whose dunder
+    # class getitem method calls the installer, and
+    # the appended code evaluates the name
+    # subscripted by int, so the method really runs
+    # at runtime. The seat resolves the name
+    # through the denotation alone where the
+    # subscript it is bound to stands on a literal,
+    # the fence the pass twenty eight text states
+    # in terms and family 78 stands on, so the
+    # counting names no class here and the faithful
+    # helper keeps its derivation beside the reader.
+    # The control is pinned at this pass because
+    # the widening beside it follows yielding forms
+    # on both sides of the qualifying subscript,
+    # and the fence has to be seen holding at
+    # exactly the width the shipped text states.
+    loaders = _derived_loaders(
+        tmp_path,
+        """
+        ROOT = None
+
+
+        def reader(name):
+            return (ROOT / name).read_bytes()
+
+
+        def shadow_search(client, raw_response, name):
+            return reader(name)
+
+
+        def _install_shadow():
+            global shadow_search
+            shadow_search = lambda client, raw_response, name: None
+
+
+        class _ShadowBase:
+            @classmethod
+            def __class_getitem__(cls, item):
+                _install_shadow()
+                return cls
+
+
+        _sel = (_ShadowBase,)[0]
+
+        _sel[int]
+        """,
+    )
+    assert loaders == {"reader", "shadow_search"}
