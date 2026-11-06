@@ -477,6 +477,11 @@ type PyCityResolution = (
     Option<String>,
 );
 
+/// A district resolution as a plain tuple for the Python layer
+/// to wrap in its `DistrictResolution` dataclass, in field
+/// order, on the same crossing terms as the city row.
+type PyDistrictResolution = (Option<Vec<u8>>, Option<String>, String, Option<Vec<u8>>);
+
 fn city_to_py(resolution: placekit_core::address::CityResolution) -> PyCityResolution {
     (
         resolution.value,
@@ -582,7 +587,7 @@ fn address_city_resolutions(
 fn address_district_resolution(
     components: Vec<PyComponent>,
     country_code: Option<Vec<u8>>,
-) -> (Option<Vec<u8>>, Option<String>, String, Option<Vec<u8>>) {
+) -> PyDistrictResolution {
     let district = placekit_core::address::district_resolution(
         &components_from(components),
         country_code.as_deref(),

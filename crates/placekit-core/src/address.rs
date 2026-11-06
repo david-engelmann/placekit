@@ -53,7 +53,6 @@ const TYPE_LOCALITY: &[u8] = b"locality";
 const TYPE_POSTAL_TOWN: &[u8] = b"postal_town";
 const TYPE_SUBLOCALITY_LEVEL_1: &[u8] = b"sublocality_level_1";
 const TYPE_SUBLOCALITY_LEVEL_2: &[u8] = b"sublocality_level_2";
-const TYPE_POSTAL_CODE: &[u8] = b"postal_code";
 const TYPE_COUNTRY: &[u8] = b"country";
 const TYPE_STREET_NUMBER: &[u8] = b"street_number";
 const TYPE_ROUTE: &[u8] = b"route";
@@ -906,7 +905,7 @@ mod tests {
     fn jp_postal_both_carriers() {
         // Mirrors test_jp_postal_silence.
         let place = a6_block_addressing();
-        let component_value = first_long_text(&place.components, TYPE_POSTAL_CODE);
+        let component_value = first_long_text(&place.components, b"postal_code");
         let result = postal_code_result(
             Some(bytes("JP")),
             component_value,
@@ -971,7 +970,7 @@ mod tests {
         let place = a9_no_postal_codes();
         let result = postal_code_result(
             Some(bytes("AE")),
-            first_long_text(&place.components, TYPE_POSTAL_CODE),
+            first_long_text(&place.components, b"postal_code"),
             place.postal_postal_code().map(bytes),
         );
         assert_eq!(result.value, None);
