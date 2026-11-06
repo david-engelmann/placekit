@@ -54,6 +54,30 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
 // ---------------------------------------------------------------------------
+// Payload depth verdict
+// ---------------------------------------------------------------------------
+
+/// The payload nesting limit the depth verdict enforces. The Python
+/// layer pins the same limit as its own `_MAX_PAYLOAD_DEPTH`
+/// constant and names it in the refusal message, and the two layers
+/// are held together by behavior pins at depths just inside, at and
+/// past the limit on both sides.
+pub const MAX_PAYLOAD_DEPTH: u32 = 128;
+
+/// Whether one payload walk stayed within the depth limit.
+///
+/// The Python layer walks a caller payload itself, reading through
+/// the caller container protocols, and records one trace event per
+/// container visit as a kind tag and a depth. Tag 0 is a mapping and
+/// tag 1 is a list or tuple. The verdict reads the depths alone,
+/// because the walk and its reads are Python behavior the trace only
+/// reports. The trace stops at the first visit past the limit, so a
+/// breach is decided by that event and nothing past it was read.
+pub fn payload_depth_within_limit(trace: &[(u8, u32)]) -> bool {
+    trace.iter().all(|event| event.1 <= MAX_PAYLOAD_DEPTH)
+}
+
+// ---------------------------------------------------------------------------
 // Shared building blocks
 // ---------------------------------------------------------------------------
 
@@ -1935,5 +1959,58 @@ mod tests {
             serde_json::to_string(&req).unwrap(),
             r#"{"input":"Bianco","origin":{"latitude":-33.86,"longitude":151.2}}"#
         );
+    }
+
+    #[test]
+    fn payload_depth_empty_trace_stays_within_limit() {
+        // Mirrors the empty trace arm of the Python pin
+        // test_binding_verdict_over_hand_traces in
+        // tests/test_round55.py.
+        assert!(payload_depth_within_limit(&[]));
+    }
+
+    #[test]
+    fn payload_depth_shallow_trace_stays_within_limit() {
+        // Mirrors the shallow trace arm of the Python pin
+        // test_binding_verdict_over_hand_traces in
+        // tests/test_round55.py.
+        let trace: Vec<(u8, u32)> = vec![(0, 1), (1, 2), (0, 2), (1, 3)];
+        assert!(payload_depth_within_limit(&trace));
+    }
+
+    #[test]
+    fn payload_depth_trace_at_the_limit_stays_within_limit() {
+        // Mirrors the at the limit arm of the Python pin
+        // test_binding_verdict_over_hand_traces in
+        // tests/test_round55.py, for both kind tags.
+        let at: Vec<(u8, u32)> = (1..=MAX_PAYLOAD_DEPTH).map(|depth| (0, depth)).collect();
+        assert!(payload_depth_within_limit(&at));
+        let at: Vec<(u8, u32)> = (1..=MAX_PAYLOAD_DEPTH).map(|depth| (1, depth)).collect();
+        assert!(payload_depth_within_limit(&at));
+    }
+
+    #[test]
+    fn payload_depth_trace_past_the_limit_breaches() {
+        // Mirrors the past the limit arm of the Python pin
+        // test_binding_verdict_over_hand_traces in
+        // tests/test_round55.py.
+        let past: Vec<(u8, u32)> = (1..=(MAX_PAYLOAD_DEPTH + 1))
+            .map(|depth| (0, depth))
+            .collect();
+        assert!(!payload_depth_within_limit(&past));
+    }
+
+    #[test]
+    fn payload_depth_breach_position_decides() {
+        // The verdict reads every event rather than the last one, so
+        // a breach anywhere in the trace breaches even when the
+        // visits after it come back inside the limit. Mirrors the
+        // reads every event arm of the Python pin
+        // test_binding_verdict_over_hand_traces in
+        // tests/test_round55.py.
+        let trace: Vec<(u8, u32)> = vec![(0, 1), (0, MAX_PAYLOAD_DEPTH + 1), (1, 2)];
+        assert!(!payload_depth_within_limit(&trace));
+        let trace: Vec<(u8, u32)> = vec![(0, MAX_PAYLOAD_DEPTH + 1)];
+        assert!(!payload_depth_within_limit(&trace));
     }
 }
