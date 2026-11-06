@@ -445,7 +445,12 @@ fn mask_from(py: Python<'_>, fields: Option<Vec<String>>) -> PyResult<Option<Fie
 /// caller values through its own funnels first, so what arrives
 /// here is already checked data and the conversion into the
 /// core's [`ComponentData`] cannot fail on shape.
-type PyComponent = (Option<String>, Option<String>, Vec<Option<String>>);
+///
+/// Texts cross as byte strings in the form the Python layer's
+/// surrogatepass codec produces, so a text carrying a lone
+/// surrogate reaches the core exactly and comes back exactly,
+/// where a Rust `String` crossing could not encode it at all.
+type PyComponent = (Option<Vec<u8>>, Option<Vec<u8>>, Vec<Option<Vec<u8>>>);
 
 fn components_from(py_components: Vec<PyComponent>) -> Vec<ComponentData> {
     py_components
@@ -459,13 +464,16 @@ fn components_from(py_components: Vec<PyComponent>) -> Vec<ComponentData> {
 }
 
 /// A city resolution as a plain tuple for the Python layer to
-/// wrap in its `CityResolution` dataclass, in field order.
+/// wrap in its `CityResolution` dataclass, in field order. Text
+/// fields cross as byte strings on the same terms as the
+/// component texts, and the carrier and confidence names cross
+/// as plain strings because the core mints them itself.
 type PyCityResolution = (
-    Option<String>,
+    Option<Vec<u8>>,
     Option<String>,
     String,
-    Option<String>,
-    Option<String>,
+    Option<Vec<u8>>,
+    Option<Vec<u8>>,
     Option<String>,
 );
 
@@ -482,8 +490,8 @@ fn city_to_py(resolution: placekit_core::address::CityResolution) -> PyCityResol
 
 /// The indices of every component whose types contain the name.
 #[pyfunction]
-fn address_matching_indices(components: Vec<PyComponent>, type_name: &str) -> Vec<usize> {
-    placekit_core::address::matching_indices(&components_from(components), type_name)
+fn address_matching_indices(components: Vec<PyComponent>, type_name: Vec<u8>) -> Vec<usize> {
+    placekit_core::address::matching_indices(&components_from(components), &type_name)
 }
 
 /// The indices of every component whose types list is empty.
@@ -494,31 +502,42 @@ fn address_untyped_indices(components: Vec<PyComponent>) -> Vec<usize> {
 
 /// The first nonempty long text among the matches for a type.
 #[pyfunction]
-fn address_first_long_text(components: Vec<PyComponent>, type_name: &str) -> Option<String> {
-    placekit_core::address::first_long_text(&components_from(components), type_name)
+fn address_first_long_text(components: Vec<PyComponent>, type_name: Vec<u8>) -> Option<Vec<u8>> {
+    placekit_core::address::first_long_text(&components_from(components), &type_name)
+}
+
+/// The index of the component the first nonempty long text
+/// among the matches for a type sits on, so the Python layer
+/// can hand back the caller component's own text object.
+#[pyfunction]
+fn address_first_long_text_index(
+    components: Vec<PyComponent>,
+    type_name: Vec<u8>,
+) -> Option<usize> {
+    placekit_core::address::first_long_text_index(&components_from(components), &type_name)
 }
 
 /// The first nonempty short text among the matches for a type.
 #[pyfunction]
-fn address_first_short_text(components: Vec<PyComponent>, type_name: &str) -> Option<String> {
-    placekit_core::address::first_short_text(&components_from(components), type_name)
+fn address_first_short_text(components: Vec<PyComponent>, type_name: Vec<u8>) -> Option<Vec<u8>> {
+    placekit_core::address::first_short_text(&components_from(components), &type_name)
 }
 
 /// The nonempty long texts of every match, in list order.
 #[pyfunction]
-fn address_long_texts(components: Vec<PyComponent>, type_name: &str) -> Vec<String> {
-    placekit_core::address::long_texts(&components_from(components), type_name)
+fn address_long_texts(components: Vec<PyComponent>, type_name: Vec<u8>) -> Vec<Vec<u8>> {
+    placekit_core::address::long_texts(&components_from(components), &type_name)
 }
 
 /// The nonempty short texts of every match, in list order.
 #[pyfunction]
-fn address_short_texts(components: Vec<PyComponent>, type_name: &str) -> Vec<String> {
-    placekit_core::address::short_texts(&components_from(components), type_name)
+fn address_short_texts(components: Vec<PyComponent>, type_name: Vec<u8>) -> Vec<Vec<u8>> {
+    placekit_core::address::short_texts(&components_from(components), &type_name)
 }
 
 /// The short text of the first country component with one.
 #[pyfunction]
-fn address_country_code(components: Vec<PyComponent>) -> Option<String> {
+fn address_country_code(components: Vec<PyComponent>) -> Option<Vec<u8>> {
     placekit_core::address::country_code_from_components(&components_from(components))
 }
 
@@ -536,8 +555,8 @@ fn address_country_code(components: Vec<PyComponent>) -> Option<String> {
 fn address_city_resolutions(
     components: Vec<PyComponent>,
     postal_locality_read: bool,
-    country_code: Option<String>,
-    postal_locality: Option<String>,
+    country_code: Option<Vec<u8>>,
+    postal_locality: Option<Vec<u8>>,
 ) -> (bool, Vec<PyCityResolution>) {
     let postal = if postal_locality_read {
         placekit_core::address::PostalLocality::Read(postal_locality)
@@ -562,8 +581,8 @@ fn address_city_resolutions(
 #[pyo3(signature = (components, country_code))]
 fn address_district_resolution(
     components: Vec<PyComponent>,
-    country_code: Option<String>,
-) -> (Option<String>, Option<String>, String, Option<String>) {
+    country_code: Option<Vec<u8>>,
+) -> (Option<Vec<u8>>, Option<String>, String, Option<Vec<u8>>) {
     let district = placekit_core::address::district_resolution(
         &components_from(components),
         country_code.as_deref(),
@@ -582,9 +601,9 @@ fn address_district_resolution(
 #[pyfunction]
 #[pyo3(signature = (country_code, component_value, postal_value))]
 fn address_postal_code_result(
-    country_code: Option<String>,
-    component_value: Option<String>,
-    postal_value: Option<String>,
+    country_code: Option<Vec<u8>>,
+    component_value: Option<Vec<u8>>,
+    postal_value: Option<Vec<u8>>,
 ) -> PyCityResolution {
     let result =
         placekit_core::address::postal_code_result(country_code, component_value, postal_value);
@@ -622,8 +641,8 @@ fn address_component_flags(
 /// `(code_part, locality_text)` pair or `None` when the input is
 /// not a compound form.
 #[pyfunction]
-fn address_split_compound_code(compound_code: &str) -> Option<(String, String)> {
-    placekit_core::address::split_compound_code(compound_code)
+fn address_split_compound_code(compound_code: Vec<u8>) -> Option<(Vec<u8>, Vec<u8>)> {
+    placekit_core::address::split_compound_code(&compound_code)
 }
 
 /// Body fields the typed requests declare as booleans, by wire name.
@@ -1218,6 +1237,7 @@ fn _placekit(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(address_matching_indices, m)?)?;
     m.add_function(wrap_pyfunction!(address_untyped_indices, m)?)?;
     m.add_function(wrap_pyfunction!(address_first_long_text, m)?)?;
+    m.add_function(wrap_pyfunction!(address_first_long_text_index, m)?)?;
     m.add_function(wrap_pyfunction!(address_first_short_text, m)?)?;
     m.add_function(wrap_pyfunction!(address_long_texts, m)?)?;
     m.add_function(wrap_pyfunction!(address_short_texts, m)?)?;

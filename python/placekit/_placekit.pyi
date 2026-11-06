@@ -18,6 +18,7 @@ __all__ = [
     "address_country_code",
     "address_district_resolution",
     "address_first_long_text",
+    "address_first_long_text_index",
     "address_first_short_text",
     "address_long_texts",
     "address_matching_indices",
@@ -28,61 +29,65 @@ __all__ = [
 ]
 
 def address_matching_indices(
-    components: list[tuple[Optional[str], Optional[str], Sequence[Optional[str]]]],
-    type_name: str,
+    components: list[tuple[Optional[bytes], Optional[bytes], Sequence[Optional[bytes]]]],
+    type_name: bytes,
 ) -> list[int]: ...
 def address_untyped_indices(
-    components: list[tuple[Optional[str], Optional[str], Sequence[Optional[str]]]]
+    components: list[tuple[Optional[bytes], Optional[bytes], Sequence[Optional[bytes]]]]
 ) -> list[int]: ...
 def address_first_long_text(
-    components: list[tuple[Optional[str], Optional[str], Sequence[Optional[str]]]],
-    type_name: str,
-) -> Optional[str]: ...
+    components: list[tuple[Optional[bytes], Optional[bytes], Sequence[Optional[bytes]]]],
+    type_name: bytes,
+) -> Optional[bytes]: ...
+def address_first_long_text_index(
+    components: list[tuple[Optional[bytes], Optional[bytes], Sequence[Optional[bytes]]]],
+    type_name: bytes,
+) -> Optional[int]: ...
 def address_first_short_text(
-    components: list[tuple[Optional[str], Optional[str], Sequence[Optional[str]]]],
-    type_name: str,
-) -> Optional[str]: ...
+    components: list[tuple[Optional[bytes], Optional[bytes], Sequence[Optional[bytes]]]],
+    type_name: bytes,
+) -> Optional[bytes]: ...
 def address_long_texts(
-    components: list[tuple[Optional[str], Optional[str], Sequence[Optional[str]]]],
-    type_name: str,
-) -> list[str]: ...
+    components: list[tuple[Optional[bytes], Optional[bytes], Sequence[Optional[bytes]]]],
+    type_name: bytes,
+) -> list[bytes]: ...
 def address_short_texts(
-    components: list[tuple[Optional[str], Optional[str], Sequence[Optional[str]]]],
-    type_name: str,
-) -> list[str]: ...
+    components: list[tuple[Optional[bytes], Optional[bytes], Sequence[Optional[bytes]]]],
+    type_name: bytes,
+) -> list[bytes]: ...
 def address_country_code(
-    components: list[tuple[Optional[str], Optional[str], Sequence[Optional[str]]]]
-) -> Optional[str]: ...
+    components: list[tuple[Optional[bytes], Optional[bytes], Sequence[Optional[bytes]]]]
+) -> Optional[bytes]: ...
 def address_city_resolutions(
-    components: list[tuple[Optional[str], Optional[str], Sequence[Optional[str]]]],
+    components: list[tuple[Optional[bytes], Optional[bytes], Sequence[Optional[bytes]]]],
     postal_locality_read: bool,
-    country_code: Optional[str],
-    postal_locality: Optional[str],
+    country_code: Optional[bytes],
+    postal_locality: Optional[bytes],
 ) -> tuple[
     bool,
     list[
         tuple[
-            Optional[str], Optional[str], str, Optional[str], Optional[str], Optional[str]
+            Optional[bytes], Optional[str], str, Optional[bytes], Optional[bytes], Optional[str]
         ]
     ],
 ]: ...
 def address_district_resolution(
-    components: list[tuple[Optional[str], Optional[str], Sequence[Optional[str]]]],
-    country_code: Optional[str],
-) -> tuple[Optional[str], Optional[str], str, Optional[str]]: ...
+    components: list[tuple[Optional[bytes], Optional[bytes], Sequence[Optional[bytes]]]],
+    country_code: Optional[bytes],
+) -> tuple[Optional[bytes], Optional[str], str, Optional[bytes]]: ...
 def address_postal_code_result(
-    country_code: Optional[str],
-    component_value: Optional[str],
-    postal_value: Optional[str],
+    country_code: Optional[bytes],
+    component_value: Optional[bytes],
+    postal_value: Optional[bytes],
 ) -> tuple[
-    Optional[str], Optional[str], str, Optional[str], Optional[str], Optional[str]
+    Optional[bytes], Optional[str], str, Optional[bytes], Optional[bytes], Optional[str]
 ]: ...
 def address_component_flags(
-    components: list[tuple[Optional[str], Optional[str], Sequence[Optional[str]]]]
+    components: list[tuple[Optional[bytes], Optional[bytes], Sequence[Optional[bytes]]]]
 ) -> tuple[bool, bool, bool, bool, bool, bool, bool]: ...
 def address_split_compound_code(
-    compound_code: str,
-) -> Optional[tuple[str, str]]: ...
+    compound_code: bytes,
+) -> Optional[tuple[bytes, bytes]]: ...
 
 @final
 class CallHandle:
