@@ -331,7 +331,7 @@ def _checked_components_and_plain(
             if not isinstance(long_text, str):
                 raise ConfigError(
                     "component long_text must be a string, "
-                    f"got {_safe_repr(long_text)}"
+                    f"got {_safe_repr(component.long_text)}"
                 )
         short_text = component.short_text
         if short_text is not None:
@@ -339,7 +339,7 @@ def _checked_components_and_plain(
             if not isinstance(short_text, str):
                 raise ConfigError(
                     "component short_text must be a string, "
-                    f"got {_safe_repr(short_text)}"
+                    f"got {_safe_repr(component.short_text)}"
                 )
         types_value = component.types
         if not isinstance(types_value, (list, tuple)):
@@ -351,7 +351,7 @@ def _checked_components_and_plain(
             # test in the search then raised a bare TypeError.
             raise ConfigError(
                 "component types must be a list of strings, "
-                f"got {_safe_repr(types_value)}"
+                f"got {_safe_repr(component.types)}"
             )
         type_items = []
         for item in component.types:
@@ -569,6 +569,66 @@ def _exercise_text_scan(
         if type_name in component.types and component.long_text:
             return True
     return False
+
+
+def _first_text_index(
+    plain: Sequence[
+        tuple[Optional[str], Optional[str], tuple[Optional[str], ...]]
+    ],
+    type_name: str,
+) -> Optional[int]:
+    """Return the index of the component the first nonempty long
+    text scan for the name lands on, computed over the plain
+    capture.
+
+    The comparison runs on the encoded forms of the captured
+    values, so the scan performs no test on a caller object,
+    and it lands where the core lands on the same capture, the
+    first component whose captured types hold the name and
+    whose captured long text is nonempty. The city and district
+    readings use the index to read the landing component's own
+    long text object live at the point the old scan returned
+    it, which is the read the return of a text scan consists
+    of. When the exercise on the caller objects and this scan
+    of the capture disagree, which only an unstable value can
+    cause, the reading falls back to the core value.
+    """
+    needle = _encode_text(type_name)
+    for index, (long_text, _short_text, type_items) in enumerate(plain):
+        encoded_items = tuple(_encode_text(item) for item in type_items)
+        if needle in encoded_items and _encode_text(long_text):
+            return index
+    return None
+
+
+def _exercise_route_texts(
+    checked: Sequence[AddressComponent],
+    plain: Sequence[
+        tuple[Optional[str], Optional[str], tuple[Optional[str], ...]]
+    ],
+) -> None:
+    """Read the long text of every route match once, in match
+    order.
+
+    The old spans composition walked its route matches after a
+    full membership scan and read each match's long text for
+    its truthiness count, a live read of every match whether
+    the count landed or not. The core counts from the captured
+    values, so that filter read has no counterpart in the
+    delegation unless it runs here, beside the membership
+    exercise the spans sites already run. The matches are
+    named over the plain capture on encoded forms, so naming
+    them performs no test on a caller object, and the read
+    itself runs on the caller component, in match order, so a
+    text that raises on the read surfaces where the old filter
+    raised. The values are the core's to count and are
+    discarded here.
+    """
+    needle = _encode_text(types.TYPE_ROUTE)
+    for index, (_long_text, _short_text, type_items) in enumerate(plain):
+        encoded_items = tuple(_encode_text(item) for item in type_items)
+        if needle in encoded_items:
+            checked[index].long_text
 
 
 # Routing into a stated answer or the generic chain matches the
@@ -820,6 +880,17 @@ def _postal_code(
     component_text = plain[index][0] if index is not None else None
     component_object = checked[index].long_text if index is not None else None
     postal_value = postal_code_from_postal_address(place.postal_address)
+    if component_object is not None and postal_value is not None:
+        # The old composition compared its two carrier values
+        # at this point, a call on the caller supplied text
+        # objects themselves that no reading over the extracted
+        # values performs. The comparison still runs here, so
+        # an equality that raises surfaces where the old
+        # composition raised, and its answer is left unused.
+        # The core composes the result from the values as sent,
+        # which is the boundary the module states for an
+        # operation that returns a wrong answer.
+        bool(component_object == postal_value)
     row = _placekit.address_postal_code_result(
         _encode_text(country),
         _encode_text(component_text),
@@ -868,24 +939,57 @@ def _city_resolutions(
     # scan alone, and the generic chain ran its scans in order
     # and stopped exercising further needles at the first scan
     # that landed, because the old chain returned there.
+    #
+    # A landed scan also read its landing text again as the
+    # value it returned, and that return read is a live read of
+    # the caller object, at the point the scan landed. Each
+    # chain therefore reads the landing component's own long
+    # text object as its scan lands, in scan order, and the
+    # rows below carry that object wherever the old chain
+    # carried its returned text. The index that names the
+    # landing component is computed over the plain capture, so
+    # naming it performs no test on a caller object. When the
+    # exercise and the capture disagree, which only an unstable
+    # value can cause, no live object stands for the carrier
+    # and the row keeps the core value.
+    live: dict[str, str] = {}
+
+    def land(type_name: str, carrier: str) -> bool:
+        if not _exercise_text_scan(checked, type_name):
+            return False
+        index = _first_text_index(plain, type_name)
+        if index is not None:
+            live[carrier] = checked[index].long_text
+        return True
+
     if route in CONTESTED_COUNTRIES:
-        _exercise_text_scan(checked, types.TYPE_LOCALITY)
-        _exercise_text_scan(checked, types.TYPE_POSTAL_TOWN)
+        land(types.TYPE_LOCALITY, CARRIER_LOCALITY)
+        land(types.TYPE_POSTAL_TOWN, CARRIER_POSTAL_TOWN)
+        if CARRIER_LOCALITY in live and CARRIER_POSTAL_TOWN in live:
+            # The old British composition compared its two
+            # landed texts before it built its rows, a call on
+            # the caller supplied text objects themselves. The
+            # comparison still runs here, so an equality that
+            # raises surfaces where the old composition raised,
+            # and its answer is left unused, on the same terms
+            # as the postal comparison in _postal_code.
+            bool(live[CARRIER_LOCALITY] != live[CARRIER_POSTAL_TOWN])
     elif route in PRECEDENCE_COUNTRIES:
-        _exercise_text_scan(checked, types.TYPE_LOCALITY)
+        land(types.TYPE_LOCALITY, CARRIER_LOCALITY)
     else:
-        for type_name in (
-            types.TYPE_LOCALITY,
-            types.TYPE_POSTAL_TOWN,
-            types.TYPE_SUBLOCALITY_LEVEL_1,
-            types.TYPE_SUBLOCALITY_LEVEL_2,
+        for type_name, carrier in (
+            (types.TYPE_LOCALITY, CARRIER_LOCALITY),
+            (types.TYPE_POSTAL_TOWN, CARRIER_POSTAL_TOWN),
+            (types.TYPE_SUBLOCALITY_LEVEL_1, CARRIER_SUBLOCALITY_LEVEL_1),
+            (types.TYPE_SUBLOCALITY_LEVEL_2, CARRIER_SUBLOCALITY_LEVEL_2),
         ):
-            if _exercise_text_scan(checked, type_name):
+            if land(type_name, carrier):
                 break
     encoded = _core_components(plain)
     needs_postal, rows = _placekit.address_city_resolutions(
         encoded, False, _encode_text(country), None
     )
+    locality = None
     if needs_postal:
         # The chain reached the postal locality carrier, so the
         # field is read here, at exactly the point the chain
@@ -894,16 +998,29 @@ def _city_resolutions(
         needs_postal, rows = _placekit.address_city_resolutions(
             encoded, True, _encode_text(country), _encode_text(locality)
         )
+
+    def carried(value: Optional[bytes], carrier: Optional[str]):
+        # A row whose carrier a landed scan read live carries
+        # that caller object, and a row on the postal locality
+        # carrier carries the postal field object the chain
+        # read, the way the old chains returned both untouched.
+        # Any other row keeps the value the core composed.
+        if carrier in live:
+            return live[carrier]
+        if carrier == CARRIER_POSTAL_ADDRESS_LOCALITY and locality is not None:
+            return locality
+        return _decode_text(value)
+
     # The core echoes the country code it was handed as a plain
     # value. Each result carries the code as sent, so the caller
     # supplied object itself goes back into every row.
     return tuple(
         CityResolution(
-            _decode_text(row[0]),
+            carried(row[0], row[1]),
             row[1],
             row[2],
             country,
-            _decode_text(row[4]),
+            carried(row[4], row[5]),
             row[5],
         )
         for row in rows
@@ -949,16 +1066,31 @@ def _resolve_district(
 ) -> DistrictResolution:
     country = _country_code(place, checked, plain)
     route = _routing_country(country)
+    type_name = None
+    carrier = None
     if route == "JP":
-        _exercise_text_scan(checked, types.TYPE_SUBLOCALITY_LEVEL_2)
+        type_name = types.TYPE_SUBLOCALITY_LEVEL_2
+        carrier = CARRIER_SUBLOCALITY_LEVEL_2
     if route == "AE":
-        _exercise_text_scan(checked, types.TYPE_SUBLOCALITY_LEVEL_1)
+        type_name = types.TYPE_SUBLOCALITY_LEVEL_1
+        carrier = CARRIER_SUBLOCALITY_LEVEL_1
+    # A routed chain ran one text scan, and a landed scan read
+    # its landing text again as the value it returned. When the
+    # scan lands here, the landing component's own long text
+    # object is read live at the same point, on the terms the
+    # city readings state, and the result carries that object.
+    live_value = None
+    if type_name is not None and _exercise_text_scan(checked, type_name):
+        index = _first_text_index(plain, type_name)
+        if index is not None:
+            live_value = checked[index].long_text
     row = _placekit.address_district_resolution(
         _core_components(plain), _encode_text(country)
     )
     # The core echoes the country code as a plain value and the
     # result carries the code as sent, as in the city reading.
-    return DistrictResolution(_decode_text(row[0]), row[1], row[2], country)
+    value = live_value if row[1] == carrier else _decode_text(row[0])
+    return DistrictResolution(value, row[1], row[2], country)
 
 
 @_entry_guard
@@ -1023,15 +1155,22 @@ def _flags_core(
     return _placekit.address_component_flags(_core_components(plain))
 
 
-def _exercise_flag_helpers(checked: Sequence[AddressComponent]) -> None:
+def _exercise_flag_helpers(
+    checked: Sequence[AddressComponent],
+    plain: Sequence[
+        tuple[Optional[str], Optional[str], tuple[Optional[str], ...]]
+    ],
+) -> None:
     """Run the flag scans' membership tests in the old
     composition order, on each scan's own terms.
 
     The composite reading runs the component helpers first, in
     field order, and the old composition short circuited inside
     the premise level sequence and inside the no street level
-    chain, so the exercise mirrors those short circuits and
-    then lets the composed postal, country and city readings
+    chain, so the exercise mirrors those short circuits. The
+    spans composition between them runs its route text pass
+    over its matches, the filter read the old spans helper ran.
+    The composed postal, country and city readings then
     exercise themselves in their own order.
     """
     _exercise_first_match(checked, types.TYPE_STREET_NUMBER)
@@ -1042,6 +1181,7 @@ def _exercise_flag_helpers(checked: Sequence[AddressComponent]) -> None:
         if not _exercise_first_match(checked, types.TYPE_STREET_NUMBER):
             _exercise_first_match(checked, types.TYPE_ROUTE)
     _exercise_membership(checked, types.TYPE_ROUTE)
+    _exercise_route_texts(checked, plain)
     if not _exercise_first_match(checked, types.TYPE_STREET_NUMBER):
         if not _exercise_first_match(checked, types.TYPE_ROUTE):
             if not _exercise_first_match(checked, types.TYPE_PREMISE):
@@ -1057,6 +1197,7 @@ def spans_multiple_routes(components: Sequence[AddressComponent]) -> bool:
     """
     checked, plain = _checked_components_and_plain(components)
     _exercise_membership(checked, types.TYPE_ROUTE)
+    _exercise_route_texts(checked, plain)
     return _flags_core(plain)[5]
 
 
@@ -1103,7 +1244,7 @@ def address_flags(place: Place) -> AddressFlags:
     flag is true exactly when city resolution yields a value.
     """
     checked, plain = _checked_place_and_plain(place)
-    _exercise_flag_helpers(checked)
+    _exercise_flag_helpers(checked, plain)
     (
         street_number,
         route,
