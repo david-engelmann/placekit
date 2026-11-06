@@ -50,14 +50,14 @@ impl FixturePlace {
 pub(crate) fn a8_tokyo_english() -> FixturePlace {
     FixturePlace {
         components: vec![
-            ComponentData { long_text: Some("15".to_string()), short_text: Some("15".to_string()), types: vec![Some("premise".to_string())] },
-            ComponentData { long_text: Some("6".to_string()), short_text: Some("6".to_string()), types: vec![Some("sublocality_level_4".to_string()), Some("sublocality".to_string()), Some("political".to_string())] },
-            ComponentData { long_text: Some("2-chōme".to_string()), short_text: Some("2-chōme".to_string()), types: vec![Some("sublocality_level_3".to_string()), Some("sublocality".to_string()), Some("political".to_string())] },
-            ComponentData { long_text: Some("Asakusa".to_string()), short_text: Some("Asakusa".to_string()), types: vec![Some("sublocality_level_2".to_string()), Some("sublocality".to_string()), Some("political".to_string())] },
-            ComponentData { long_text: Some("Taito City".to_string()), short_text: Some("Taito City".to_string()), types: vec![Some("locality".to_string()), Some("political".to_string())] },
-            ComponentData { long_text: Some("Tokyo".to_string()), short_text: Some("Tokyo".to_string()), types: vec![Some("administrative_area_level_1".to_string()), Some("political".to_string())] },
-            ComponentData { long_text: Some("Japan".to_string()), short_text: Some("JP".to_string()), types: vec![Some("country".to_string()), Some("political".to_string())] },
-            ComponentData { long_text: Some("111-0032".to_string()), short_text: Some("111-0032".to_string()), types: vec![Some("postal_code".to_string())] },
+            ComponentData { long_text: Some("15".as_bytes().to_vec()), short_text: Some("15".as_bytes().to_vec()), types: vec![Some("premise".as_bytes().to_vec())] },
+            ComponentData { long_text: Some("6".as_bytes().to_vec()), short_text: Some("6".as_bytes().to_vec()), types: vec![Some("sublocality_level_4".as_bytes().to_vec()), Some("sublocality".as_bytes().to_vec()), Some("political".as_bytes().to_vec())] },
+            ComponentData { long_text: Some("2-chōme".as_bytes().to_vec()), short_text: Some("2-chōme".as_bytes().to_vec()), types: vec![Some("sublocality_level_3".as_bytes().to_vec()), Some("sublocality".as_bytes().to_vec()), Some("political".as_bytes().to_vec())] },
+            ComponentData { long_text: Some("Asakusa".as_bytes().to_vec()), short_text: Some("Asakusa".as_bytes().to_vec()), types: vec![Some("sublocality_level_2".as_bytes().to_vec()), Some("sublocality".as_bytes().to_vec()), Some("political".as_bytes().to_vec())] },
+            ComponentData { long_text: Some("Taito City".as_bytes().to_vec()), short_text: Some("Taito City".as_bytes().to_vec()), types: vec![Some("locality".as_bytes().to_vec()), Some("political".as_bytes().to_vec())] },
+            ComponentData { long_text: Some("Tokyo".as_bytes().to_vec()), short_text: Some("Tokyo".as_bytes().to_vec()), types: vec![Some("administrative_area_level_1".as_bytes().to_vec()), Some("political".as_bytes().to_vec())] },
+            ComponentData { long_text: Some("Japan".as_bytes().to_vec()), short_text: Some("JP".as_bytes().to_vec()), types: vec![Some("country".as_bytes().to_vec()), Some("political".as_bytes().to_vec())] },
+            ComponentData { long_text: Some("111-0032".as_bytes().to_vec()), short_text: Some("111-0032".as_bytes().to_vec()), types: vec![Some("postal_code".as_bytes().to_vec())] },
         ],
         postal: Some(FixturePostal {
             region_code: Some("JP"),
@@ -72,14 +72,14 @@ pub(crate) fn a8_tokyo_english() -> FixturePlace {
 pub(crate) fn a8_tokyo_japanese() -> FixturePlace {
     FixturePlace {
         components: vec![
-            ComponentData { long_text: Some("１５".to_string()), short_text: Some("１５".to_string()), types: vec![Some("premise".to_string())] },
-            ComponentData { long_text: Some("６".to_string()), short_text: Some("６".to_string()), types: vec![Some("sublocality_level_4".to_string()), Some("sublocality".to_string()), Some("political".to_string())] },
-            ComponentData { long_text: Some("２丁目".to_string()), short_text: Some("２丁目".to_string()), types: vec![Some("sublocality_level_3".to_string()), Some("sublocality".to_string()), Some("political".to_string())] },
-            ComponentData { long_text: Some("浅草".to_string()), short_text: Some("浅草".to_string()), types: vec![Some("sublocality_level_2".to_string()), Some("sublocality".to_string()), Some("political".to_string())] },
-            ComponentData { long_text: Some("台東区".to_string()), short_text: Some("台東区".to_string()), types: vec![Some("locality".to_string()), Some("political".to_string())] },
-            ComponentData { long_text: Some("東京都".to_string()), short_text: Some("東京都".to_string()), types: vec![Some("administrative_area_level_1".to_string()), Some("political".to_string())] },
-            ComponentData { long_text: Some("日本".to_string()), short_text: Some("JP".to_string()), types: vec![Some("country".to_string()), Some("political".to_string())] },
-            ComponentData { long_text: Some("111-0032".to_string()), short_text: Some("111-0032".to_string()), types: vec![Some("postal_code".to_string())] },
+            ComponentData { long_text: Some("１５".as_bytes().to_vec()), short_text: Some("１５".as_bytes().to_vec()), types: vec![Some("premise".as_bytes().to_vec())] },
+            ComponentData { long_text: Some("６".as_bytes().to_vec()), short_text: Some("６".as_bytes().to_vec()), types: vec![Some("sublocality_level_4".as_bytes().to_vec()), Some("sublocality".as_bytes().to_vec()), Some("political".as_bytes().to_vec())] },
+            ComponentData { long_text: Some("２丁目".as_bytes().to_vec()), short_text: Some("２丁目".as_bytes().to_vec()), types: vec![Some("sublocality_level_3".as_bytes().to_vec()), Some("sublocality".as_bytes().to_vec()), Some("political".as_bytes().to_vec())] },
+            ComponentData { long_text: Some("浅草".as_bytes().to_vec()), short_text: Some("浅草".as_bytes().to_vec()), types: vec![Some("sublocality_level_2".as_bytes().to_vec()), Some("sublocality".as_bytes().to_vec()), Some("political".as_bytes().to_vec())] },
+            ComponentData { long_text: Some("台東区".as_bytes().to_vec()), short_text: Some("台東区".as_bytes().to_vec()), types: vec![Some("locality".as_bytes().to_vec()), Some("political".as_bytes().to_vec())] },
+            ComponentData { long_text: Some("東京都".as_bytes().to_vec()), short_text: Some("東京都".as_bytes().to_vec()), types: vec![Some("administrative_area_level_1".as_bytes().to_vec()), Some("political".as_bytes().to_vec())] },
+            ComponentData { long_text: Some("日本".as_bytes().to_vec()), short_text: Some("JP".as_bytes().to_vec()), types: vec![Some("country".as_bytes().to_vec()), Some("political".as_bytes().to_vec())] },
+            ComponentData { long_text: Some("111-0032".as_bytes().to_vec()), short_text: Some("111-0032".as_bytes().to_vec()), types: vec![Some("postal_code".as_bytes().to_vec())] },
         ],
         postal: Some(FixturePostal {
             region_code: Some("JP"),
@@ -94,14 +94,14 @@ pub(crate) fn a8_tokyo_japanese() -> FixturePlace {
 pub(crate) fn a5_sublocality_chains() -> FixturePlace {
     FixturePlace {
         components: vec![
-            ComponentData { long_text: Some("１５".to_string()), short_text: Some("１５".to_string()), types: vec![Some("premise".to_string())] },
-            ComponentData { long_text: Some("６".to_string()), short_text: Some("６".to_string()), types: vec![Some("sublocality_level_4".to_string()), Some("sublocality".to_string()), Some("political".to_string())] },
-            ComponentData { long_text: Some("２丁目".to_string()), short_text: Some("２丁目".to_string()), types: vec![Some("sublocality_level_3".to_string()), Some("sublocality".to_string()), Some("political".to_string())] },
-            ComponentData { long_text: Some("浅草".to_string()), short_text: Some("浅草".to_string()), types: vec![Some("sublocality_level_2".to_string()), Some("sublocality".to_string()), Some("political".to_string())] },
-            ComponentData { long_text: Some("台東区".to_string()), short_text: Some("台東区".to_string()), types: vec![Some("locality".to_string()), Some("political".to_string())] },
-            ComponentData { long_text: Some("東京都".to_string()), short_text: Some("東京都".to_string()), types: vec![Some("administrative_area_level_1".to_string()), Some("political".to_string())] },
-            ComponentData { long_text: Some("日本".to_string()), short_text: Some("JP".to_string()), types: vec![Some("country".to_string()), Some("political".to_string())] },
-            ComponentData { long_text: Some("111-0032".to_string()), short_text: Some("111-0032".to_string()), types: vec![Some("postal_code".to_string())] },
+            ComponentData { long_text: Some("１５".as_bytes().to_vec()), short_text: Some("１５".as_bytes().to_vec()), types: vec![Some("premise".as_bytes().to_vec())] },
+            ComponentData { long_text: Some("６".as_bytes().to_vec()), short_text: Some("６".as_bytes().to_vec()), types: vec![Some("sublocality_level_4".as_bytes().to_vec()), Some("sublocality".as_bytes().to_vec()), Some("political".as_bytes().to_vec())] },
+            ComponentData { long_text: Some("２丁目".as_bytes().to_vec()), short_text: Some("２丁目".as_bytes().to_vec()), types: vec![Some("sublocality_level_3".as_bytes().to_vec()), Some("sublocality".as_bytes().to_vec()), Some("political".as_bytes().to_vec())] },
+            ComponentData { long_text: Some("浅草".as_bytes().to_vec()), short_text: Some("浅草".as_bytes().to_vec()), types: vec![Some("sublocality_level_2".as_bytes().to_vec()), Some("sublocality".as_bytes().to_vec()), Some("political".as_bytes().to_vec())] },
+            ComponentData { long_text: Some("台東区".as_bytes().to_vec()), short_text: Some("台東区".as_bytes().to_vec()), types: vec![Some("locality".as_bytes().to_vec()), Some("political".as_bytes().to_vec())] },
+            ComponentData { long_text: Some("東京都".as_bytes().to_vec()), short_text: Some("東京都".as_bytes().to_vec()), types: vec![Some("administrative_area_level_1".as_bytes().to_vec()), Some("political".as_bytes().to_vec())] },
+            ComponentData { long_text: Some("日本".as_bytes().to_vec()), short_text: Some("JP".as_bytes().to_vec()), types: vec![Some("country".as_bytes().to_vec()), Some("political".as_bytes().to_vec())] },
+            ComponentData { long_text: Some("111-0032".as_bytes().to_vec()), short_text: Some("111-0032".as_bytes().to_vec()), types: vec![Some("postal_code".as_bytes().to_vec())] },
         ],
         postal: Some(FixturePostal {
             region_code: Some("JP"),
@@ -116,14 +116,14 @@ pub(crate) fn a5_sublocality_chains() -> FixturePlace {
 pub(crate) fn a6_block_addressing() -> FixturePlace {
     FixturePlace {
         components: vec![
-            ComponentData { long_text: Some("１５".to_string()), short_text: Some("１５".to_string()), types: vec![Some("premise".to_string())] },
-            ComponentData { long_text: Some("６".to_string()), short_text: Some("６".to_string()), types: vec![Some("sublocality_level_4".to_string()), Some("sublocality".to_string()), Some("political".to_string())] },
-            ComponentData { long_text: Some("２丁目".to_string()), short_text: Some("２丁目".to_string()), types: vec![Some("sublocality_level_3".to_string()), Some("sublocality".to_string()), Some("political".to_string())] },
-            ComponentData { long_text: Some("浅草".to_string()), short_text: Some("浅草".to_string()), types: vec![Some("sublocality_level_2".to_string()), Some("sublocality".to_string()), Some("political".to_string())] },
-            ComponentData { long_text: Some("台東区".to_string()), short_text: Some("台東区".to_string()), types: vec![Some("locality".to_string()), Some("political".to_string())] },
-            ComponentData { long_text: Some("東京都".to_string()), short_text: Some("東京都".to_string()), types: vec![Some("administrative_area_level_1".to_string()), Some("political".to_string())] },
-            ComponentData { long_text: Some("日本".to_string()), short_text: Some("JP".to_string()), types: vec![Some("country".to_string()), Some("political".to_string())] },
-            ComponentData { long_text: Some("111-0032".to_string()), short_text: Some("111-0032".to_string()), types: vec![Some("postal_code".to_string())] },
+            ComponentData { long_text: Some("１５".as_bytes().to_vec()), short_text: Some("１５".as_bytes().to_vec()), types: vec![Some("premise".as_bytes().to_vec())] },
+            ComponentData { long_text: Some("６".as_bytes().to_vec()), short_text: Some("６".as_bytes().to_vec()), types: vec![Some("sublocality_level_4".as_bytes().to_vec()), Some("sublocality".as_bytes().to_vec()), Some("political".as_bytes().to_vec())] },
+            ComponentData { long_text: Some("２丁目".as_bytes().to_vec()), short_text: Some("２丁目".as_bytes().to_vec()), types: vec![Some("sublocality_level_3".as_bytes().to_vec()), Some("sublocality".as_bytes().to_vec()), Some("political".as_bytes().to_vec())] },
+            ComponentData { long_text: Some("浅草".as_bytes().to_vec()), short_text: Some("浅草".as_bytes().to_vec()), types: vec![Some("sublocality_level_2".as_bytes().to_vec()), Some("sublocality".as_bytes().to_vec()), Some("political".as_bytes().to_vec())] },
+            ComponentData { long_text: Some("台東区".as_bytes().to_vec()), short_text: Some("台東区".as_bytes().to_vec()), types: vec![Some("locality".as_bytes().to_vec()), Some("political".as_bytes().to_vec())] },
+            ComponentData { long_text: Some("東京都".as_bytes().to_vec()), short_text: Some("東京都".as_bytes().to_vec()), types: vec![Some("administrative_area_level_1".as_bytes().to_vec()), Some("political".as_bytes().to_vec())] },
+            ComponentData { long_text: Some("日本".as_bytes().to_vec()), short_text: Some("JP".as_bytes().to_vec()), types: vec![Some("country".as_bytes().to_vec()), Some("political".as_bytes().to_vec())] },
+            ComponentData { long_text: Some("111-0032".as_bytes().to_vec()), short_text: Some("111-0032".as_bytes().to_vec()), types: vec![Some("postal_code".as_bytes().to_vec())] },
         ],
         postal: Some(FixturePostal {
             region_code: Some("JP"),
@@ -138,16 +138,16 @@ pub(crate) fn a6_block_addressing() -> FixturePlace {
 pub(crate) fn a13_premise_and_subpremise() -> FixturePlace {
     FixturePlace {
         components: vec![
-            ComponentData { long_text: Some("1 Asakusa, Taito-ku".to_string()), short_text: Some("".to_string()), types: vec![] },
-            ComponentData { long_text: Some("1".to_string()), short_text: Some("1".to_string()), types: vec![Some("subpremise".to_string())] },
-            ComponentData { long_text: Some("３７".to_string()), short_text: Some("３７".to_string()), types: vec![Some("premise".to_string())] },
-            ComponentData { long_text: Some("３７".to_string()), short_text: Some("３７".to_string()), types: vec![Some("sublocality_level_4".to_string()), Some("sublocality".to_string()), Some("political".to_string())] },
-            ComponentData { long_text: Some("４丁目".to_string()), short_text: Some("４丁目".to_string()), types: vec![Some("sublocality_level_3".to_string()), Some("sublocality".to_string()), Some("political".to_string())] },
-            ComponentData { long_text: Some("浅草".to_string()), short_text: Some("浅草".to_string()), types: vec![Some("sublocality_level_2".to_string()), Some("sublocality".to_string()), Some("political".to_string())] },
-            ComponentData { long_text: Some("台東区".to_string()), short_text: Some("台東区".to_string()), types: vec![Some("locality".to_string()), Some("political".to_string())] },
-            ComponentData { long_text: Some("東京都".to_string()), short_text: Some("東京都".to_string()), types: vec![Some("administrative_area_level_1".to_string()), Some("political".to_string())] },
-            ComponentData { long_text: Some("日本".to_string()), short_text: Some("JP".to_string()), types: vec![Some("country".to_string()), Some("political".to_string())] },
-            ComponentData { long_text: Some("111-0032".to_string()), short_text: Some("111-0032".to_string()), types: vec![Some("postal_code".to_string())] },
+            ComponentData { long_text: Some("1 Asakusa, Taito-ku".as_bytes().to_vec()), short_text: Some("".as_bytes().to_vec()), types: vec![] },
+            ComponentData { long_text: Some("1".as_bytes().to_vec()), short_text: Some("1".as_bytes().to_vec()), types: vec![Some("subpremise".as_bytes().to_vec())] },
+            ComponentData { long_text: Some("３７".as_bytes().to_vec()), short_text: Some("３７".as_bytes().to_vec()), types: vec![Some("premise".as_bytes().to_vec())] },
+            ComponentData { long_text: Some("３７".as_bytes().to_vec()), short_text: Some("３７".as_bytes().to_vec()), types: vec![Some("sublocality_level_4".as_bytes().to_vec()), Some("sublocality".as_bytes().to_vec()), Some("political".as_bytes().to_vec())] },
+            ComponentData { long_text: Some("４丁目".as_bytes().to_vec()), short_text: Some("４丁目".as_bytes().to_vec()), types: vec![Some("sublocality_level_3".as_bytes().to_vec()), Some("sublocality".as_bytes().to_vec()), Some("political".as_bytes().to_vec())] },
+            ComponentData { long_text: Some("浅草".as_bytes().to_vec()), short_text: Some("浅草".as_bytes().to_vec()), types: vec![Some("sublocality_level_2".as_bytes().to_vec()), Some("sublocality".as_bytes().to_vec()), Some("political".as_bytes().to_vec())] },
+            ComponentData { long_text: Some("台東区".as_bytes().to_vec()), short_text: Some("台東区".as_bytes().to_vec()), types: vec![Some("locality".as_bytes().to_vec()), Some("political".as_bytes().to_vec())] },
+            ComponentData { long_text: Some("東京都".as_bytes().to_vec()), short_text: Some("東京都".as_bytes().to_vec()), types: vec![Some("administrative_area_level_1".as_bytes().to_vec()), Some("political".as_bytes().to_vec())] },
+            ComponentData { long_text: Some("日本".as_bytes().to_vec()), short_text: Some("JP".as_bytes().to_vec()), types: vec![Some("country".as_bytes().to_vec()), Some("political".as_bytes().to_vec())] },
+            ComponentData { long_text: Some("111-0032".as_bytes().to_vec()), short_text: Some("111-0032".as_bytes().to_vec()), types: vec![Some("postal_code".as_bytes().to_vec())] },
         ],
         postal: Some(FixturePostal {
             region_code: Some("JP"),
@@ -162,14 +162,14 @@ pub(crate) fn a13_premise_and_subpremise() -> FixturePlace {
 pub(crate) fn a7_rtl_index0() -> FixturePlace {
     FixturePlace {
         components: vec![
-            ComponentData { long_text: Some("Burj khalifa".to_string()), short_text: Some("Burj khalifa".to_string()), types: vec![Some("premise".to_string())] },
-            ComponentData { long_text: Some("57XF+J8R".to_string()), short_text: Some("57XF+J8R".to_string()), types: vec![Some("plus_code".to_string())] },
-            ComponentData { long_text: Some("122nd Floor".to_string()), short_text: Some("122nd Floor".to_string()), types: vec![Some("route".to_string())] },
-            ComponentData { long_text: Some("وسط مدينة دبي".to_string()), short_text: Some("وسط مدينة دبي".to_string()), types: vec![Some("neighborhood".to_string()), Some("political".to_string())] },
-            ComponentData { long_text: Some("برج خليفة".to_string()), short_text: Some("برج خليفة".to_string()), types: vec![Some("sublocality_level_1".to_string()), Some("sublocality".to_string()), Some("political".to_string())] },
-            ComponentData { long_text: Some("دبي".to_string()), short_text: Some("دبي".to_string()), types: vec![Some("locality".to_string()), Some("political".to_string())] },
-            ComponentData { long_text: Some("دبي".to_string()), short_text: Some("دبي".to_string()), types: vec![Some("administrative_area_level_1".to_string()), Some("political".to_string())] },
-            ComponentData { long_text: Some("الإمارات العربية المتحدة".to_string()), short_text: Some("AE".to_string()), types: vec![Some("country".to_string()), Some("political".to_string())] },
+            ComponentData { long_text: Some("Burj khalifa".as_bytes().to_vec()), short_text: Some("Burj khalifa".as_bytes().to_vec()), types: vec![Some("premise".as_bytes().to_vec())] },
+            ComponentData { long_text: Some("57XF+J8R".as_bytes().to_vec()), short_text: Some("57XF+J8R".as_bytes().to_vec()), types: vec![Some("plus_code".as_bytes().to_vec())] },
+            ComponentData { long_text: Some("122nd Floor".as_bytes().to_vec()), short_text: Some("122nd Floor".as_bytes().to_vec()), types: vec![Some("route".as_bytes().to_vec())] },
+            ComponentData { long_text: Some("وسط مدينة دبي".as_bytes().to_vec()), short_text: Some("وسط مدينة دبي".as_bytes().to_vec()), types: vec![Some("neighborhood".as_bytes().to_vec()), Some("political".as_bytes().to_vec())] },
+            ComponentData { long_text: Some("برج خليفة".as_bytes().to_vec()), short_text: Some("برج خليفة".as_bytes().to_vec()), types: vec![Some("sublocality_level_1".as_bytes().to_vec()), Some("sublocality".as_bytes().to_vec()), Some("political".as_bytes().to_vec())] },
+            ComponentData { long_text: Some("دبي".as_bytes().to_vec()), short_text: Some("دبي".as_bytes().to_vec()), types: vec![Some("locality".as_bytes().to_vec()), Some("political".as_bytes().to_vec())] },
+            ComponentData { long_text: Some("دبي".as_bytes().to_vec()), short_text: Some("دبي".as_bytes().to_vec()), types: vec![Some("administrative_area_level_1".as_bytes().to_vec()), Some("political".as_bytes().to_vec())] },
+            ComponentData { long_text: Some("الإمارات العربية المتحدة".as_bytes().to_vec()), short_text: Some("AE".as_bytes().to_vec()), types: vec![Some("country".as_bytes().to_vec()), Some("political".as_bytes().to_vec())] },
         ],
         postal: Some(FixturePostal {
             region_code: Some("AE"),
@@ -184,14 +184,14 @@ pub(crate) fn a7_rtl_index0() -> FixturePlace {
 pub(crate) fn a7_rtl_index1() -> FixturePlace {
     FixturePlace {
         components: vec![
-            ComponentData { long_text: Some("Level 3, Armani Hotel Dubai".to_string()), short_text: Some("".to_string()), types: vec![] },
-            ComponentData { long_text: Some("برج خليفة".to_string()), short_text: Some("برج خليفة".to_string()), types: vec![Some("premise".to_string())] },
-            ComponentData { long_text: Some("بوليفارد الشيخ محمد بن راشد".to_string()), short_text: Some("بوليفارد الشيخ محمد بن راشد".to_string()), types: vec![Some("route".to_string())] },
-            ComponentData { long_text: Some("وسط مدينة دبي".to_string()), short_text: Some("وسط مدينة دبي".to_string()), types: vec![Some("neighborhood".to_string()), Some("political".to_string())] },
-            ComponentData { long_text: Some("برج خليفة".to_string()), short_text: Some("برج خليفة".to_string()), types: vec![Some("sublocality_level_1".to_string()), Some("sublocality".to_string()), Some("political".to_string())] },
-            ComponentData { long_text: Some("دبي".to_string()), short_text: Some("دبي".to_string()), types: vec![Some("locality".to_string()), Some("political".to_string())] },
-            ComponentData { long_text: Some("دبي".to_string()), short_text: Some("دبي".to_string()), types: vec![Some("administrative_area_level_1".to_string()), Some("political".to_string())] },
-            ComponentData { long_text: Some("الإمارات العربية المتحدة".to_string()), short_text: Some("AE".to_string()), types: vec![Some("country".to_string()), Some("political".to_string())] },
+            ComponentData { long_text: Some("Level 3, Armani Hotel Dubai".as_bytes().to_vec()), short_text: Some("".as_bytes().to_vec()), types: vec![] },
+            ComponentData { long_text: Some("برج خليفة".as_bytes().to_vec()), short_text: Some("برج خليفة".as_bytes().to_vec()), types: vec![Some("premise".as_bytes().to_vec())] },
+            ComponentData { long_text: Some("بوليفارد الشيخ محمد بن راشد".as_bytes().to_vec()), short_text: Some("بوليفارد الشيخ محمد بن راشد".as_bytes().to_vec()), types: vec![Some("route".as_bytes().to_vec())] },
+            ComponentData { long_text: Some("وسط مدينة دبي".as_bytes().to_vec()), short_text: Some("وسط مدينة دبي".as_bytes().to_vec()), types: vec![Some("neighborhood".as_bytes().to_vec()), Some("political".as_bytes().to_vec())] },
+            ComponentData { long_text: Some("برج خليفة".as_bytes().to_vec()), short_text: Some("برج خليفة".as_bytes().to_vec()), types: vec![Some("sublocality_level_1".as_bytes().to_vec()), Some("sublocality".as_bytes().to_vec()), Some("political".as_bytes().to_vec())] },
+            ComponentData { long_text: Some("دبي".as_bytes().to_vec()), short_text: Some("دبي".as_bytes().to_vec()), types: vec![Some("locality".as_bytes().to_vec()), Some("political".as_bytes().to_vec())] },
+            ComponentData { long_text: Some("دبي".as_bytes().to_vec()), short_text: Some("دبي".as_bytes().to_vec()), types: vec![Some("administrative_area_level_1".as_bytes().to_vec()), Some("political".as_bytes().to_vec())] },
+            ComponentData { long_text: Some("الإمارات العربية المتحدة".as_bytes().to_vec()), short_text: Some("AE".as_bytes().to_vec()), types: vec![Some("country".as_bytes().to_vec()), Some("political".as_bytes().to_vec())] },
         ],
         postal: Some(FixturePostal {
             region_code: Some("AE"),
@@ -206,13 +206,13 @@ pub(crate) fn a7_rtl_index1() -> FixturePlace {
 pub(crate) fn a9_no_postal_codes() -> FixturePlace {
     FixturePlace {
         components: vec![
-            ComponentData { long_text: Some("Al Murooj Complex".to_string()), short_text: Some("Al Murooj Complex".to_string()), types: vec![Some("premise".to_string())] },
-            ComponentData { long_text: Some("Dubai Mall".to_string()), short_text: Some("Dubai Mall".to_string()), types: vec![Some("point_of_interest".to_string()), Some("establishment".to_string()), Some("landmark".to_string())] },
-            ComponentData { long_text: Some("وسط مدينة دبي".to_string()), short_text: Some("وسط مدينة دبي".to_string()), types: vec![Some("neighborhood".to_string()), Some("political".to_string())] },
-            ComponentData { long_text: Some("المركز التجاري الثانية".to_string()), short_text: Some("المركز التجاري الثانية".to_string()), types: vec![Some("sublocality_level_1".to_string()), Some("sublocality".to_string()), Some("political".to_string())] },
-            ComponentData { long_text: Some("دبي".to_string()), short_text: Some("دبي".to_string()), types: vec![Some("locality".to_string()), Some("political".to_string())] },
-            ComponentData { long_text: Some("دبي".to_string()), short_text: Some("دبي".to_string()), types: vec![Some("administrative_area_level_1".to_string()), Some("political".to_string())] },
-            ComponentData { long_text: Some("الإمارات العربية المتحدة".to_string()), short_text: Some("AE".to_string()), types: vec![Some("country".to_string()), Some("political".to_string())] },
+            ComponentData { long_text: Some("Al Murooj Complex".as_bytes().to_vec()), short_text: Some("Al Murooj Complex".as_bytes().to_vec()), types: vec![Some("premise".as_bytes().to_vec())] },
+            ComponentData { long_text: Some("Dubai Mall".as_bytes().to_vec()), short_text: Some("Dubai Mall".as_bytes().to_vec()), types: vec![Some("point_of_interest".as_bytes().to_vec()), Some("establishment".as_bytes().to_vec()), Some("landmark".as_bytes().to_vec())] },
+            ComponentData { long_text: Some("وسط مدينة دبي".as_bytes().to_vec()), short_text: Some("وسط مدينة دبي".as_bytes().to_vec()), types: vec![Some("neighborhood".as_bytes().to_vec()), Some("political".as_bytes().to_vec())] },
+            ComponentData { long_text: Some("المركز التجاري الثانية".as_bytes().to_vec()), short_text: Some("المركز التجاري الثانية".as_bytes().to_vec()), types: vec![Some("sublocality_level_1".as_bytes().to_vec()), Some("sublocality".as_bytes().to_vec()), Some("political".as_bytes().to_vec())] },
+            ComponentData { long_text: Some("دبي".as_bytes().to_vec()), short_text: Some("دبي".as_bytes().to_vec()), types: vec![Some("locality".as_bytes().to_vec()), Some("political".as_bytes().to_vec())] },
+            ComponentData { long_text: Some("دبي".as_bytes().to_vec()), short_text: Some("دبي".as_bytes().to_vec()), types: vec![Some("administrative_area_level_1".as_bytes().to_vec()), Some("political".as_bytes().to_vec())] },
+            ComponentData { long_text: Some("الإمارات العربية المتحدة".as_bytes().to_vec()), short_text: Some("AE".as_bytes().to_vec()), types: vec![Some("country".as_bytes().to_vec()), Some("political".as_bytes().to_vec())] },
         ],
         postal: Some(FixturePostal {
             region_code: Some("AE"),
@@ -227,14 +227,14 @@ pub(crate) fn a9_no_postal_codes() -> FixturePlace {
 pub(crate) fn a4_disagree() -> FixturePlace {
     FixturePlace {
         components: vec![
-            ComponentData { long_text: Some("1".to_string()), short_text: Some("1".to_string()), types: vec![Some("street_number".to_string())] },
-            ComponentData { long_text: Some("Sherborne Street".to_string()), short_text: Some("Sherborne St".to_string()), types: vec![Some("route".to_string())] },
-            ComponentData { long_text: Some("Bourton-on-the-Water".to_string()), short_text: Some("Bourton-on-the-Water".to_string()), types: vec![Some("locality".to_string()), Some("political".to_string())] },
-            ComponentData { long_text: Some("Cheltenham".to_string()), short_text: Some("Cheltenham".to_string()), types: vec![Some("postal_town".to_string())] },
-            ComponentData { long_text: Some("Gloucestershire".to_string()), short_text: Some("Gloucestershire".to_string()), types: vec![Some("administrative_area_level_2".to_string()), Some("political".to_string())] },
-            ComponentData { long_text: Some("England".to_string()), short_text: Some("England".to_string()), types: vec![Some("administrative_area_level_1".to_string()), Some("political".to_string())] },
-            ComponentData { long_text: Some("United Kingdom".to_string()), short_text: Some("GB".to_string()), types: vec![Some("country".to_string()), Some("political".to_string())] },
-            ComponentData { long_text: Some("GL54 2BY".to_string()), short_text: Some("GL54 2BY".to_string()), types: vec![Some("postal_code".to_string())] },
+            ComponentData { long_text: Some("1".as_bytes().to_vec()), short_text: Some("1".as_bytes().to_vec()), types: vec![Some("street_number".as_bytes().to_vec())] },
+            ComponentData { long_text: Some("Sherborne Street".as_bytes().to_vec()), short_text: Some("Sherborne St".as_bytes().to_vec()), types: vec![Some("route".as_bytes().to_vec())] },
+            ComponentData { long_text: Some("Bourton-on-the-Water".as_bytes().to_vec()), short_text: Some("Bourton-on-the-Water".as_bytes().to_vec()), types: vec![Some("locality".as_bytes().to_vec()), Some("political".as_bytes().to_vec())] },
+            ComponentData { long_text: Some("Cheltenham".as_bytes().to_vec()), short_text: Some("Cheltenham".as_bytes().to_vec()), types: vec![Some("postal_town".as_bytes().to_vec())] },
+            ComponentData { long_text: Some("Gloucestershire".as_bytes().to_vec()), short_text: Some("Gloucestershire".as_bytes().to_vec()), types: vec![Some("administrative_area_level_2".as_bytes().to_vec()), Some("political".as_bytes().to_vec())] },
+            ComponentData { long_text: Some("England".as_bytes().to_vec()), short_text: Some("England".as_bytes().to_vec()), types: vec![Some("administrative_area_level_1".as_bytes().to_vec()), Some("political".as_bytes().to_vec())] },
+            ComponentData { long_text: Some("United Kingdom".as_bytes().to_vec()), short_text: Some("GB".as_bytes().to_vec()), types: vec![Some("country".as_bytes().to_vec()), Some("political".as_bytes().to_vec())] },
+            ComponentData { long_text: Some("GL54 2BY".as_bytes().to_vec()), short_text: Some("GL54 2BY".as_bytes().to_vec()), types: vec![Some("postal_code".as_bytes().to_vec())] },
         ],
         postal: None,
     }
@@ -243,14 +243,14 @@ pub(crate) fn a4_disagree() -> FixturePlace {
 pub(crate) fn a2_no_locality() -> FixturePlace {
     FixturePlace {
         components: vec![
-            ComponentData { long_text: Some("292".to_string()), short_text: Some("292".to_string()), types: vec![Some("street_number".to_string())] },
-            ComponentData { long_text: Some("Bedford Avenue".to_string()), short_text: Some("Bedford Ave".to_string()), types: vec![Some("route".to_string())] },
-            ComponentData { long_text: Some("Williamsburg".to_string()), short_text: Some("Williamsburg".to_string()), types: vec![Some("neighborhood".to_string()), Some("political".to_string())] },
-            ComponentData { long_text: Some("Brooklyn".to_string()), short_text: Some("Brooklyn".to_string()), types: vec![Some("sublocality_level_1".to_string()), Some("sublocality".to_string()), Some("political".to_string())] },
-            ComponentData { long_text: Some("Kings County".to_string()), short_text: Some("Kings County".to_string()), types: vec![Some("administrative_area_level_2".to_string()), Some("political".to_string())] },
-            ComponentData { long_text: Some("New York".to_string()), short_text: Some("NY".to_string()), types: vec![Some("administrative_area_level_1".to_string()), Some("political".to_string())] },
-            ComponentData { long_text: Some("United States".to_string()), short_text: Some("US".to_string()), types: vec![Some("country".to_string()), Some("political".to_string())] },
-            ComponentData { long_text: Some("11249".to_string()), short_text: Some("11249".to_string()), types: vec![Some("postal_code".to_string())] },
+            ComponentData { long_text: Some("292".as_bytes().to_vec()), short_text: Some("292".as_bytes().to_vec()), types: vec![Some("street_number".as_bytes().to_vec())] },
+            ComponentData { long_text: Some("Bedford Avenue".as_bytes().to_vec()), short_text: Some("Bedford Ave".as_bytes().to_vec()), types: vec![Some("route".as_bytes().to_vec())] },
+            ComponentData { long_text: Some("Williamsburg".as_bytes().to_vec()), short_text: Some("Williamsburg".as_bytes().to_vec()), types: vec![Some("neighborhood".as_bytes().to_vec()), Some("political".as_bytes().to_vec())] },
+            ComponentData { long_text: Some("Brooklyn".as_bytes().to_vec()), short_text: Some("Brooklyn".as_bytes().to_vec()), types: vec![Some("sublocality_level_1".as_bytes().to_vec()), Some("sublocality".as_bytes().to_vec()), Some("political".as_bytes().to_vec())] },
+            ComponentData { long_text: Some("Kings County".as_bytes().to_vec()), short_text: Some("Kings County".as_bytes().to_vec()), types: vec![Some("administrative_area_level_2".as_bytes().to_vec()), Some("political".as_bytes().to_vec())] },
+            ComponentData { long_text: Some("New York".as_bytes().to_vec()), short_text: Some("NY".as_bytes().to_vec()), types: vec![Some("administrative_area_level_1".as_bytes().to_vec()), Some("political".as_bytes().to_vec())] },
+            ComponentData { long_text: Some("United States".as_bytes().to_vec()), short_text: Some("US".as_bytes().to_vec()), types: vec![Some("country".as_bytes().to_vec()), Some("political".as_bytes().to_vec())] },
+            ComponentData { long_text: Some("11249".as_bytes().to_vec()), short_text: Some("11249".as_bytes().to_vec()), types: vec![Some("postal_code".as_bytes().to_vec())] },
         ],
         postal: Some(FixturePostal {
             region_code: Some("US"),
@@ -265,14 +265,14 @@ pub(crate) fn a2_no_locality() -> FixturePlace {
 pub(crate) fn p15_mall() -> FixturePlace {
     FixturePlace {
         components: vec![
-            ComponentData { long_text: Some("2801".to_string()), short_text: Some("2801".to_string()), types: vec![Some("street_number".to_string())] },
-            ComponentData { long_text: Some("Stevens Creek Boulevard".to_string()), short_text: Some("Stevens Creek Blvd".to_string()), types: vec![Some("route".to_string())] },
-            ComponentData { long_text: Some("Central San Jose".to_string()), short_text: Some("Central San Jose".to_string()), types: vec![Some("neighborhood".to_string()), Some("political".to_string())] },
-            ComponentData { long_text: Some("Santa Clara".to_string()), short_text: Some("Santa Clara".to_string()), types: vec![Some("locality".to_string()), Some("political".to_string())] },
-            ComponentData { long_text: Some("Santa Clara County".to_string()), short_text: Some("Santa Clara County".to_string()), types: vec![Some("administrative_area_level_2".to_string()), Some("political".to_string())] },
-            ComponentData { long_text: Some("California".to_string()), short_text: Some("CA".to_string()), types: vec![Some("administrative_area_level_1".to_string()), Some("political".to_string())] },
-            ComponentData { long_text: Some("United States".to_string()), short_text: Some("US".to_string()), types: vec![Some("country".to_string()), Some("political".to_string())] },
-            ComponentData { long_text: Some("95050".to_string()), short_text: Some("95050".to_string()), types: vec![Some("postal_code".to_string())] },
+            ComponentData { long_text: Some("2801".as_bytes().to_vec()), short_text: Some("2801".as_bytes().to_vec()), types: vec![Some("street_number".as_bytes().to_vec())] },
+            ComponentData { long_text: Some("Stevens Creek Boulevard".as_bytes().to_vec()), short_text: Some("Stevens Creek Blvd".as_bytes().to_vec()), types: vec![Some("route".as_bytes().to_vec())] },
+            ComponentData { long_text: Some("Central San Jose".as_bytes().to_vec()), short_text: Some("Central San Jose".as_bytes().to_vec()), types: vec![Some("neighborhood".as_bytes().to_vec()), Some("political".as_bytes().to_vec())] },
+            ComponentData { long_text: Some("Santa Clara".as_bytes().to_vec()), short_text: Some("Santa Clara".as_bytes().to_vec()), types: vec![Some("locality".as_bytes().to_vec()), Some("political".as_bytes().to_vec())] },
+            ComponentData { long_text: Some("Santa Clara County".as_bytes().to_vec()), short_text: Some("Santa Clara County".as_bytes().to_vec()), types: vec![Some("administrative_area_level_2".as_bytes().to_vec()), Some("political".as_bytes().to_vec())] },
+            ComponentData { long_text: Some("California".as_bytes().to_vec()), short_text: Some("CA".as_bytes().to_vec()), types: vec![Some("administrative_area_level_1".as_bytes().to_vec()), Some("political".as_bytes().to_vec())] },
+            ComponentData { long_text: Some("United States".as_bytes().to_vec()), short_text: Some("US".as_bytes().to_vec()), types: vec![Some("country".as_bytes().to_vec()), Some("political".as_bytes().to_vec())] },
+            ComponentData { long_text: Some("95050".as_bytes().to_vec()), short_text: Some("95050".as_bytes().to_vec()), types: vec![Some("postal_code".as_bytes().to_vec())] },
         ],
         postal: Some(FixturePostal {
             region_code: Some("US"),
@@ -287,10 +287,10 @@ pub(crate) fn p15_mall() -> FixturePlace {
 pub(crate) fn a1_no_street_number() -> FixturePlace {
     FixturePlace {
         components: vec![
-            ComponentData { long_text: Some("Williamsburg Bridge".to_string()), short_text: Some("Williamsburg Bridge".to_string()), types: vec![Some("route".to_string())] },
-            ComponentData { long_text: Some("New York".to_string()), short_text: Some("New York".to_string()), types: vec![Some("locality".to_string()), Some("political".to_string())] },
-            ComponentData { long_text: Some("New York".to_string()), short_text: Some("NY".to_string()), types: vec![Some("administrative_area_level_1".to_string()), Some("political".to_string())] },
-            ComponentData { long_text: Some("United States".to_string()), short_text: Some("US".to_string()), types: vec![Some("country".to_string()), Some("political".to_string())] },
+            ComponentData { long_text: Some("Williamsburg Bridge".as_bytes().to_vec()), short_text: Some("Williamsburg Bridge".as_bytes().to_vec()), types: vec![Some("route".as_bytes().to_vec())] },
+            ComponentData { long_text: Some("New York".as_bytes().to_vec()), short_text: Some("New York".as_bytes().to_vec()), types: vec![Some("locality".as_bytes().to_vec()), Some("political".as_bytes().to_vec())] },
+            ComponentData { long_text: Some("New York".as_bytes().to_vec()), short_text: Some("NY".as_bytes().to_vec()), types: vec![Some("administrative_area_level_1".as_bytes().to_vec()), Some("political".as_bytes().to_vec())] },
+            ComponentData { long_text: Some("United States".as_bytes().to_vec()), short_text: Some("US".as_bytes().to_vec()), types: vec![Some("country".as_bytes().to_vec()), Some("political".as_bytes().to_vec())] },
         ],
         postal: None,
     }
@@ -299,10 +299,10 @@ pub(crate) fn a1_no_street_number() -> FixturePlace {
 pub(crate) fn p15_saigon() -> FixturePlace {
     FixturePlace {
         components: vec![
-            ComponentData { long_text: Some("Đường Nguyễn Văn Trỗi".to_string()), short_text: Some("Đ. Nguyễn Văn Trỗi".to_string()), types: vec![Some("route".to_string())] },
-            ComponentData { long_text: Some("Thành phố Hồ Chí Minh".to_string()), short_text: Some("Thành phố Hồ Chí Minh".to_string()), types: vec![Some("locality".to_string()), Some("political".to_string())] },
-            ComponentData { long_text: Some("Hồ Chí Minh".to_string()), short_text: Some("Hồ Chí Minh".to_string()), types: vec![Some("administrative_area_level_1".to_string()), Some("political".to_string())] },
-            ComponentData { long_text: Some("Vietnam".to_string()), short_text: Some("VN".to_string()), types: vec![Some("country".to_string()), Some("political".to_string())] },
+            ComponentData { long_text: Some("Đường Nguyễn Văn Trỗi".as_bytes().to_vec()), short_text: Some("Đ. Nguyễn Văn Trỗi".as_bytes().to_vec()), types: vec![Some("route".as_bytes().to_vec())] },
+            ComponentData { long_text: Some("Thành phố Hồ Chí Minh".as_bytes().to_vec()), short_text: Some("Thành phố Hồ Chí Minh".as_bytes().to_vec()), types: vec![Some("locality".as_bytes().to_vec()), Some("political".as_bytes().to_vec())] },
+            ComponentData { long_text: Some("Hồ Chí Minh".as_bytes().to_vec()), short_text: Some("Hồ Chí Minh".as_bytes().to_vec()), types: vec![Some("administrative_area_level_1".as_bytes().to_vec()), Some("political".as_bytes().to_vec())] },
+            ComponentData { long_text: Some("Vietnam".as_bytes().to_vec()), short_text: Some("VN".as_bytes().to_vec()), types: vec![Some("country".as_bytes().to_vec()), Some("political".as_bytes().to_vec())] },
         ],
         postal: Some(FixturePostal {
             region_code: Some("VN"),
@@ -317,9 +317,9 @@ pub(crate) fn p15_saigon() -> FixturePlace {
 pub(crate) fn a10_jerusalem_no_region() -> FixturePlace {
     FixturePlace {
         components: vec![
-            ComponentData { long_text: Some("Jerusalem".to_string()), short_text: Some("Jerusalem".to_string()), types: vec![Some("locality".to_string()), Some("political".to_string())] },
-            ComponentData { long_text: Some("Jerusalem District".to_string()), short_text: Some("Jerusalem District".to_string()), types: vec![Some("administrative_area_level_1".to_string()), Some("political".to_string())] },
-            ComponentData { long_text: Some("Israel".to_string()), short_text: Some("IL".to_string()), types: vec![Some("country".to_string()), Some("political".to_string())] },
+            ComponentData { long_text: Some("Jerusalem".as_bytes().to_vec()), short_text: Some("Jerusalem".as_bytes().to_vec()), types: vec![Some("locality".as_bytes().to_vec()), Some("political".as_bytes().to_vec())] },
+            ComponentData { long_text: Some("Jerusalem District".as_bytes().to_vec()), short_text: Some("Jerusalem District".as_bytes().to_vec()), types: vec![Some("administrative_area_level_1".as_bytes().to_vec()), Some("political".as_bytes().to_vec())] },
+            ComponentData { long_text: Some("Israel".as_bytes().to_vec()), short_text: Some("IL".as_bytes().to_vec()), types: vec![Some("country".as_bytes().to_vec()), Some("political".as_bytes().to_vec())] },
         ],
         postal: None,
     }
@@ -328,7 +328,7 @@ pub(crate) fn a10_jerusalem_no_region() -> FixturePlace {
 pub(crate) fn p1_no_address() -> FixturePlace {
     FixturePlace {
         components: vec![
-            ComponentData { long_text: Some("Mount Everest".to_string()), short_text: Some("Monte Everest".to_string()), types: vec![Some("mountain_peak".to_string()), Some("natural_feature".to_string()), Some("establishment".to_string())] },
+            ComponentData { long_text: Some("Mount Everest".as_bytes().to_vec()), short_text: Some("Monte Everest".as_bytes().to_vec()), types: vec![Some("mountain_peak".as_bytes().to_vec()), Some("natural_feature".as_bytes().to_vec()), Some("establishment".as_bytes().to_vec())] },
         ],
         postal: None,
     }
@@ -345,7 +345,7 @@ pub(crate) fn a12_long_village() -> FixturePlace {
 pub(crate) fn a11_empty_text() -> FixturePlace {
     FixturePlace {
         components: vec![
-            ComponentData { long_text: Some("".to_string()), short_text: Some("".to_string()), types: vec![Some("route".to_string())] },
+            ComponentData { long_text: Some("".as_bytes().to_vec()), short_text: Some("".as_bytes().to_vec()), types: vec![Some("route".as_bytes().to_vec())] },
         ],
         postal: None,
     }

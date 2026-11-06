@@ -12,6 +12,16 @@
 //! and is raised by the Python validation funnels before the
 //! conversion happens.
 //!
+//! Texts cross the boundary as byte strings in the form the
+//! Python layer's surrogatepass codec produces, so a text
+//! carrying a lone surrogate reaches the core exactly and comes
+//! back exactly. The core therefore treats texts as byte
+//! strings for equality and emptiness, and the one place it
+//! transforms text, the routing uppercase, decodes the byte
+//! string unit by unit and passes a surrogate unit through
+//! unchanged, the way Python's own upper leaves a lone
+//! surrogate unchanged.
+//!
 //! The readings mirror the Python module's stated rules. Which
 //! carrier holds the city changes by country, and in two
 //! recorded countries the carriers disagree on the same place,
@@ -27,38 +37,38 @@
 /// One address component as plain data.
 ///
 /// A text the component does not carry reads as `None`, and a
-/// text it carries empty stays an empty string, because the
-/// scans distinguish a carried empty text from an absent one
-/// only by truthiness and the Python layer keeps the two apart
-/// the same way. A type slot the wire carried as null stays
-/// `None` at its index, and membership reads past it.
+/// text it carries empty stays an empty byte string, because
+/// the scans distinguish a carried empty text from an absent
+/// one only by emptiness and the Python layer keeps the two
+/// apart the same way. A type slot the wire carried as null
+/// stays `None` at its index, and membership reads past it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ComponentData {
-    pub long_text: Option<String>,
-    pub short_text: Option<String>,
-    pub types: Vec<Option<String>>,
+    pub long_text: Option<Vec<u8>>,
+    pub short_text: Option<Vec<u8>>,
+    pub types: Vec<Option<Vec<u8>>>,
 }
 
-const TYPE_LOCALITY: &str = "locality";
-const TYPE_POSTAL_TOWN: &str = "postal_town";
-const TYPE_SUBLOCALITY_LEVEL_1: &str = "sublocality_level_1";
-const TYPE_SUBLOCALITY_LEVEL_2: &str = "sublocality_level_2";
-const TYPE_POSTAL_CODE: &str = "postal_code";
-const TYPE_COUNTRY: &str = "country";
-const TYPE_STREET_NUMBER: &str = "street_number";
-const TYPE_ROUTE: &str = "route";
-const TYPE_PREMISE: &str = "premise";
-const TYPE_SUBPREMISE: &str = "subpremise";
+const TYPE_LOCALITY: &[u8] = b"locality";
+const TYPE_POSTAL_TOWN: &[u8] = b"postal_town";
+const TYPE_SUBLOCALITY_LEVEL_1: &[u8] = b"sublocality_level_1";
+const TYPE_SUBLOCALITY_LEVEL_2: &[u8] = b"sublocality_level_2";
+const TYPE_POSTAL_CODE: &[u8] = b"postal_code";
+const TYPE_COUNTRY: &[u8] = b"country";
+const TYPE_STREET_NUMBER: &[u8] = b"street_number";
+const TYPE_ROUTE: &[u8] = b"route";
+const TYPE_PREMISE: &[u8] = b"premise";
+const TYPE_SUBPREMISE: &[u8] = b"subpremise";
 
 /// Carrier names, matching the Python module constants of the
 /// same names. The component carriers are the wire type strings
 /// themselves, and the postal carriers name the postal field the
 /// value came from.
-pub const CARRIER_LOCALITY: &str = TYPE_LOCALITY;
-pub const CARRIER_POSTAL_TOWN: &str = TYPE_POSTAL_TOWN;
-pub const CARRIER_SUBLOCALITY_LEVEL_1: &str = TYPE_SUBLOCALITY_LEVEL_1;
-pub const CARRIER_SUBLOCALITY_LEVEL_2: &str = TYPE_SUBLOCALITY_LEVEL_2;
-pub const CARRIER_POSTAL_CODE_COMPONENT: &str = TYPE_POSTAL_CODE;
+pub const CARRIER_LOCALITY: &str = "locality";
+pub const CARRIER_POSTAL_TOWN: &str = "postal_town";
+pub const CARRIER_SUBLOCALITY_LEVEL_1: &str = "sublocality_level_1";
+pub const CARRIER_SUBLOCALITY_LEVEL_2: &str = "sublocality_level_2";
+pub const CARRIER_POSTAL_CODE_COMPONENT: &str = "postal_code";
 pub const CARRIER_POSTAL_ADDRESS_LOCALITY: &str = "postal_address_locality";
 pub const CARRIER_POSTAL_ADDRESS_POSTAL_CODE: &str = "postal_address_postal_code";
 pub const CARRIER_BOTH_POSTAL: &str = "both_postal_carriers";
@@ -72,23 +82,87 @@ pub const CONFIDENCE_NONE: &str = "none";
 pub const POSTAL_PRESENT: &str = "present";
 pub const POSTAL_ABSENT: &str = "absent";
 
-fn has_type(component: &ComponentData, type_name: &str) -> bool {
+fn has_type(component: &ComponentData, type_name: &[u8]) -> bool {
     component
         .types
         .iter()
         .any(|item| item.as_deref() == Some(type_name))
 }
 
-fn nonempty(text: &Option<String>) -> Option<&str> {
+fn nonempty(text: &Option<Vec<u8>>) -> Option<&[u8]> {
     match text {
-        Some(value) if !value.is_empty() => Some(value.as_str()),
+        Some(value) if !value.is_empty() => Some(value.as_slice()),
         _ => None,
     }
 }
 
+/// Decode the unit starting at `start` in a byte string of the
+/// form the surrogatepass codec produces, returning its code
+/// point and its width in bytes. A surrogate code point decodes
+/// here like any other, because the codec carries lone
+/// surrogates as their three byte form. A byte run that forms
+/// no unit answers `None` and its callers copy it through
+/// unchanged, so no byte a caller sent is ever lost.
+fn decode_unit(bytes: &[u8], start: usize) -> Option<(u32, usize)> {
+    let first = *bytes.get(start)?;
+    if first < 0x80 {
+        return Some((u32::from(first), 1));
+    }
+    let (extra, minimum, seed) = match first {
+        0xC2..=0xDF => (1, 0x80, u32::from(first & 0x1F)),
+        0xE0..=0xEF => (2, 0x800, u32::from(first & 0x0F)),
+        0xF0..=0xF4 => (3, 0x10000, u32::from(first & 0x07)),
+        _ => return None,
+    };
+    let mut code_point = seed;
+    for offset in 1..=extra {
+        let next = *bytes.get(start + offset)?;
+        if !(0x80..0xC0).contains(&next) {
+            return None;
+        }
+        code_point = (code_point << 6) | u32::from(next & 0x3F);
+    }
+    if code_point < minimum {
+        return None;
+    }
+    Some((code_point, extra + 1))
+}
+
+/// Uppercase one text under the Python rule the routing read
+/// follows. Each scalar value uppercases the way Rust's own
+/// char uppercase does, which the parity sweep holds equal to
+/// the Python rule on every routing decision, and a unit that
+/// names no scalar value, a lone surrogate above all, passes
+/// through byte for byte, as Python's upper leaves it.
+fn uppercase_text(text: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(text.len());
+    let mut index = 0;
+    while index < text.len() {
+        match decode_unit(text, index) {
+            Some((code_point, width)) => {
+                match char::from_u32(code_point) {
+                    Some(ch) => {
+                        let mut buffer = [0u8; 4];
+                        for upper in ch.to_uppercase() {
+                            out.extend_from_slice(upper.encode_utf8(&mut buffer).as_bytes());
+                        }
+                    }
+                    None => out.extend_from_slice(&text[index..index + width]),
+                }
+                index += width;
+            }
+            None => {
+                out.push(text[index]);
+                index += 1;
+            }
+        }
+    }
+    out
+}
+
 /// The indices of every component whose types contain the name,
 /// in list order.
-pub fn matching_indices(components: &[ComponentData], type_name: &str) -> Vec<usize> {
+pub fn matching_indices(components: &[ComponentData], type_name: &[u8]) -> Vec<usize> {
     components
         .iter()
         .enumerate()
@@ -110,85 +184,98 @@ pub fn untyped_indices(components: &[ComponentData]) -> Vec<usize> {
 
 /// The first nonempty long text among the matches for a type
 /// name. A match whose long text is empty is skipped and the
-/// scan keeps going, so this form never returns an empty string.
-pub fn first_long_text(components: &[ComponentData], type_name: &str) -> Option<String> {
+/// scan keeps going, so this form never returns an empty text.
+pub fn first_long_text(components: &[ComponentData], type_name: &[u8]) -> Option<Vec<u8>> {
     components
         .iter()
         .filter(|component| has_type(component, type_name))
-        .find_map(|component| nonempty(&component.long_text).map(str::to_owned))
+        .find_map(|component| nonempty(&component.long_text).map(<[u8]>::to_vec))
+}
+
+/// The index of the component the first nonempty long text
+/// among the matches for a type name sits on, under the same
+/// skip rule as [`first_long_text`]. The Python layer reads
+/// the text off its own component at this index, so a reading
+/// that hands a text back returns the caller's own object.
+pub fn first_long_text_index(components: &[ComponentData], type_name: &[u8]) -> Option<usize> {
+    components
+        .iter()
+        .enumerate()
+        .filter(|(_, component)| has_type(component, type_name))
+        .find_map(|(index, component)| nonempty(&component.long_text).map(|_| index))
 }
 
 /// The first nonempty short text among the matches for a type
 /// name, on the same skip rule as [`first_long_text`].
-pub fn first_short_text(components: &[ComponentData], type_name: &str) -> Option<String> {
+pub fn first_short_text(components: &[ComponentData], type_name: &[u8]) -> Option<Vec<u8>> {
     components
         .iter()
         .filter(|component| has_type(component, type_name))
-        .find_map(|component| nonempty(&component.short_text).map(str::to_owned))
+        .find_map(|component| nonempty(&component.short_text).map(<[u8]>::to_vec))
 }
 
 /// The nonempty long texts of every match, in list order.
-pub fn long_texts(components: &[ComponentData], type_name: &str) -> Vec<String> {
+pub fn long_texts(components: &[ComponentData], type_name: &[u8]) -> Vec<Vec<u8>> {
     components
         .iter()
         .filter(|component| has_type(component, type_name))
-        .filter_map(|component| nonempty(&component.long_text).map(str::to_owned))
+        .filter_map(|component| nonempty(&component.long_text).map(<[u8]>::to_vec))
         .collect()
 }
 
 /// The nonempty short texts of every match, in list order.
-pub fn short_texts(components: &[ComponentData], type_name: &str) -> Vec<String> {
+pub fn short_texts(components: &[ComponentData], type_name: &[u8]) -> Vec<Vec<u8>> {
     components
         .iter()
         .filter(|component| has_type(component, type_name))
-        .filter_map(|component| nonempty(&component.short_text).map(str::to_owned))
+        .filter_map(|component| nonempty(&component.short_text).map(<[u8]>::to_vec))
         .collect()
 }
 
 /// The short text of the country component, the first country
 /// component with a nonempty short text. The value comes back
 /// as sent and is never uppercased or mapped to another code.
-pub fn country_code_from_components(components: &[ComponentData]) -> Option<String> {
+pub fn country_code_from_components(components: &[ComponentData]) -> Option<Vec<u8>> {
     first_short_text(components, TYPE_COUNTRY)
 }
 
 /// Routing into a stated answer or the generic chain matches
 /// the country code without regard to letter case. The
 /// normalisation serves the match only.
-fn routing_country(country_code: Option<&str>) -> Option<String> {
-    country_code.map(str::to_uppercase)
+fn routing_country(country_code: Option<&[u8]>) -> Option<Vec<u8>> {
+    country_code.map(uppercase_text)
 }
 
 /// One city reading with its carrier and confidence grade, as
 /// plain data for the Python layer to wrap in its result type.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CityResolution {
-    pub value: Option<String>,
+    pub value: Option<Vec<u8>>,
     pub carrier: Option<&'static str>,
     pub confidence: &'static str,
-    pub country_code: Option<String>,
-    pub competing_value: Option<String>,
+    pub country_code: Option<Vec<u8>>,
+    pub competing_value: Option<Vec<u8>>,
     pub competing_carrier: Option<&'static str>,
 }
 
 /// One district reading, on the same plain data terms.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DistrictResolution {
-    pub value: Option<String>,
+    pub value: Option<Vec<u8>>,
     pub carrier: Option<&'static str>,
     pub confidence: &'static str,
-    pub country_code: Option<String>,
+    pub country_code: Option<Vec<u8>>,
 }
 
 /// One postal code reading, on the same plain data terms. The
 /// status keeps presence and absence distinct outcomes.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PostalCodeResult {
-    pub value: Option<String>,
+    pub value: Option<Vec<u8>>,
     pub carrier: Option<&'static str>,
     pub status: &'static str,
-    pub country_code: Option<String>,
-    pub competing_value: Option<String>,
+    pub country_code: Option<Vec<u8>>,
+    pub competing_value: Option<Vec<u8>>,
     pub competing_carrier: Option<&'static str>,
 }
 
@@ -205,7 +292,7 @@ pub struct PostalCodeResult {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PostalLocality {
     Unread,
-    Read(Option<String>),
+    Read(Option<Vec<u8>>),
 }
 
 /// The outcome of one city chain run.
@@ -215,35 +302,35 @@ pub enum CityResolutions {
     NeedsPostalLocality,
 }
 
-fn no_city(country_code: Option<&str>) -> CityResolution {
+fn no_city(country_code: Option<&[u8]>) -> CityResolution {
     CityResolution {
         value: None,
         carrier: None,
         confidence: CONFIDENCE_NONE,
-        country_code: country_code.map(str::to_owned),
+        country_code: country_code.map(<[u8]>::to_vec),
         competing_value: None,
         competing_carrier: None,
     }
 }
 
 fn one_city(
-    value: String,
+    value: Vec<u8>,
     carrier: &'static str,
     confidence: &'static str,
-    country_code: Option<&str>,
+    country_code: Option<&[u8]>,
 ) -> CityResolution {
     CityResolution {
         value: Some(value),
         carrier: Some(carrier),
         confidence,
-        country_code: country_code.map(str::to_owned),
+        country_code: country_code.map(<[u8]>::to_vec),
         competing_value: None,
         competing_carrier: None,
     }
 }
 
 fn british_resolutions(
-    country_code: Option<&str>,
+    country_code: Option<&[u8]>,
     components: &[ComponentData],
 ) -> Vec<CityResolution> {
     let locality = first_long_text(components, TYPE_LOCALITY);
@@ -299,40 +386,36 @@ fn british_resolutions(
 /// protocol [`PostalLocality`] documents.
 pub fn city_resolutions(
     components: &[ComponentData],
-    country_code: Option<&str>,
+    country_code: Option<&[u8]>,
     postal_locality: &PostalLocality,
 ) -> CityResolutions {
     let route = routing_country(country_code);
-    match route.as_deref() {
-        Some("GB") => {
-            return CityResolutions::Done(british_resolutions(country_code, components));
+    let routed = |code: &[u8]| route.as_deref() == Some(code);
+    if routed(b"GB") {
+        return CityResolutions::Done(british_resolutions(country_code, components));
+    }
+    if routed(b"JP") || routed(b"AE") {
+        if let Some(locality) = first_long_text(components, TYPE_LOCALITY) {
+            return CityResolutions::Done(vec![one_city(
+                locality,
+                CARRIER_LOCALITY,
+                CONFIDENCE_PRIMARY,
+                country_code,
+            )]);
         }
-        Some("JP") | Some("AE") => {
-            if let Some(locality) = first_long_text(components, TYPE_LOCALITY) {
-                return CityResolutions::Done(vec![one_city(
-                    locality,
-                    CARRIER_LOCALITY,
-                    CONFIDENCE_PRIMARY,
+        if routed(b"AE") {
+            return match postal_locality {
+                PostalLocality::Unread => CityResolutions::NeedsPostalLocality,
+                PostalLocality::Read(Some(value)) => CityResolutions::Done(vec![one_city(
+                    value.clone(),
+                    CARRIER_POSTAL_ADDRESS_LOCALITY,
+                    CONFIDENCE_FALLBACK,
                     country_code,
-                )]);
-            }
-            if route.as_deref() == Some("AE") {
-                return match postal_locality {
-                    PostalLocality::Unread => CityResolutions::NeedsPostalLocality,
-                    PostalLocality::Read(Some(value)) => CityResolutions::Done(vec![one_city(
-                        value.clone(),
-                        CARRIER_POSTAL_ADDRESS_LOCALITY,
-                        CONFIDENCE_FALLBACK,
-                        country_code,
-                    )]),
-                    PostalLocality::Read(None) => {
-                        CityResolutions::Done(vec![no_city(country_code)])
-                    }
-                };
-            }
-            return CityResolutions::Done(vec![no_city(country_code)]);
+                )]),
+                PostalLocality::Read(None) => CityResolutions::Done(vec![no_city(country_code)]),
+            };
         }
-        _ => {}
+        return CityResolutions::Done(vec![no_city(country_code)]);
     }
     let generic_chain = [
         (TYPE_LOCALITY, CARRIER_LOCALITY),
@@ -369,32 +452,33 @@ pub fn city_resolutions(
 /// district carrier is stated.
 pub fn district_resolution(
     components: &[ComponentData],
-    country_code: Option<&str>,
+    country_code: Option<&[u8]>,
 ) -> DistrictResolution {
-    let (type_name, carrier) = match routing_country(country_code).as_deref() {
-        Some("JP") => (TYPE_SUBLOCALITY_LEVEL_2, CARRIER_SUBLOCALITY_LEVEL_2),
-        Some("AE") => (TYPE_SUBLOCALITY_LEVEL_1, CARRIER_SUBLOCALITY_LEVEL_1),
-        _ => {
-            return DistrictResolution {
-                value: None,
-                carrier: None,
-                confidence: CONFIDENCE_NONE,
-                country_code: country_code.map(str::to_owned),
-            }
-        }
+    let route = routing_country(country_code);
+    let (type_name, carrier) = if route.as_deref() == Some(b"JP".as_slice()) {
+        (TYPE_SUBLOCALITY_LEVEL_2, CARRIER_SUBLOCALITY_LEVEL_2)
+    } else if route.as_deref() == Some(b"AE".as_slice()) {
+        (TYPE_SUBLOCALITY_LEVEL_1, CARRIER_SUBLOCALITY_LEVEL_1)
+    } else {
+        return DistrictResolution {
+            value: None,
+            carrier: None,
+            confidence: CONFIDENCE_NONE,
+            country_code: country_code.map(<[u8]>::to_vec),
+        };
     };
     match first_long_text(components, type_name) {
         Some(value) => DistrictResolution {
             value: Some(value),
             carrier: Some(carrier),
             confidence: CONFIDENCE_PRIMARY,
-            country_code: country_code.map(str::to_owned),
+            country_code: country_code.map(<[u8]>::to_vec),
         },
         None => DistrictResolution {
             value: None,
             carrier: None,
             confidence: CONFIDENCE_NONE,
-            country_code: country_code.map(str::to_owned),
+            country_code: country_code.map(<[u8]>::to_vec),
         },
     }
 }
@@ -406,9 +490,9 @@ pub fn district_resolution(
 /// the competing fields. When neither carrier holds a code the
 /// status reports absence.
 pub fn postal_code_result(
-    country_code: Option<String>,
-    component_value: Option<String>,
-    postal_value: Option<String>,
+    country_code: Option<Vec<u8>>,
+    component_value: Option<Vec<u8>>,
+    postal_value: Option<Vec<u8>>,
 ) -> PostalCodeResult {
     let base = PostalCodeResult {
         value: None,
@@ -491,26 +575,57 @@ pub fn component_flags(components: &[ComponentData]) -> ComponentFlags {
     }
 }
 
-/// Whether one character is whitespace under the Python
+/// Whether one code point is whitespace under the Python
 /// `str.strip` rule the compound code split follows. The set is
 /// the Unicode White_Space characters plus the information
 /// separators the Python rule also strips.
-fn is_python_space(c: char) -> bool {
+fn is_python_space(code_point: u32) -> bool {
     matches!(
-        c,
-        '\u{9}'..='\u{d}'
-            | '\u{1c}'..='\u{1f}'
-            | ' '
-            | '\u{85}'
-            | '\u{a0}'
-            | '\u{1680}'
-            | '\u{2000}'..='\u{200a}'
-            | '\u{2028}'
-            | '\u{2029}'
-            | '\u{202f}'
-            | '\u{205f}'
-            | '\u{3000}'
+        code_point,
+        0x9..=0xD
+            | 0x1C..=0x1F
+            | 0x20
+            | 0x85
+            | 0xA0
+            | 0x1680
+            | 0x2000..=0x200A
+            | 0x2028
+            | 0x2029
+            | 0x202F
+            | 0x205F
+            | 0x3000
     )
+}
+
+/// Strip the Python whitespace set off both ends of one byte
+/// string, unit by unit, so a multibyte whitespace character
+/// strips whole and a lone surrogate unit never strips.
+fn strip_python_space(bytes: &[u8]) -> &[u8] {
+    let mut start = 0;
+    while start < bytes.len() {
+        match decode_unit(bytes, start) {
+            Some((code_point, width)) if is_python_space(code_point) => {
+                start += width;
+            }
+            _ => break,
+        }
+    }
+    let mut end = bytes.len();
+    while end > start {
+        let mut unit_start = end - 1;
+        while unit_start > start && (bytes[unit_start] & 0xC0) == 0x80 {
+            unit_start -= 1;
+        }
+        match decode_unit(bytes, unit_start) {
+            Some((code_point, width))
+                if unit_start + width == end && is_python_space(code_point) =>
+            {
+                end = unit_start;
+            }
+            _ => break,
+        }
+    }
+    &bytes[start..end]
 }
 
 /// Split a compound plus code into its code and locality text,
@@ -519,16 +634,17 @@ fn is_python_space(c: char) -> bool {
 /// whitespace after it, so a locality text is never an empty
 /// string. The input here is already validated as a string by
 /// the Python layer, which owns the None and wrong type cases.
-pub fn split_compound_code(compound_code: &str) -> Option<(String, String)> {
-    let (code_part, rest) = compound_code.split_once(' ')?;
+pub fn split_compound_code(compound_code: &[u8]) -> Option<(Vec<u8>, Vec<u8>)> {
+    let split = compound_code.iter().position(|byte| *byte == b' ')?;
+    let code_part = &compound_code[..split];
     if code_part.is_empty() {
         return None;
     }
-    let locality = rest.trim_matches(is_python_space);
+    let locality = strip_python_space(&compound_code[split + 1..]);
     if locality.is_empty() {
         return None;
     }
-    Some((code_part.to_owned(), locality.to_owned()))
+    Some((code_part.to_vec(), locality.to_vec()))
 }
 
 #[cfg(test)]
@@ -539,9 +655,12 @@ mod tests {
 
     fn comp(long: Option<&str>, short: Option<&str>, types: &[Option<&str>]) -> ComponentData {
         ComponentData {
-            long_text: long.map(str::to_owned),
-            short_text: short.map(str::to_owned),
-            types: types.iter().map(|item| item.map(str::to_owned)).collect(),
+            long_text: long.map(|text| text.as_bytes().to_vec()),
+            short_text: short.map(|text| text.as_bytes().to_vec()),
+            types: types
+                .iter()
+                .map(|item| item.map(|text| text.as_bytes().to_vec()))
+                .collect(),
         }
     }
 
@@ -553,12 +672,22 @@ mod tests {
         )
     }
 
+    fn text(value: &Option<Vec<u8>>) -> Option<&str> {
+        value
+            .as_ref()
+            .map(|bytes| std::str::from_utf8(bytes).expect("test text is valid UTF-8"))
+    }
+
+    fn bytes(value: &str) -> Vec<u8> {
+        value.as_bytes().to_vec()
+    }
+
     fn city_one(
         components: &[ComponentData],
         country: Option<&str>,
         postal: &PostalLocality,
     ) -> CityResolution {
-        match city_resolutions(components, country, postal) {
+        match city_resolutions(components, country.map(|code| code.as_bytes()), postal) {
             CityResolutions::Done(mut done) => {
                 assert_eq!(done.len(), 1);
                 done.pop().unwrap()
@@ -573,38 +702,35 @@ mod tests {
     fn bare_sublocality_name_matches_every_levelled_component() {
         // Mirrors test_bare_sublocality_chain_trap.
         let place = a5_sublocality_chains();
-        let indices = matching_indices(&place.components, "sublocality");
+        let indices = matching_indices(&place.components, b"sublocality");
         let texts: Vec<_> = indices
             .iter()
-            .map(|i| place.components[*i].long_text.as_deref())
+            .map(|i| text(&place.components[*i].long_text))
             .collect();
         assert_eq!(texts, vec![Some("６"), Some("２丁目"), Some("浅草")]);
         let first = indices[0];
-        assert_eq!(place.components[first].long_text.as_deref(), Some("６"));
+        assert_eq!(text(&place.components[first].long_text), Some("６"));
     }
 
     #[test]
     fn fragment_is_found_but_never_a_city_output() {
         // Mirrors test_jp_district_and_barred_fragments.
         let place = a5_sublocality_chains();
-        let fragment = matching_indices(&place.components, "sublocality_level_4");
+        let fragment = matching_indices(&place.components, b"sublocality_level_4");
         assert_eq!(fragment.len(), 1);
-        assert_eq!(
-            place.components[fragment[0]].long_text.as_deref(),
-            Some("６")
-        );
+        assert_eq!(text(&place.components[fragment[0]].long_text), Some("６"));
         let city = city_one(&place.components, Some("JP"), &PostalLocality::Unread);
-        assert_eq!(city.value.as_deref(), Some("台東区"));
+        assert_eq!(text(&city.value), Some("台東区"));
     }
 
     #[test]
     fn first_long_text_skips_empty_matches() {
         // Mirrors the A11 survival pin in test_synthesized_a11_survival.
         let place = a11_empty_text();
-        assert_eq!(first_long_text(&place.components, "route"), None);
-        let found = matching_indices(&place.components, "route");
+        assert_eq!(first_long_text(&place.components, b"route"), None);
+        let found = matching_indices(&place.components, b"route");
         assert_eq!(found.len(), 1);
-        assert_eq!(place.components[found[0]].long_text.as_deref(), Some(""));
+        assert_eq!(text(&place.components[found[0]].long_text), Some(""));
         assert!(component_flags(&place.components).has_route);
     }
 
@@ -617,14 +743,31 @@ mod tests {
             typed("Two", "2", &["route"]),
             typed("Other", "o", &["locality"]),
         ];
-        assert_eq!(long_texts(&components, "route"), vec!["One", "Two"]);
-        assert_eq!(short_texts(&components, "route"), vec!["1", "2"]);
         assert_eq!(
-            first_long_text(&components, "route").as_deref(),
-            Some("One")
+            long_texts(&components, b"route"),
+            vec![bytes("One"), bytes("Two")]
         );
-        assert_eq!(first_short_text(&components, "route").as_deref(), Some("1"));
-        assert_eq!(matching_indices(&components, "route"), vec![0, 1, 2, 3]);
+        assert_eq!(
+            short_texts(&components, b"route"),
+            vec![bytes("1"), bytes("2")]
+        );
+        assert_eq!(text(&first_long_text(&components, b"route")), Some("One"));
+        assert_eq!(text(&first_short_text(&components, b"route")), Some("1"));
+        assert_eq!(matching_indices(&components, b"route"), vec![0, 1, 2, 3]);
+    }
+
+    #[test]
+    fn first_long_text_index_names_the_landing_component() {
+        let components = vec![
+            typed("Other", "o", &["locality"]),
+            comp(Some(""), Some(""), &[Some("route")]),
+            typed("Main Street", "Main St", &["route"]),
+            typed("Second Avenue", "2nd Ave", &["route"]),
+        ];
+        assert_eq!(first_long_text_index(&components, b"route"), Some(2));
+        assert_eq!(first_long_text_index(&components, b"premise"), None);
+        let empty_only = vec![comp(Some(""), Some(""), &[Some("route")])];
+        assert_eq!(first_long_text_index(&empty_only, b"route"), None);
     }
 
     #[test]
@@ -634,18 +777,18 @@ mod tests {
         let jp = a13_premise_and_subpremise();
         assert_eq!(untyped_indices(&jp.components), vec![0]);
         assert_eq!(
-            jp.components[0].long_text.as_deref(),
+            text(&jp.components[0].long_text),
             Some("1 Asakusa, Taito-ku")
         );
         let ae = a7_rtl_index1();
         let untyped = untyped_indices(&ae.components);
         let texts: Vec<_> = untyped
             .iter()
-            .map(|i| ae.components[*i].long_text.as_deref())
+            .map(|i| text(&ae.components[*i].long_text))
             .collect();
         assert_eq!(texts, vec![Some("Level 3, Armani Hotel Dubai")]);
         for type_name in ["premise", "route", "locality", "country"] {
-            assert!(!matching_indices(&ae.components, type_name).contains(&untyped[0]));
+            assert!(!matching_indices(&ae.components, type_name.as_bytes()).contains(&untyped[0]));
         }
     }
 
@@ -653,7 +796,7 @@ mod tests {
     fn country_code_comes_back_as_sent() {
         let place = a8_tokyo_english();
         assert_eq!(
-            country_code_from_components(&place.components).as_deref(),
+            text(&country_code_from_components(&place.components)),
             Some("JP")
         );
         let everest = p1_no_address();
@@ -663,9 +806,67 @@ mod tests {
             typed("Somewhere", "SW", &["country"]),
         ];
         assert_eq!(
-            country_code_from_components(&empty_short).as_deref(),
+            text(&country_code_from_components(&empty_short)),
             Some("SW")
         );
+    }
+
+    // --- Byte text fidelity, the surrogatepass crossing
+
+    #[test]
+    fn surrogate_coded_text_round_trips_byte_for_byte() {
+        // The three byte form ED A0 80 is what the Python
+        // surrogatepass codec produces for a lone surrogate, and
+        // EE 80 80 is the private use character U+E000 itself.
+        // The two are different texts and the core keeps them
+        // apart, where a mapping onto private use characters
+        // would have merged them.
+        let surrogate_town: Vec<u8> = vec![b'T', 0xED, 0xA0, 0x80, b'x'];
+        let private_use_town: Vec<u8> = "\u{E000}x".as_bytes().to_vec();
+        let components = vec![
+            ComponentData {
+                long_text: Some(surrogate_town.clone()),
+                short_text: Some(Vec::new()),
+                types: vec![Some(bytes("locality"))],
+            },
+            ComponentData {
+                long_text: Some(private_use_town.clone()),
+                short_text: Some(Vec::new()),
+                types: vec![Some(bytes("postal_town"))],
+            },
+            typed("United Kingdom", "GB", &["country"]),
+        ];
+        assert_eq!(
+            first_long_text(&components, b"locality"),
+            Some(surrogate_town.clone())
+        );
+        let CityResolutions::Done(done) =
+            city_resolutions(&components, Some(b"GB"), &PostalLocality::Unread)
+        else {
+            panic!("the British chain never reads postal")
+        };
+        assert_eq!(done.len(), 2);
+        assert_eq!(done[0].value, Some(surrogate_town));
+        assert_eq!(done[0].competing_value, Some(private_use_town));
+    }
+
+    #[test]
+    fn routing_uppercase_passes_surrogate_units_through() {
+        // A country code carrying a lone surrogate uppercases
+        // its letters and keeps the surrogate unit byte for
+        // byte, so it routes nowhere, the way the Python upper
+        // on the same text routes nowhere.
+        let code: Vec<u8> = vec![b'j', 0xED, 0xA0, 0x80, b'p'];
+        let expected: Vec<u8> = vec![b'J', 0xED, 0xA0, 0x80, b'P'];
+        assert_eq!(routing_country(Some(&code)), Some(expected));
+        let components = vec![
+            typed("Ward2", "", &["sublocality_level_2"]),
+            typed("Japan", "jp", &["country"]),
+        ];
+        let district = district_resolution(&components, Some(&code));
+        assert_eq!(district.confidence, CONFIDENCE_NONE);
+        assert_eq!(district.value, None);
+        assert_eq!(district.country_code, Some(code));
     }
 
     // --- Japan, stated precedence
@@ -675,10 +876,10 @@ mod tests {
         // Mirrors test_jp_city_primary_english.
         let place = a8_tokyo_english();
         let city = city_one(&place.components, Some("JP"), &PostalLocality::Unread);
-        assert_eq!(city.value.as_deref(), Some("Taito City"));
+        assert_eq!(text(&city.value), Some("Taito City"));
         assert_eq!(city.carrier, Some(CARRIER_LOCALITY));
         assert_eq!(city.confidence, CONFIDENCE_PRIMARY);
-        assert_eq!(city.country_code.as_deref(), Some("JP"));
+        assert_eq!(text(&city.country_code), Some("JP"));
     }
 
     #[test]
@@ -686,7 +887,7 @@ mod tests {
         // Mirrors test_jp_city_primary_japanese.
         let place = a8_tokyo_japanese();
         let city = city_one(&place.components, Some("JP"), &PostalLocality::Unread);
-        assert_eq!(city.value.as_deref(), Some("台東区"));
+        assert_eq!(text(&city.value), Some("台東区"));
         assert_eq!(city.confidence, CONFIDENCE_PRIMARY);
     }
 
@@ -694,11 +895,11 @@ mod tests {
     fn jp_district_from_sublocality_level_2() {
         // Mirrors test_jp_district_and_barred_fragments.
         let place = a5_sublocality_chains();
-        let district = district_resolution(&place.components, Some("JP"));
-        assert_eq!(district.value.as_deref(), Some("浅草"));
+        let district = district_resolution(&place.components, Some(b"JP"));
+        assert_eq!(text(&district.value), Some("浅草"));
         assert_eq!(district.carrier, Some(CARRIER_SUBLOCALITY_LEVEL_2));
         assert_eq!(district.confidence, CONFIDENCE_PRIMARY);
-        assert_eq!(district.country_code.as_deref(), Some("JP"));
+        assert_eq!(text(&district.country_code), Some("JP"));
     }
 
     #[test]
@@ -707,14 +908,14 @@ mod tests {
         let place = a6_block_addressing();
         let component_value = first_long_text(&place.components, TYPE_POSTAL_CODE);
         let result = postal_code_result(
-            Some("JP".to_owned()),
+            Some(bytes("JP")),
             component_value,
-            place.postal_postal_code().map(str::to_owned),
+            place.postal_postal_code().map(bytes),
         );
-        assert_eq!(result.value.as_deref(), Some("111-0032"));
+        assert_eq!(text(&result.value), Some("111-0032"));
         assert_eq!(result.carrier, Some(CARRIER_BOTH_POSTAL));
         assert_eq!(result.status, POSTAL_PRESENT);
-        assert_eq!(result.country_code.as_deref(), Some("JP"));
+        assert_eq!(text(&result.country_code), Some("JP"));
     }
 
     #[test]
@@ -732,7 +933,7 @@ mod tests {
     fn jp_premise_level_shape() {
         // Mirrors test_jp_premise_duplication_shape.
         let place = a13_premise_and_subpremise();
-        assert_eq!(matching_indices(&place.components, "subpremise").len(), 1);
+        assert_eq!(matching_indices(&place.components, b"subpremise").len(), 1);
         let flags = component_flags(&place.components);
         assert!(flags.has_premise);
         assert!(flags.is_premise_level);
@@ -745,22 +946,22 @@ mod tests {
         // Mirrors test_ae_city_primary.
         let place = a7_rtl_index0();
         let city = city_one(&place.components, Some("AE"), &PostalLocality::Unread);
-        assert_eq!(city.value.as_deref(), Some("دبي"));
+        assert_eq!(text(&city.value), Some("دبي"));
         assert_eq!(city.carrier, Some(CARRIER_LOCALITY));
         assert_eq!(city.confidence, CONFIDENCE_PRIMARY);
-        assert_eq!(city.country_code.as_deref(), Some("AE"));
+        assert_eq!(text(&city.country_code), Some("AE"));
     }
 
     #[test]
     fn ae_district_and_postal_substitution() {
         // Mirrors test_ae_district_and_postal_substitution.
         let place = a9_no_postal_codes();
-        let district = district_resolution(&place.components, Some("AE"));
-        assert_eq!(district.value.as_deref(), Some("المركز التجاري الثانية"));
+        let district = district_resolution(&place.components, Some(b"AE"));
+        assert_eq!(text(&district.value), Some("المركز التجاري الثانية"));
         assert_eq!(district.carrier, Some(CARRIER_SUBLOCALITY_LEVEL_1));
         assert_eq!(district.confidence, CONFIDENCE_PRIMARY);
-        let neighborhood = first_long_text(&place.components, "neighborhood");
-        assert_eq!(place.postal_sublocality(), neighborhood.as_deref());
+        let neighborhood = first_long_text(&place.components, b"neighborhood");
+        assert_eq!(place.postal_sublocality(), text(&neighborhood));
         assert_ne!(district.value, neighborhood);
     }
 
@@ -769,14 +970,14 @@ mod tests {
         // Mirrors test_ae_postal_absence_of_a_code.
         let place = a9_no_postal_codes();
         let result = postal_code_result(
-            Some("AE".to_owned()),
+            Some(bytes("AE")),
             first_long_text(&place.components, TYPE_POSTAL_CODE),
-            place.postal_postal_code().map(str::to_owned),
+            place.postal_postal_code().map(bytes),
         );
         assert_eq!(result.value, None);
         assert_eq!(result.carrier, None);
         assert_eq!(result.status, POSTAL_ABSENT);
-        assert_eq!(result.country_code.as_deref(), Some("AE"));
+        assert_eq!(text(&result.country_code), Some("AE"));
     }
 
     #[test]
@@ -786,15 +987,15 @@ mod tests {
             typed("UAE", "AE", &["country"]),
         ];
         assert_eq!(
-            city_resolutions(&components, Some("AE"), &PostalLocality::Unread),
+            city_resolutions(&components, Some(b"AE"), &PostalLocality::Unread),
             CityResolutions::NeedsPostalLocality
         );
         let city = city_one(
             &components,
             Some("AE"),
-            &PostalLocality::Read(Some("Dubai Postal".to_owned())),
+            &PostalLocality::Read(Some(bytes("Dubai Postal"))),
         );
-        assert_eq!(city.value.as_deref(), Some("Dubai Postal"));
+        assert_eq!(text(&city.value), Some("Dubai Postal"));
         assert_eq!(city.carrier, Some(CARRIER_POSTAL_ADDRESS_LOCALITY));
         assert_eq!(city.confidence, CONFIDENCE_FALLBACK);
         let none = city_one(&components, Some("AE"), &PostalLocality::Read(None));
@@ -806,12 +1007,12 @@ mod tests {
         // Mirrors test_lying_labels.
         let place = a7_rtl_index0();
         assert_eq!(
-            first_long_text(&place.components, "route").as_deref(),
+            text(&first_long_text(&place.components, b"route")),
             Some("122nd Floor")
         );
         assert!(component_flags(&place.components).has_route);
-        let district = district_resolution(&place.components, Some("AE"));
-        assert_eq!(district.value.as_deref(), Some("برج خليفة"));
+        let district = district_resolution(&place.components, Some(b"AE"));
+        assert_eq!(text(&district.value), Some("برج خليفة"));
     }
 
     // --- United Kingdom, stated two value answer
@@ -821,22 +1022,19 @@ mod tests {
         // Mirrors test_gb_two_value_answer.
         let place = a4_disagree();
         let CityResolutions::Done(done) =
-            city_resolutions(&place.components, Some("GB"), &PostalLocality::Unread)
+            city_resolutions(&place.components, Some(b"GB"), &PostalLocality::Unread)
         else {
             panic!("the British chain never reads postal")
         };
         assert_eq!(done.len(), 2);
-        assert_eq!(done[0].value.as_deref(), Some("Bourton-on-the-Water"));
+        assert_eq!(text(&done[0].value), Some("Bourton-on-the-Water"));
         assert_eq!(done[0].carrier, Some(CARRIER_LOCALITY));
         assert_eq!(done[0].confidence, CONFIDENCE_CONTESTED);
-        assert_eq!(done[0].competing_value.as_deref(), Some("Cheltenham"));
+        assert_eq!(text(&done[0].competing_value), Some("Cheltenham"));
         assert_eq!(done[0].competing_carrier, Some(CARRIER_POSTAL_TOWN));
-        assert_eq!(done[1].value.as_deref(), Some("Cheltenham"));
+        assert_eq!(text(&done[1].value), Some("Cheltenham"));
         assert_eq!(done[1].carrier, Some(CARRIER_POSTAL_TOWN));
-        assert_eq!(
-            done[1].competing_value.as_deref(),
-            Some("Bourton-on-the-Water")
-        );
+        assert_eq!(text(&done[1].competing_value), Some("Bourton-on-the-Water"));
         assert_eq!(done[1].competing_carrier, Some(CARRIER_LOCALITY));
     }
 
@@ -880,18 +1078,18 @@ mod tests {
         // and test_jp_lowercase_signal_takes_the_stated_table.
         let gb = a4_disagree();
         let CityResolutions::Done(done) =
-            city_resolutions(&gb.components, Some("gb"), &PostalLocality::Unread)
+            city_resolutions(&gb.components, Some(b"gb"), &PostalLocality::Unread)
         else {
             panic!("the British chain never reads postal")
         };
         assert_eq!(done.len(), 2);
-        assert_eq!(done[0].country_code.as_deref(), Some("gb"));
+        assert_eq!(text(&done[0].country_code), Some("gb"));
         assert_eq!(done[0].confidence, CONFIDENCE_CONTESTED);
         let jp = a8_tokyo_english();
         let city = city_one(&jp.components, Some("jp"), &PostalLocality::Unread);
         assert_eq!(city.confidence, CONFIDENCE_PRIMARY);
-        assert_eq!(city.country_code.as_deref(), Some("jp"));
-        let district = district_resolution(&jp.components, Some("jp"));
+        assert_eq!(text(&city.country_code), Some("jp"));
+        let district = district_resolution(&jp.components, Some(b"jp"));
         assert_eq!(district.confidence, CONFIDENCE_PRIMARY);
         let mixed = city_one(&jp.components, Some("Jp"), &PostalLocality::Unread);
         assert_eq!(mixed.confidence, CONFIDENCE_PRIMARY);
@@ -904,10 +1102,10 @@ mod tests {
         // Mirrors test_us_rescue_under_the_generic_chain.
         let place = a2_no_locality();
         let city = city_one(&place.components, Some("US"), &PostalLocality::Unread);
-        assert_eq!(city.value.as_deref(), Some("Brooklyn"));
+        assert_eq!(text(&city.value), Some("Brooklyn"));
         assert_eq!(city.carrier, Some(CARRIER_SUBLOCALITY_LEVEL_1));
         assert_eq!(city.confidence, CONFIDENCE_HEURISTIC);
-        assert_eq!(first_long_text(&place.components, "locality"), None);
+        assert_eq!(first_long_text(&place.components, b"locality"), None);
     }
 
     #[test]
@@ -915,10 +1113,10 @@ mod tests {
         // Mirrors test_us_plain_locality_under_the_generic_chain.
         let place = p15_mall();
         let city = city_one(&place.components, Some("US"), &PostalLocality::Unread);
-        assert_eq!(city.value.as_deref(), Some("Santa Clara"));
+        assert_eq!(text(&city.value), Some("Santa Clara"));
         assert_eq!(city.carrier, Some(CARRIER_LOCALITY));
         assert_eq!(city.confidence, CONFIDENCE_HEURISTIC);
-        assert_ne!(city.value.as_deref(), Some("Central San Jose"));
+        assert_ne!(text(&city.value), Some("Central San Jose"));
     }
 
     #[test]
@@ -926,7 +1124,7 @@ mod tests {
         // Mirrors test_us_bridge_absence.
         let place = a1_no_street_number();
         let city = city_one(&place.components, Some("US"), &PostalLocality::Unread);
-        assert_eq!(city.value.as_deref(), Some("New York"));
+        assert_eq!(text(&city.value), Some("New York"));
         let flags = component_flags(&place.components);
         assert!(!flags.has_street_number);
         assert!(!flags.has_no_street_level);
@@ -937,9 +1135,9 @@ mod tests {
         // Mirrors test_vn_inversion_guard.
         let place = p15_saigon();
         let city = city_one(&place.components, Some("VN"), &PostalLocality::Unread);
-        assert_eq!(city.value.as_deref(), Some("Thành phố Hồ Chí Minh"));
+        assert_eq!(text(&city.value), Some("Thành phố Hồ Chí Minh"));
         assert_eq!(city.confidence, CONFIDENCE_HEURISTIC);
-        assert_ne!(city.value.as_deref(), Some("Tan Son Hoa"));
+        assert_ne!(text(&city.value), Some("Tan Son Hoa"));
         assert_eq!(place.postal_locality(), Some("Tan Son Hoa"));
     }
 
@@ -948,24 +1146,24 @@ mod tests {
         // Mirrors test_il_thin_generic.
         let place = a10_jerusalem_no_region();
         let city = city_one(&place.components, Some("IL"), &PostalLocality::Unread);
-        assert_eq!(city.value.as_deref(), Some("Jerusalem"));
+        assert_eq!(text(&city.value), Some("Jerusalem"));
         assert_eq!(city.confidence, CONFIDENCE_HEURISTIC);
-        assert_eq!(city.country_code.as_deref(), Some("IL"));
+        assert_eq!(text(&city.country_code), Some("IL"));
     }
 
     #[test]
     fn generic_chain_falls_to_postal_locality_last() {
         let components = vec![typed("France", "FR", &["country"])];
         assert_eq!(
-            city_resolutions(&components, Some("FR"), &PostalLocality::Unread),
+            city_resolutions(&components, Some(b"FR"), &PostalLocality::Unread),
             CityResolutions::NeedsPostalLocality
         );
         let city = city_one(
             &components,
             Some("FR"),
-            &PostalLocality::Read(Some("Paris".to_owned())),
+            &PostalLocality::Read(Some(bytes("Paris"))),
         );
-        assert_eq!(city.value.as_deref(), Some("Paris"));
+        assert_eq!(text(&city.value), Some("Paris"));
         assert_eq!(city.carrier, Some(CARRIER_POSTAL_ADDRESS_LOCALITY));
         assert_eq!(city.confidence, CONFIDENCE_HEURISTIC);
     }
@@ -977,10 +1175,10 @@ mod tests {
             typed("Town", "Town", &["locality"]),
             typed("United States", "US", &["country"]),
         ];
-        let district = district_resolution(&components, Some("US"));
+        let district = district_resolution(&components, Some(b"US"));
         assert_eq!(district.value, None);
         assert_eq!(district.confidence, CONFIDENCE_NONE);
-        assert_eq!(district.country_code.as_deref(), Some("US"));
+        assert_eq!(text(&district.country_code), Some("US"));
         let no_country = district_resolution(&components, None);
         assert_eq!(no_country.country_code, None);
     }
@@ -993,14 +1191,14 @@ mod tests {
         // for lack of a recorded fixture, pinned here on authored
         // values.
         let result = postal_code_result(
-            Some("JP".to_owned()),
-            Some("111-0032".to_owned()),
-            Some("999-9999".to_owned()),
+            Some(bytes("JP")),
+            Some(bytes("111-0032")),
+            Some(bytes("999-9999")),
         );
-        assert_eq!(result.value.as_deref(), Some("111-0032"));
+        assert_eq!(text(&result.value), Some("111-0032"));
         assert_eq!(result.carrier, Some(CARRIER_POSTAL_CODE_COMPONENT));
         assert_eq!(result.status, POSTAL_PRESENT);
-        assert_eq!(result.competing_value.as_deref(), Some("999-9999"));
+        assert_eq!(text(&result.competing_value), Some("999-9999"));
         assert_eq!(
             result.competing_carrier,
             Some(CARRIER_POSTAL_ADDRESS_POSTAL_CODE)
@@ -1009,16 +1207,14 @@ mod tests {
 
     #[test]
     fn postal_single_carrier_cells() {
-        let component_only =
-            postal_code_result(Some("JP".to_owned()), Some("111-0032".to_owned()), None);
+        let component_only = postal_code_result(Some(bytes("JP")), Some(bytes("111-0032")), None);
         assert_eq!(component_only.carrier, Some(CARRIER_POSTAL_CODE_COMPONENT));
-        let postal_only =
-            postal_code_result(Some("JP".to_owned()), None, Some("111-0032".to_owned()));
+        let postal_only = postal_code_result(Some(bytes("JP")), None, Some(bytes("111-0032")));
         assert_eq!(
             postal_only.carrier,
             Some(CARRIER_POSTAL_ADDRESS_POSTAL_CODE)
         );
-        let neither = postal_code_result(Some("JP".to_owned()), None, None);
+        let neither = postal_code_result(Some(bytes("JP")), None, None);
         assert_eq!(neither.status, POSTAL_ABSENT);
         assert_eq!(neither.value, None);
         assert_eq!(neither.carrier, None);
@@ -1097,42 +1293,39 @@ mod tests {
     #[test]
     fn split_compound_code_recorded_forms() {
         assert_eq!(
-            split_compound_code("P27Q+Q9 Brooklyn, NY, USA"),
-            Some(("P27Q+Q9".to_owned(), "Brooklyn, NY, USA".to_owned()))
+            split_compound_code("P27Q+Q9 Brooklyn, NY, USA".as_bytes()),
+            Some((bytes("P27Q+Q9"), bytes("Brooklyn, NY, USA")))
         );
         assert_eq!(
-            split_compound_code("83G4+2P Santa Clara, CA, USA"),
-            Some(("83G4+2P".to_owned(), "Santa Clara, CA, USA".to_owned()))
+            split_compound_code("83G4+2P Santa Clara, CA, USA".as_bytes()),
+            Some((bytes("83G4+2P"), bytes("Santa Clara, CA, USA")))
         );
         assert_eq!(
-            split_compound_code("QMX9+V7 Tan Son Hoa, Ho Chi Minh, Vietnam"),
-            Some((
-                "QMX9+V7".to_owned(),
-                "Tan Son Hoa, Ho Chi Minh, Vietnam".to_owned()
-            ))
+            split_compound_code("QMX9+V7 Tan Son Hoa, Ho Chi Minh, Vietnam".as_bytes()),
+            Some((bytes("QMX9+V7"), bytes("Tan Son Hoa, Ho Chi Minh, Vietnam")))
         );
     }
 
     #[test]
     fn split_compound_code_refusals() {
-        assert_eq!(split_compound_code(""), None);
-        assert_eq!(split_compound_code("87G8P27Q+Q9"), None);
-        assert_eq!(split_compound_code("P27Q+Q9 "), None);
-        assert_eq!(split_compound_code(" P27Q+Q9"), None);
-        assert_eq!(split_compound_code(" "), None);
-        assert_eq!(split_compound_code("C "), None);
-        assert_eq!(split_compound_code(" C"), None);
+        assert_eq!(split_compound_code(b""), None);
+        assert_eq!(split_compound_code("87G8P27Q+Q9".as_bytes()), None);
+        assert_eq!(split_compound_code("P27Q+Q9 ".as_bytes()), None);
+        assert_eq!(split_compound_code(" P27Q+Q9".as_bytes()), None);
+        assert_eq!(split_compound_code(b" "), None);
+        assert_eq!(split_compound_code("C ".as_bytes()), None);
+        assert_eq!(split_compound_code(" C".as_bytes()), None);
     }
 
     #[test]
     fn split_compound_code_keeps_inner_spaces_and_strips_python_whitespace() {
         assert_eq!(
-            split_compound_code("AB CD EF"),
-            Some(("AB".to_owned(), "CD EF".to_owned()))
+            split_compound_code("AB CD EF".as_bytes()),
+            Some((bytes("AB"), bytes("CD EF")))
         );
         assert_eq!(
-            split_compound_code("CODE  Double  Space"),
-            Some(("CODE".to_owned(), "Double  Space".to_owned()))
+            split_compound_code("CODE  Double  Space".as_bytes()),
+            Some((bytes("CODE"), bytes("Double  Space")))
         );
         // A tab is not the split point, so it stays inside the
         // code token when a space follows later, and the strip
@@ -1140,20 +1333,38 @@ mod tests {
         // separators and the next line character beside the
         // White_Space set.
         assert_eq!(
-            split_compound_code("CODE\tTabbed Locality"),
-            Some(("CODE\tTabbed".to_owned(), "Locality".to_owned()))
+            split_compound_code("CODE\tTabbed Locality".as_bytes()),
+            Some((bytes("CODE\tTabbed"), bytes("Locality")))
         );
         assert_eq!(
-            split_compound_code("CODE Locality\u{1c}Town"),
-            Some(("CODE".to_owned(), "Locality\u{1c}Town".to_owned()))
+            split_compound_code("CODE Locality\u{1c}Town".as_bytes()),
+            Some((bytes("CODE"), bytes("Locality\u{1c}Town")))
         );
         assert_eq!(
-            split_compound_code("CODE \u{a0}Town"),
-            Some(("CODE".to_owned(), "Town".to_owned()))
+            split_compound_code("CODE \u{a0}Town".as_bytes()),
+            Some((bytes("CODE"), bytes("Town")))
         );
         assert_eq!(
-            split_compound_code("CODE Locality\u{85}"),
-            Some(("CODE".to_owned(), "Locality".to_owned()))
+            split_compound_code("CODE Locality\u{85}".as_bytes()),
+            Some((bytes("CODE"), bytes("Locality")))
         );
+    }
+
+    #[test]
+    fn split_compound_code_strips_multibyte_space_and_keeps_surrogates() {
+        // The ideographic space is a three byte unit and strips
+        // whole off both ends, and a surrogate unit inside the
+        // locality text is no space and survives the strip.
+        let mut input: Vec<u8> = Vec::new();
+        input.extend_from_slice("CODE".as_bytes());
+        input.push(b' ');
+        input.extend_from_slice("\u{3000}".as_bytes());
+        input.extend_from_slice(b"Town");
+        input.extend_from_slice(&[0xED, 0xA0, 0x80]);
+        input.extend_from_slice("\u{3000}".as_bytes());
+        let mut locality: Vec<u8> = Vec::new();
+        locality.extend_from_slice(b"Town");
+        locality.extend_from_slice(&[0xED, 0xA0, 0x80]);
+        assert_eq!(split_compound_code(&input), Some((bytes("CODE"), locality)));
     }
 }
