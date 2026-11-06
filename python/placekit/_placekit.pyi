@@ -5,10 +5,84 @@ The request body arguments are the camelCase JSON bodies of the Places API,
 deserialized into typed Rust structs on the other side.
 """
 
-from typing import Any, Optional, final
+from typing import Any, Optional, Sequence, final
 
 __version__: str
-__all__ = ["CallHandle", "Client", "PlacesError", "__version__"]
+__all__ = [
+    "CallHandle",
+    "Client",
+    "PlacesError",
+    "__version__",
+    "address_city_resolutions",
+    "address_component_flags",
+    "address_country_code",
+    "address_district_resolution",
+    "address_first_long_text",
+    "address_first_short_text",
+    "address_long_texts",
+    "address_matching_indices",
+    "address_postal_code_result",
+    "address_short_texts",
+    "address_split_compound_code",
+    "address_untyped_indices",
+]
+
+def address_matching_indices(
+    components: list[tuple[Optional[str], Optional[str], Sequence[Optional[str]]]],
+    type_name: str,
+) -> list[int]: ...
+def address_untyped_indices(
+    components: list[tuple[Optional[str], Optional[str], Sequence[Optional[str]]]]
+) -> list[int]: ...
+def address_first_long_text(
+    components: list[tuple[Optional[str], Optional[str], Sequence[Optional[str]]]],
+    type_name: str,
+) -> Optional[str]: ...
+def address_first_short_text(
+    components: list[tuple[Optional[str], Optional[str], Sequence[Optional[str]]]],
+    type_name: str,
+) -> Optional[str]: ...
+def address_long_texts(
+    components: list[tuple[Optional[str], Optional[str], Sequence[Optional[str]]]],
+    type_name: str,
+) -> list[str]: ...
+def address_short_texts(
+    components: list[tuple[Optional[str], Optional[str], Sequence[Optional[str]]]],
+    type_name: str,
+) -> list[str]: ...
+def address_country_code(
+    components: list[tuple[Optional[str], Optional[str], Sequence[Optional[str]]]]
+) -> Optional[str]: ...
+def address_city_resolutions(
+    components: list[tuple[Optional[str], Optional[str], Sequence[Optional[str]]]],
+    postal_locality_read: bool,
+    country_code: Optional[str],
+    postal_locality: Optional[str],
+) -> tuple[
+    bool,
+    list[
+        tuple[
+            Optional[str], Optional[str], str, Optional[str], Optional[str], Optional[str]
+        ]
+    ],
+]: ...
+def address_district_resolution(
+    components: list[tuple[Optional[str], Optional[str], Sequence[Optional[str]]]],
+    country_code: Optional[str],
+) -> tuple[Optional[str], Optional[str], str, Optional[str]]: ...
+def address_postal_code_result(
+    country_code: Optional[str],
+    component_value: Optional[str],
+    postal_value: Optional[str],
+) -> tuple[
+    Optional[str], Optional[str], str, Optional[str], Optional[str], Optional[str]
+]: ...
+def address_component_flags(
+    components: list[tuple[Optional[str], Optional[str], Sequence[Optional[str]]]]
+) -> tuple[bool, bool, bool, bool, bool, bool, bool]: ...
+def address_split_compound_code(
+    compound_code: str,
+) -> Optional[tuple[str, str]]: ...
 
 @final
 class CallHandle:

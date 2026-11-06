@@ -62,6 +62,17 @@ have, and a value that raises while it is being read or used,
 an instance built without its constructor or a property
 getter or method that raises, surfaces as the same
 ConfigError with the original failure chained.
+
+The readings themselves are computed in the Rust core, in
+crates/placekit-core/src/address.rs, since Round 53. This
+module is the delegation layer over that core. It validates
+every argument through the funnels below, converts the checked
+components into the plain shapes the core accepts, reads each
+postal field at exactly the point the reading that touches it
+always read it, and wraps the core answers back into the
+result types this module has always returned. Validation
+stays here because it is a property of the caller supplied
+Python values, and the core never sees a Python object.
 """
 
 from __future__ import annotations
@@ -70,7 +81,7 @@ import functools
 from dataclasses import dataclass
 from typing import Optional, Sequence
 
-from . import types
+from . import _placekit, types
 from .exceptions import ConfigError
 from .fields import MAX_MATERIALIZED_ITEMS, _materialize_bounded, _safe_repr
 from .models import AddressComponent, Place, PlusCode, PostalAddress
@@ -408,50 +419,23 @@ def _checked_place(place: Place) -> tuple[AddressComponent, ...]:
     return _checked_components(components)
 
 
-# Scan cores over an already checked component list. Every public
-# helper validates its list once through _checked_components and
-# then works through these cores, so one public call pays the
-# validation and the scans once no matter how many readings it
-# composes. Before this sharing, address_flags alone revalidated
-# the same list seventeen times and rescanned it sixteen times
-# (Round 21 Finding 5). The cores assume the check has run and
-# the type name is valid, and they answer in list order exactly
-# as the helpers they sit under always have.
-def _scan_components(
-    checked: Sequence[AddressComponent], type_name: str
-) -> tuple[AddressComponent, ...]:
-    return tuple(
-        component for component in checked if type_name in component.types
-    )
+def _plain_components(
+    checked: Sequence[AddressComponent],
+) -> list[tuple[Optional[str], Optional[str], tuple[Optional[str], ...]]]:
+    """Convert checked components into the plain core shape.
 
-
-def _scan_component(
-    checked: Sequence[AddressComponent], type_name: str
-) -> Optional[AddressComponent]:
-    for component in checked:
-        if type_name in component.types:
-            return component
-    return None
-
-
-def _scan_long_text(
-    checked: Sequence[AddressComponent], type_name: str
-) -> Optional[str]:
-    for component in checked:
-        if type_name in component.types and component.long_text:
-            return component.long_text
-    return None
-
-
-# Routing into a stated answer or the generic chain matches the
-# country code without regard to letter case, so a lowercase or
-# mixed case signal still reaches the answer its country carries.
-# The normalisation serves the match only and the code a helper
-# returns or a result carries stays the value as sent.
-def _routing_country(country: Optional[str]) -> Optional[str]:
-    if country is None:
-        return None
-    return country.upper()
+    The core works on one triple per component, its long text,
+    its short text and its type names, so no Python object
+    crosses the boundary. The conversion reads only fields the
+    funnel has already validated, and it runs inside the entry
+    guard of the helper that owns the call, so a value that
+    raises while it is being read surfaces with the same
+    ConfigError discipline as any other read in this module.
+    """
+    return [
+        (component.long_text, component.short_text, tuple(component.types))
+        for component in checked
+    ]
 
 
 def _checked_type_name(type_name: str) -> str:
@@ -488,11 +472,11 @@ def find_components(
     component that carries it as a companion type.
     """
     _checked_type_name(type_name)
-    return tuple(
-        component
-        for component in _checked_components(components)
-        if type_name in component.types
+    checked = _checked_components(components)
+    indices = _placekit.address_matching_indices(
+        _plain_components(checked), type_name
     )
+    return tuple(checked[index] for index in indices)
 
 
 @_entry_guard
@@ -504,10 +488,10 @@ def component_long_text(
     A match whose long text is empty is skipped and the scan
     keeps going, so this form never returns an empty string.
     """
-    for component in find_components(components, type_name):
-        if component.long_text:
-            return component.long_text
-    return None
+    _checked_type_name(type_name)
+    return _placekit.address_first_long_text(
+        _plain_components(_checked_components(components)), type_name
+    )
 
 
 @_entry_guard
@@ -519,10 +503,10 @@ def component_short_text(
     A match whose short text is empty is skipped and the scan
     keeps going, so this form never returns an empty string.
     """
-    for component in find_components(components, type_name):
-        if component.short_text:
-            return component.short_text
-    return None
+    _checked_type_name(type_name)
+    return _placekit.address_first_short_text(
+        _plain_components(_checked_components(components)), type_name
+    )
 
 
 @_entry_guard
@@ -530,10 +514,11 @@ def component_long_texts(
     components: Sequence[AddressComponent], type_name: str
 ) -> tuple[str, ...]:
     """Return the nonempty long texts of every match in order."""
+    _checked_type_name(type_name)
     return tuple(
-        component.long_text
-        for component in find_components(components, type_name)
-        if component.long_text
+        _placekit.address_long_texts(
+            _plain_components(_checked_components(components)), type_name
+        )
     )
 
 
@@ -542,10 +527,11 @@ def component_short_texts(
     components: Sequence[AddressComponent], type_name: str
 ) -> tuple[str, ...]:
     """Return the nonempty short texts of every match in order."""
+    _checked_type_name(type_name)
     return tuple(
-        component.short_text
-        for component in find_components(components, type_name)
-        if component.short_text
+        _placekit.address_short_texts(
+            _plain_components(_checked_components(components)), type_name
+        )
     )
 
 
@@ -560,20 +546,15 @@ def untyped_components(
     text on its place. This bucket surfaces them in list order
     and no helper guesses a type for them.
     """
-    return tuple(
-        component
-        for component in _checked_components(components)
-        if not component.types
-    )
+    checked = _checked_components(components)
+    indices = _placekit.address_untyped_indices(_plain_components(checked))
+    return tuple(checked[index] for index in indices)
 
 
 def _country_code_from_components(
     checked: Sequence[AddressComponent],
 ) -> Optional[str]:
-    for component in _scan_components(checked, types.TYPE_COUNTRY):
-        if component.short_text:
-            return component.short_text
-    return None
+    return _placekit.address_country_code(_plain_components(checked))
 
 
 @_entry_guard
@@ -620,8 +601,9 @@ def administrative_area(place: Place) -> Optional[str]:
     across request languages while the component text stayed
     stable.
     """
-    return _scan_long_text(
-        _checked_place(place), types.TYPE_ADMINISTRATIVE_AREA_LEVEL_1
+    return _placekit.address_first_long_text(
+        _plain_components(_checked_place(place)),
+        types.TYPE_ADMINISTRATIVE_AREA_LEVEL_1,
     )
 
 
@@ -649,30 +631,15 @@ def _postal_code(
     place: Place, checked: Sequence[AddressComponent]
 ) -> PostalCodeResult:
     country = _country_code(place, checked)
-    component_value = _scan_long_text(checked, types.TYPE_POSTAL_CODE)
+    component_value = _placekit.address_first_long_text(
+        _plain_components(checked), types.TYPE_POSTAL_CODE
+    )
     postal_value = postal_code_from_postal_address(place.postal_address)
-    if component_value is not None and postal_value is not None:
-        if component_value == postal_value:
-            return PostalCodeResult(
-                component_value, CARRIER_BOTH_POSTAL, POSTAL_PRESENT, country
-            )
-        return PostalCodeResult(
-            component_value,
-            CARRIER_POSTAL_CODE_COMPONENT,
-            POSTAL_PRESENT,
-            country,
-            competing_value=postal_value,
-            competing_carrier=CARRIER_POSTAL_ADDRESS_POSTAL_CODE,
+    return PostalCodeResult(
+        *_placekit.address_postal_code_result(
+            country, component_value, postal_value
         )
-    if component_value is not None:
-        return PostalCodeResult(
-            component_value, CARRIER_POSTAL_CODE_COMPONENT, POSTAL_PRESENT, country
-        )
-    if postal_value is not None:
-        return PostalCodeResult(
-            postal_value, CARRIER_POSTAL_ADDRESS_POSTAL_CODE, POSTAL_PRESENT, country
-        )
-    return PostalCodeResult(None, None, POSTAL_ABSENT, country)
+    )
 
 
 @_entry_guard
@@ -691,90 +658,23 @@ def postal_code(place: Place) -> PostalCodeResult:
     return _postal_code(place, _checked_place(place))
 
 
-def _no_city(country: Optional[str]) -> CityResolution:
-    return CityResolution(None, None, CONFIDENCE_NONE, country)
-
-
-def _british_resolutions(
-    country: Optional[str],
-    checked: Sequence[AddressComponent],
-) -> tuple[CityResolution, ...]:
-    locality = _scan_long_text(checked, types.TYPE_LOCALITY)
-    town = _scan_long_text(checked, types.TYPE_POSTAL_TOWN)
-    if locality is not None and town is not None:
-        if locality != town:
-            return (
-                CityResolution(
-                    locality,
-                    CARRIER_LOCALITY,
-                    CONFIDENCE_CONTESTED,
-                    country,
-                    competing_value=town,
-                    competing_carrier=CARRIER_POSTAL_TOWN,
-                ),
-                CityResolution(
-                    town,
-                    CARRIER_POSTAL_TOWN,
-                    CONFIDENCE_CONTESTED,
-                    country,
-                    competing_value=locality,
-                    competing_carrier=CARRIER_LOCALITY,
-                ),
-            )
-        return (CityResolution(locality, CARRIER_LOCALITY, CONFIDENCE_PRIMARY, country),)
-    if locality is not None:
-        return (CityResolution(locality, CARRIER_LOCALITY, CONFIDENCE_PRIMARY, country),)
-    if town is not None:
-        return (CityResolution(town, CARRIER_POSTAL_TOWN, CONFIDENCE_FALLBACK, country),)
-    return (_no_city(country),)
-
-
 def _city_resolutions(
     place: Place, checked: Sequence[AddressComponent]
 ) -> tuple[CityResolution, ...]:
     country = _country_code(place, checked)
-    route = _routing_country(country)
-    if route in CONTESTED_COUNTRIES:
-        return _british_resolutions(country, checked)
-    if route in PRECEDENCE_COUNTRIES:
-        locality = _scan_long_text(checked, types.TYPE_LOCALITY)
-        if locality is not None:
-            return (
-                CityResolution(locality, CARRIER_LOCALITY, CONFIDENCE_PRIMARY, country),
-            )
-        if route == "AE":
-            postal_value = postal_locality(place.postal_address)
-            if postal_value is not None:
-                return (
-                    CityResolution(
-                        postal_value,
-                        CARRIER_POSTAL_ADDRESS_LOCALITY,
-                        CONFIDENCE_FALLBACK,
-                        country,
-                    ),
-                )
-        return (_no_city(country),)
-    generic_chain = (
-        (types.TYPE_LOCALITY, CARRIER_LOCALITY),
-        (types.TYPE_POSTAL_TOWN, CARRIER_POSTAL_TOWN),
-        (types.TYPE_SUBLOCALITY_LEVEL_1, CARRIER_SUBLOCALITY_LEVEL_1),
-        (types.TYPE_SUBLOCALITY_LEVEL_2, CARRIER_SUBLOCALITY_LEVEL_2),
+    plain = _plain_components(checked)
+    needs_postal, rows = _placekit.address_city_resolutions(
+        plain, False, country, None
     )
-    for type_name, carrier in generic_chain:
-        value = _scan_long_text(checked, type_name)
-        if value is not None:
-            return (CityResolution(value, carrier, CONFIDENCE_HEURISTIC, country),)
-    postal_value = postal_locality(place.postal_address)
-    if postal_value is not None:
-        return (
-            CityResolution(
-                postal_value,
-                CARRIER_POSTAL_ADDRESS_LOCALITY,
-                CONFIDENCE_HEURISTIC,
-                country,
-            ),
+    if needs_postal:
+        # The chain reached the postal locality carrier, so the
+        # field is read here, at exactly the point the chain
+        # touches it, and the chain runs again with it in hand.
+        locality = postal_locality(place.postal_address)
+        needs_postal, rows = _placekit.address_city_resolutions(
+            plain, True, country, locality
         )
-    return (_no_city(country),)
+    return tuple(CityResolution(*row) for row in rows)
 
 
 @_entry_guard
@@ -810,19 +710,11 @@ def _resolve_district(
     place: Place, checked: Sequence[AddressComponent]
 ) -> DistrictResolution:
     country = _country_code(place, checked)
-    route = _routing_country(country)
-    if route == "JP":
-        type_name = types.TYPE_SUBLOCALITY_LEVEL_2
-        carrier = CARRIER_SUBLOCALITY_LEVEL_2
-    elif route == "AE":
-        type_name = types.TYPE_SUBLOCALITY_LEVEL_1
-        carrier = CARRIER_SUBLOCALITY_LEVEL_1
-    else:
-        return DistrictResolution(None, None, CONFIDENCE_NONE, country)
-    value = _scan_long_text(checked, type_name)
-    if value is None:
-        return DistrictResolution(None, None, CONFIDENCE_NONE, country)
-    return DistrictResolution(value, carrier, CONFIDENCE_PRIMARY, country)
+    return DistrictResolution(
+        *_placekit.address_district_resolution(
+            _plain_components(checked), country
+        )
+    )
 
 
 @_entry_guard
@@ -869,13 +761,8 @@ def has_subpremise(components: Sequence[AddressComponent]) -> bool:
     return find_component(components, types.TYPE_SUBPREMISE) is not None
 
 
-def _spans_multiple_routes(checked: Sequence[AddressComponent]) -> bool:
-    routes = [
-        component
-        for component in _scan_components(checked, types.TYPE_ROUTE)
-        if component.long_text
-    ]
-    return len(routes) >= 2
+def _component_flags(checked: Sequence[AddressComponent]) -> tuple[bool, ...]:
+    return _placekit.address_component_flags(_plain_components(checked))
 
 
 @_entry_guard
@@ -885,16 +772,7 @@ def spans_multiple_routes(components: Sequence[AddressComponent]) -> bool:
     Only route components with a nonempty long text count, so
     one named route beside one empty route reads as one route.
     """
-    return _spans_multiple_routes(_checked_components(components))
-
-
-def _has_no_street_level(checked: Sequence[AddressComponent]) -> bool:
-    return not (
-        _scan_component(checked, types.TYPE_STREET_NUMBER) is not None
-        or _scan_component(checked, types.TYPE_ROUTE) is not None
-        or _scan_component(checked, types.TYPE_PREMISE) is not None
-        or _scan_component(checked, types.TYPE_SUBPREMISE) is not None
-    )
+    return _component_flags(_checked_components(components))[5]
 
 
 @_entry_guard
@@ -905,15 +783,7 @@ def has_no_street_level(components: Sequence[AddressComponent]) -> bool:
     or a subpremise component, and the flag is true only when
     none of the four exists.
     """
-    return _has_no_street_level(_checked_components(components))
-
-
-def _is_premise_level(checked: Sequence[AddressComponent]) -> bool:
-    return (
-        _scan_component(checked, types.TYPE_PREMISE) is not None
-        and _scan_component(checked, types.TYPE_STREET_NUMBER) is None
-        and _scan_component(checked, types.TYPE_ROUTE) is None
-    )
+    return _component_flags(_checked_components(components))[6]
 
 
 @_entry_guard
@@ -925,7 +795,7 @@ def is_premise_level(place: Place) -> bool:
     which is the Japanese block addressing shape the recorded
     corpus holds.
     """
-    return _is_premise_level(_checked_place(place))
+    return _component_flags(_checked_place(place))[4]
 
 
 @_entry_guard
@@ -939,16 +809,23 @@ def address_flags(place: Place) -> AddressFlags:
     flag is true exactly when city resolution yields a value.
     """
     checked = _checked_place(place)
+    (
+        street_number,
+        route,
+        premise,
+        subpremise,
+        premise_level,
+        spans,
+        no_street_level,
+    ) = _component_flags(checked)
     return AddressFlags(
-        has_street_number=_scan_component(checked, types.TYPE_STREET_NUMBER)
-        is not None,
-        has_route=_scan_component(checked, types.TYPE_ROUTE) is not None,
-        has_premise=_scan_component(checked, types.TYPE_PREMISE) is not None,
-        has_subpremise=_scan_component(checked, types.TYPE_SUBPREMISE)
-        is not None,
-        is_premise_level=_is_premise_level(checked),
-        spans_multiple_routes=_spans_multiple_routes(checked),
-        has_no_street_level=_has_no_street_level(checked),
+        has_street_number=street_number,
+        has_route=route,
+        has_premise=premise,
+        has_subpremise=subpremise,
+        is_premise_level=premise_level,
+        spans_multiple_routes=spans,
+        has_no_street_level=no_street_level,
         has_postal_code=_postal_code(place, checked).status == POSTAL_PRESENT,
         has_postal_address=place.postal_address is not None,
         has_country=_country_code(place, checked) is not None,
@@ -981,11 +858,10 @@ def split_compound_code(compound_code: Optional[str]) -> Optional[PlusCodeParts]
         )
     if not compound_code:
         return None
-    code_part, separator, rest = compound_code.partition(" ")
-    locality_text = rest.strip()
-    if not separator or not code_part or not locality_text:
+    parts = _placekit.address_split_compound_code(compound_code)
+    if parts is None:
         return None
-    return PlusCodeParts(code_part=code_part, locality_text=locality_text)
+    return PlusCodeParts(code_part=parts[0], locality_text=parts[1])
 
 
 @_entry_guard
