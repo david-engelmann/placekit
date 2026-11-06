@@ -875,7 +875,14 @@ def _later_call_rewrites(module_body, position, name) -> bool:
     further literal so standing, and a name
     standing in the value position bound to a
     subscript whose own value position holds such
-    a yielding form or a loop target name resolving
+    a yielding form or a loop target name, or
+    bound through such a yielding form to the
+    value the form yields, a name so yielded
+    resolved on the same terms in turn, or bound
+    to a subscript whose own value position holds
+    a name bound to such a yielding form, the
+    yielded loop target name standing in the value
+    position on the same principle, resolving
     beside the denotation the bare name takes to
     the classes of the elements that subscript's
     selection yields on the same terms, on the
@@ -1335,10 +1342,30 @@ def _later_call_rewrites(module_body, position, name) -> bool:
         the same terms, because the name denotes the
         element the selection yields and the forms
         that subscript stands on are the selection
-        reading's own ground, while a name bound to a
-        subscript standing on any other value, a
-        literal among them, resolves through the
-        denotation alone.
+        reading's own ground. The qualification stands
+        however the name and the subscript's base came
+        to stand. A name bound through a yielding form
+        of those kinds is followed to the value the
+        form yields, and a name the form yields is
+        resolved on the same terms in turn, because
+        the value a yielding expression yields stands
+        where the expression itself stands. And the
+        subscript's base qualifies beside the forms
+        standing in it directly where the base stands
+        as a name bound to a yielding form of those
+        kinds, the loop target name the form yields
+        standing in the value position on the same
+        principle, under the name guard the other
+        name routes in this reading carry. While a
+        name bound to a subscript standing on any
+        other value, a literal among them, or on a
+        plain name bound to a literal, resolves
+        through the denotation alone, and a name
+        standing in the position on a plain
+        assignment alone, with no yielding form
+        between it and the subscript behind it,
+        resolves through the denotation alone in the
+        same way.
         """
         if isinstance(expression, ast.IfExp):
             names = subscript_value_class_names(expression.body, seen_names)
@@ -1363,24 +1390,91 @@ def _later_call_rewrites(module_body, position, name) -> bool:
                 )
             if names:
                 return names
+        def qualifying_base(base, seen_names):
+            """Whether the base of a subscript qualifies the name branch.
+
+            The base qualifies standing as a yielding
+            form itself, standing as a loop target name,
+            or standing as a name bound to a yielding
+            form, the loop target name the form yields
+            standing in the value position on the
+            yielding principle. A base standing in any
+            other form, a literal or a plain name bound
+            to a literal among them, qualifies nothing
+            here, and the name bound to the subscript
+            resolves through the denotation alone.
+            """
+            if isinstance(base, (ast.IfExp, ast.BoolOp, ast.NamedExpr)):
+                return True
+            if isinstance(base, ast.Name):
+                if base.id in loop_target_names:
+                    return True
+                if base.id not in seen_names:
+                    for bound_value in module_bindings.get(base.id, []):
+                        if isinstance(
+                            bound_value,
+                            (ast.IfExp, ast.BoolOp, ast.NamedExpr),
+                        ):
+                            return True
+            return False
+
+        def names_behind_yields(value, seen_names):
+            """The class names a value standing behind a name resolves to.
+
+            A subscript standing in the value counts
+            the classes of the elements its selection
+            yields where its base qualifies on the
+            terms the qualification beside it states. A
+            yielding form standing in the value is
+            followed to the values it yields, each read
+            on the same terms, and a name a form yields
+            is resolved through its own bindings on the
+            same terms in turn, the seen names guard
+            standing over the whole resolution so a
+            name resolving through itself ends the
+            following at the name. A value standing in
+            any other form resolves to nothing here.
+            """
+            if isinstance(value, ast.Subscript):
+                if not qualifying_base(value.value, seen_names):
+                    return []
+                names = []
+                for element in subscript_selected_values(value):
+                    names.extend(
+                        subscript_value_class_names(element, seen_names)
+                    )
+                return names
+            if isinstance(value, ast.IfExp):
+                names = names_behind_yields(value.body, seen_names)
+                names.extend(names_behind_yields(value.orelse, seen_names))
+                return names
+            if isinstance(value, ast.BoolOp):
+                names = []
+                for operand in value.values:
+                    names.extend(names_behind_yields(operand, seen_names))
+                return names
+            if isinstance(value, ast.NamedExpr):
+                return names_behind_yields(value.value, seen_names)
+            if isinstance(value, ast.Name) and value.id not in seen_names:
+                names = []
+                for bound_value in module_bindings.get(value.id, []):
+                    names.extend(
+                        names_behind_yields(
+                            bound_value, seen_names | {value.id}
+                        )
+                    )
+                return names
+            return []
+
         names = []
         if isinstance(expression, ast.Name) and expression.id not in seen_names:
+            seen = seen_names | {expression.id}
             for bound_value in module_bindings.get(expression.id, []):
-                if not isinstance(bound_value, ast.Subscript):
-                    continue
-                bound_base = bound_value.value
                 if isinstance(
-                    bound_base, (ast.IfExp, ast.BoolOp, ast.NamedExpr)
-                ) or (
-                    isinstance(bound_base, ast.Name)
-                    and bound_base.id in loop_target_names
+                    bound_value,
+                    (ast.Subscript, ast.IfExp, ast.BoolOp, ast.NamedExpr),
                 ):
-                    for element in subscript_selected_values(bound_value):
-                        names.extend(
-                            subscript_value_class_names(
-                                element, seen_names | {expression.id}
-                            )
-                        )
+                    names.extend(names_behind_yields(bound_value, seen))
         resolved = denoted_class_name(expression)
         if resolved is not None:
             names.append(resolved)
@@ -3068,7 +3162,14 @@ def _derive_loaders(filename: str) -> dict:
     standing, and a name standing in the value
     position bound to a subscript whose own value
     position holds such a yielding form or a loop
-    target name resolving beside the denotation
+    target name, or bound through such a yielding
+    form to the value the form yields, a name so
+    yielded resolved on the same terms in turn, or
+    bound to a subscript whose own value position
+    holds a name bound to such a yielding form,
+    the yielded loop target name standing in the
+    value position on the same principle,
+    resolving beside the denotation
     the bare name takes to the classes of the
     elements that subscript's selection yields on
     the same terms,
@@ -3406,7 +3507,14 @@ def _loader_function_names(filename: str) -> set[str]:
     standing, and a name standing in the value
     position bound to a subscript whose own value
     position holds such a yielding form or a loop
-    target name resolving beside the denotation
+    target name, or bound through such a yielding
+    form to the value the form yields, a name so
+    yielded resolved on the same terms in turn, or
+    bound to a subscript whose own value position
+    holds a name bound to such a yielding form,
+    the yielded loop target name standing in the
+    value position on the same principle,
+    resolving beside the denotation
     the bare name takes to the classes of the
     elements that subscript's selection yields on
     the same terms, each
