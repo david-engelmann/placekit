@@ -532,6 +532,7 @@ fn address_country_code(components: Vec<PyComponent>) -> Option<String> {
 /// old implementation read it and calls again with the flag set
 /// and the read value (or `None`) in hand.
 #[pyfunction]
+#[pyo3(signature = (components, postal_locality_read, country_code, postal_locality))]
 fn address_city_resolutions(
     components: Vec<PyComponent>,
     postal_locality_read: bool,
@@ -558,6 +559,7 @@ fn address_city_resolutions(
 /// The district reading for one component set and country code,
 /// as a `(value, carrier, confidence, country_code)` tuple.
 #[pyfunction]
+#[pyo3(signature = (components, country_code))]
 fn address_district_resolution(
     components: Vec<PyComponent>,
     country_code: Option<String>,
@@ -578,6 +580,7 @@ fn address_district_resolution(
 /// values, as a `(value, carrier, status, country_code,
 /// competing_value, competing_carrier)` tuple.
 #[pyfunction]
+#[pyo3(signature = (country_code, component_value, postal_value))]
 fn address_postal_code_result(
     country_code: Option<String>,
     component_value: Option<String>,
