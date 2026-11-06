@@ -56,6 +56,7 @@ from fractions import Fraction
 from pathlib import Path
 from typing import Any, Iterator, Optional
 
+from . import _placekit
 from .exceptions import ConfigError, DecodeError
 
 
@@ -284,6 +285,12 @@ def _model_elements(
 #: the client body guard of the same depth.
 _MAX_PAYLOAD_DEPTH = 128
 
+# The kind tags of one payload walk trace event, in the shape the
+# core depth verdict reads (Round 55). A mapping visit carries
+# tag 0 and a list or tuple visit carries tag 1.
+_TRACE_KIND_MAPPING = 0
+_TRACE_KIND_SEQUENCE = 1
+
 
 def _validate_payload(data: Any, model: str) -> None:
     """Validate one ``from_api`` payload without copying it.
@@ -296,29 +303,33 @@ def _validate_payload(data: Any, model: str) -> None:
     surfaces as a DecodeError rather than the bare builtin it
     raised. BaseException subclasses are process control flow and
     pass through untouched, here as everywhere in the library.
+
+    The walk itself stays here, reading the payload through its
+    own container protocols in the order it always has. The depth
+    verdict is decided in the Rust core over a trace of the walk,
+    one event per container visit carrying its kind and its
+    depth, and the trace stops at the first visit past the
+    limit, so no container past that visit is read (Round 55).
     """
     if not isinstance(data, dict):
         raise DecodeError(
             f"{model} payload must be an object, got "
             f"{type(data).__name__}: {data!r}"
         )
+    trace: list[tuple[int, int]] = []
     try:
         stack = [(data, 1)]
         while stack:
             node, depth = stack.pop()
             if isinstance(node, dict):
+                trace.append((_TRACE_KIND_MAPPING, depth))
                 if depth > _MAX_PAYLOAD_DEPTH:
-                    raise DecodeError(
-                        f"{model} payload is nested deeper than "
-                        f"{_MAX_PAYLOAD_DEPTH} levels"
-                    )
+                    break
                 stack.extend((child, depth + 1) for child in node.values())
             elif isinstance(node, (list, tuple)):
+                trace.append((_TRACE_KIND_SEQUENCE, depth))
                 if depth > _MAX_PAYLOAD_DEPTH:
-                    raise DecodeError(
-                        f"{model} payload is nested deeper than "
-                        f"{_MAX_PAYLOAD_DEPTH} levels"
-                    )
+                    break
                 stack.extend((child, depth + 1) for child in node)
     except DecodeError:
         raise
@@ -326,6 +337,11 @@ def _validate_payload(data: Any, model: str) -> None:
         raise DecodeError(
             f"{model} payload could not be read: {exc!r}"
         ) from exc
+    if not _placekit.models_payload_depth_within_limit(trace):
+        raise DecodeError(
+            f"{model} payload is nested deeper than "
+            f"{_MAX_PAYLOAD_DEPTH} levels"
+        )
 
 
 def _validate_and_copy_payload(data: Any, model: str) -> dict[str, Any]:
