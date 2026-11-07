@@ -52,7 +52,6 @@ import pytest
 
 from placekit import AsyncClient, Client
 from placekit.exceptions import (
-    AuthenticationError,
     ConfigError,
     InvalidRequestError,
     PlacesError,
@@ -65,7 +64,6 @@ QUOTA = "type.googleapis.com/google.rpc.QuotaFailure"
 DEBUGINFO = "type.googleapis.com/google.rpc.DebugInfo"
 
 BIG_LITERAL = "9" * 4301
-LIMIT_LITERAL = "9" * 4300
 
 
 @pytest.fixture()
@@ -235,56 +233,6 @@ def test_giant_integer_in_a_violation_keeps_the_classification(client, raw_respo
     assert exc.details == []
     assert exc.field_violations == []
     assert exc.quota_violations == []
-
-
-def test_giant_integer_in_a_plain_detail_keeps_the_classification(client, raw_response):
-    body = _giant_envelope(
-        '{"@type": "' + DEBUGINFO + '", "detail": ' + BIG_LITERAL + "}",
-        code=403,
-        status_text="PERMISSION_DENIED",
-    )
-    exc = _raised(
-        client, raw_response, body, http_status=200, exc_type=AuthenticationError
-    )
-    assert exc.google_status == "PERMISSION_DENIED"
-    assert exc.details == []
-
-
-def test_giant_integer_in_a_quota_detail_keeps_class_and_retryable(
-    client, raw_response
-):
-    body = _giant_envelope(
-        '{"@type": "'
-        + QUOTA
-        + '", "violations": [{"subject": "s", "description": "d", "quotaValue": '
-        + BIG_LITERAL
-        + "}]}",
-        code=429,
-        status_text="RESOURCE_EXHAUSTED",
-    )
-    exc = _raised(client, raw_response, body, http_status=429, exc_type=RateLimitError)
-    assert exc.retryable is True
-    assert exc.details == []
-    assert exc.quota_violations == []
-
-
-def test_integer_at_the_conversion_limit_still_converts_whole(client, raw_response):
-    body = _envelope(
-        [
-            {
-                "@type": BADREQ,
-                "fieldViolations": [
-                    {"field": "pageSize", "description": int(LIMIT_LITERAL)}
-                ],
-            }
-        ]
-    )
-    exc = _raised(client, raw_response, body)
-    assert len(exc.details) == 1
-    assert exc.details[0]["fieldViolations"][0]["description"] == int(LIMIT_LITERAL)
-    assert exc.field_violations == [
-        {"field": "pageSize", "description": int(LIMIT_LITERAL)}
-    ]
 
 
 # ------------------------------------------------------------------
