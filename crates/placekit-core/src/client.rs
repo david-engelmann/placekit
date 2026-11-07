@@ -3742,4 +3742,35 @@ mod tests {
         );
         assert!(!text.contains("error body of 262144 bytes"), "{text}");
     }
+
+    #[test]
+    fn raw_error_body_one_byte_past_the_cap_in_a_single_fill_reads_capped() {
+        // The fill mechanism of the same cell (Round 56
+        // red team delta 3 Minor 1). The flush boundary row
+        // above pins the probe mechanism of the raw error
+        // read, the loop that asks the stream for more past
+        // an exact fill. This row pins the fill itself. A
+        // raw body of exactly one byte past the cap arrives
+        // in a single fill and its crossing chunk is cut by
+        // the fill, so the read reports the cap and never
+        // sizes the body. A fill widened by one byte takes
+        // the same body whole instead, the buffer lands
+        // past the cap so the probe is never admitted, and
+        // the error claims a whole body of 262145 bytes.
+        let body = "x".repeat(262_145);
+        let stub = Stub::start(move |_| stub_json(400, &body));
+        let client = stub.client("k");
+        let err = block_on(client.text_search(&gzip_probe_req(), None)).unwrap_err();
+        assert_eq!(err.kind(), "invalid_request");
+        assert_eq!(err.status_code(), Some(400));
+        assert_eq!(err.google_status(), None);
+        let text = err.to_string();
+        assert!(
+            text.contains(
+                "error body read stopped at the 262144 byte cap, so the full size is unknown"
+            ),
+            "{text}"
+        );
+        assert!(!text.contains("error body of 262145 bytes"), "{text}");
+    }
 }
