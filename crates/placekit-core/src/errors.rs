@@ -2017,6 +2017,384 @@ mod tests {
         assert!(err.field_violations().is_empty());
     }
 
+    // Round 56 migration, family F1. The field violations
+    // projection matrix of Round 35, twinned from
+    // tests/test_round35.py. The verdict is computed here, in
+    // Error::field_violations, and the Python rows assert it
+    // again at the delivered surface. The twin form is
+    // Error::from_response on the body text, asserting the view
+    // exactly and the stored details beside the view where the
+    // Python row asserts them.
+
+    fn fv_probe_envelope(details: serde_json::Value) -> String {
+        serde_json::json!({
+            "error": {
+                "code": 400,
+                "message": "fv probe",
+                "status": "INVALID_ARGUMENT",
+                "details": details,
+            }
+        })
+        .to_string()
+    }
+
+    fn fv_probe_body(violations: serde_json::Value) -> String {
+        fv_probe_envelope(serde_json::json!([{
+            "@type": "type.googleapis.com/google.rpc.BadRequest",
+            "fieldViolations": violations,
+        }]))
+    }
+
+    #[test]
+    fn field_violations_single_entry_shapes() {
+        // The nineteen single entry shapes of the Round 35
+        // extension family. A well formed entry projects to the
+        // pair alone, and every other entry rides through as its
+        // wire value where the old view substituted empty
+        // strings.
+        let pair = |field: &str, description: &str| serde_json::json!({"field": field, "description": description});
+        let shapes: Vec<(serde_json::Value, serde_json::Value)> = vec![
+            (
+                pair("textQuery", "bad query"),
+                pair("textQuery", "bad query"),
+            ),
+            (
+                serde_json::json!({
+                    "field": "textQuery",
+                    "description": "bad",
+                    "localizedMessage": {"locale": "en", "message": "localised"},
+                    "reason": "REASON_X",
+                }),
+                pair("textQuery", "bad"),
+            ),
+            (pair("", ""), pair("", "")),
+            (pair(" café☃", "déjà vu ☃"), pair(" café☃", "déjà vu ☃")),
+            (serde_json::json!("oops"), serde_json::json!("oops")),
+            (serde_json::json!(7), serde_json::json!(7)),
+            (serde_json::Value::Null, serde_json::Value::Null),
+            (serde_json::json!(true), serde_json::json!(true)),
+            (
+                serde_json::json!(["field", "desc"]),
+                serde_json::json!(["field", "desc"]),
+            ),
+            (serde_json::json!({}), serde_json::json!({})),
+            (
+                serde_json::json!({"field": "textQuery"}),
+                serde_json::json!({"field": "textQuery"}),
+            ),
+            (
+                serde_json::json!({"description": "only desc"}),
+                serde_json::json!({"description": "only desc"}),
+            ),
+            (
+                serde_json::json!({"field": 9, "description": "nine"}),
+                serde_json::json!({"field": 9, "description": "nine"}),
+            ),
+            (
+                serde_json::json!({"field": "textQuery", "description": ["x"]}),
+                serde_json::json!({"field": "textQuery", "description": ["x"]}),
+            ),
+            (
+                serde_json::json!({"field": null, "description": null}),
+                serde_json::json!({"field": null, "description": null}),
+            ),
+            (
+                serde_json::json!({"field": true, "description": false}),
+                serde_json::json!({"field": true, "description": false}),
+            ),
+            (
+                serde_json::json!({"field": {"x": 1}, "description": {"y": 2}}),
+                serde_json::json!({"field": {"x": 1}, "description": {"y": 2}}),
+            ),
+            (
+                serde_json::json!({
+                    "field": "textQuery",
+                    "localizedMessage": {"locale": "en", "message": "localised text"},
+                }),
+                serde_json::json!({
+                    "field": "textQuery",
+                    "localizedMessage": {"locale": "en", "message": "localised text"},
+                }),
+            ),
+            (
+                serde_json::json!({"field": ["textQuery"], "description": "arr field"}),
+                serde_json::json!({"field": ["textQuery"], "description": "arr field"}),
+            ),
+        ];
+        assert_eq!(shapes.len(), 19);
+        for (wire, expected) in &shapes {
+            let body = fv_probe_body(serde_json::json!([wire]));
+            let err = Error::from_response(400, &body);
+            assert_eq!(err.field_violations(), vec![expected.clone()], "{wire}");
+            // The raw details beside the view stay faithful in
+            // every shape.
+            assert_eq!(
+                err.details()[0]["fieldViolations"],
+                serde_json::json!([wire]),
+                "{wire}"
+            );
+        }
+    }
+
+    #[test]
+    fn field_violations_genuine_empty_differs_from_null_entry() {
+        // The decisive comparison of the Round 35 audit. Before
+        // the repair a genuine empty violation and a null entry
+        // produced the same view entry in every byte.
+        let genuine = Error::from_response(
+            400,
+            &fv_probe_body(serde_json::json!([{"field": "", "description": ""}])),
+        );
+        let malformed = Error::from_response(400, &fv_probe_body(serde_json::json!([null])));
+        assert_eq!(
+            genuine.field_violations(),
+            vec![serde_json::json!({"field": "", "description": ""})]
+        );
+        assert_eq!(malformed.field_violations(), vec![serde_json::Value::Null]);
+        assert_ne!(genuine.field_violations(), malformed.field_violations());
+    }
+
+    #[test]
+    fn field_violations_mixed_array_keeps_count_and_verbatim_entries() {
+        let wire = serde_json::json!([
+            {"field": "a", "description": "b"},
+            "oops",
+            7,
+            null,
+            {"field": 9, "description": ["x"]},
+            {"field": "c", "description": "d"},
+        ]);
+        let err = Error::from_response(400, &fv_probe_body(wire));
+        // Two well formed entries project, and the other four
+        // ride through verbatim.
+        assert_eq!(
+            err.field_violations(),
+            vec![
+                serde_json::json!({"field": "a", "description": "b"}),
+                serde_json::json!("oops"),
+                serde_json::json!(7),
+                serde_json::Value::Null,
+                serde_json::json!({"field": 9, "description": ["x"]}),
+                serde_json::json!({"field": "c", "description": "d"}),
+            ]
+        );
+        assert_eq!(err.field_violations().len(), 6);
+    }
+
+    #[test]
+    fn field_violations_array_entry_holding_an_object_rides_verbatim() {
+        // The red team shape the extension family missed. A well
+        // formed violation object one level down inside an array
+        // entry is a list, not an object, so it passes through
+        // as itself.
+        let wire = serde_json::json!([[{"field": "a", "description": "b"}]]);
+        let err = Error::from_response(400, &fv_probe_body(wire.clone()));
+        assert_eq!(err.field_violations(), vec![wire[0].clone()]);
+        assert_eq!(err.details()[0]["fieldViolations"], wire);
+    }
+
+    #[test]
+    fn field_violations_duplicate_well_formed_entries_survive() {
+        let wire = serde_json::json!([
+            {"field": "a", "description": "b"},
+            {"field": "a", "description": "b"},
+        ]);
+        let err = Error::from_response(400, &fv_probe_body(wire));
+        assert_eq!(
+            err.field_violations(),
+            vec![
+                serde_json::json!({"field": "a", "description": "b"}),
+                serde_json::json!({"field": "a", "description": "b"}),
+            ]
+        );
+    }
+
+    #[test]
+    fn field_violations_two_badrequest_details_aggregate_in_order() {
+        let body = fv_probe_envelope(serde_json::json!([
+            {
+                "@type": "type.googleapis.com/google.rpc.BadRequest",
+                "fieldViolations": [{"field": "a", "description": "b"}],
+            },
+            {
+                "@type": "type.googleapis.com/google.rpc.BadRequest",
+                "fieldViolations": ["oops", {"field": "c", "description": "d"}],
+            },
+        ]));
+        let err = Error::from_response(400, &body);
+        assert_eq!(
+            err.field_violations(),
+            vec![
+                serde_json::json!({"field": "a", "description": "b"}),
+                serde_json::json!("oops"),
+                serde_json::json!({"field": "c", "description": "d"}),
+            ]
+        );
+    }
+
+    #[test]
+    fn field_violations_duplicate_keys_resolve_last_wins() {
+        // Written as raw JSON text because a data literal
+        // cannot carry the duplicate. The stored detail
+        // resolves last wins and the view follows the stored
+        // detail.
+        let body = concat!(
+            "{\"error\": {\"code\": 400, \"message\": \"fv dup\", ",
+            "\"status\": \"INVALID_ARGUMENT\", \"details\": [{\"@type\": ",
+            "\"type.googleapis.com/google.rpc.BadRequest\", \"fieldViolations\": ",
+            "[{\"field\": \"first\", \"field\": \"second\", \"description\": \"d\"}]}]}}"
+        );
+        let err = Error::from_response(400, body);
+        assert_eq!(err.details()[0]["fieldViolations"][0]["field"], "second");
+        assert_eq!(
+            err.field_violations(),
+            vec![serde_json::json!({"field": "second", "description": "d"})]
+        );
+    }
+
+    #[test]
+    fn field_violations_success_status_path_follows_the_same_rule() {
+        // The projection is a property of the view, not of the
+        // error path carrying it, so an envelope read on an
+        // HTTP 200 through the success status guard follows the
+        // ruled form too.
+        let wire = serde_json::json!([
+            {"field": "a", "description": "b"},
+            "oops",
+            {"field": 9, "description": "nine"},
+        ]);
+        let body = fv_probe_body(wire);
+        let err = Error::from_success_body(200, &body, None)
+            .expect("an envelope on a success status is an error");
+        assert_eq!(
+            err.field_violations(),
+            vec![
+                serde_json::json!({"field": "a", "description": "b"}),
+                serde_json::json!("oops"),
+                serde_json::json!({"field": 9, "description": "nine"}),
+            ]
+        );
+    }
+
+    #[test]
+    fn field_violations_container_failures_stay_empty() {
+        // A fieldViolations value that is not an array yields
+        // an empty view while the stored detail keeps the
+        // value.
+        for container in [
+            serde_json::json!("textQuery"),
+            serde_json::json!({"field": "a"}),
+            serde_json::json!(3),
+            serde_json::Value::Null,
+        ] {
+            let body = fv_probe_envelope(serde_json::json!([{
+                "@type": "type.googleapis.com/google.rpc.BadRequest",
+                "fieldViolations": container,
+            }]));
+            let err = Error::from_response(400, &body);
+            assert!(err.field_violations().is_empty(), "{container}");
+            assert_eq!(err.details()[0]["fieldViolations"], container);
+        }
+    }
+
+    #[test]
+    fn field_violations_absent_and_empty_stay_empty() {
+        let absent = fv_probe_envelope(
+            serde_json::json!([{"@type": "type.googleapis.com/google.rpc.BadRequest"}]),
+        );
+        assert!(Error::from_response(400, &absent)
+            .field_violations()
+            .is_empty());
+        let empty = fv_probe_body(serde_json::json!([]));
+        assert!(Error::from_response(400, &empty)
+            .field_violations()
+            .is_empty());
+    }
+
+    #[test]
+    fn quota_violations_pass_malformed_entries_verbatim() {
+        // The neighbouring view is untouched by the Round 35
+        // repair. Malformed QuotaFailure entries ride through
+        // verbatim, and the same body leaves the field view
+        // empty.
+        let body = serde_json::json!({
+            "error": {
+                "code": 429,
+                "message": "quota mixed",
+                "status": "RESOURCE_EXHAUSTED",
+                "details": [{
+                    "@type": "type.googleapis.com/google.rpc.QuotaFailure",
+                    "violations": ["x", 3, {"quotaMetric": "m"}],
+                }],
+            }
+        })
+        .to_string();
+        let err = Error::from_response(429, &body);
+        assert_eq!(err.kind(), "rate_limit");
+        assert_eq!(
+            err.quota_violations(),
+            vec![
+                serde_json::json!("x"),
+                serde_json::json!(3),
+                serde_json::json!({"quotaMetric": "m"}),
+            ]
+        );
+        assert!(err.field_violations().is_empty());
+    }
+
+    #[test]
+    fn field_violations_type_url_suffix_bounds_the_view() {
+        // Growth cases with no Python row, added because they
+        // bound the verdict itself. The suffix match on the
+        // type URL decides which details contribute.
+        let pair = serde_json::json!({"field": "a", "description": "b"});
+        // A detail of another type carrying a fieldViolations
+        // array contributes nothing, and neither does a type
+        // URL that merely contains the suffix without ending
+        // on it.
+        for type_url in [
+            "type.googleapis.com/google.rpc.DebugInfo",
+            "type.googleapis.com/google.rpc.BadRequestExtra",
+        ] {
+            let body = fv_probe_envelope(serde_json::json!([{
+                "@type": type_url,
+                "fieldViolations": [pair],
+            }]));
+            let err = Error::from_response(400, &body);
+            assert!(err.field_violations().is_empty(), "{type_url}");
+        }
+        // A longer type URL ending on the suffix contributes
+        // by the same rule the shipped bodies use.
+        let body = fv_probe_envelope(serde_json::json!([{
+            "@type": "https://schemas.example.com/google.rpc.BadRequest",
+            "fieldViolations": [pair],
+        }]));
+        let err = Error::from_response(400, &body);
+        assert_eq!(err.field_violations(), vec![pair]);
+        // Two details of different types in one body keep the
+        // two views separate, each violation landing only in
+        // its own view.
+        let body = fv_probe_envelope(serde_json::json!([
+            {
+                "@type": "type.googleapis.com/google.rpc.BadRequest",
+                "fieldViolations": [{"field": "a", "description": "b"}],
+            },
+            {
+                "@type": "type.googleapis.com/google.rpc.QuotaFailure",
+                "violations": [{"quotaMetric": "m"}],
+            },
+        ]));
+        let err = Error::from_response(400, &body);
+        assert_eq!(
+            err.field_violations(),
+            vec![serde_json::json!({"field": "a", "description": "b"})]
+        );
+        assert_eq!(
+            err.quota_violations(),
+            vec![serde_json::json!({"quotaMetric": "m"})]
+        );
+    }
+
     #[test]
     fn envelope_code_is_kept_even_when_it_disagrees_with_http_status() {
         // Classification follows the Google status string, but the
