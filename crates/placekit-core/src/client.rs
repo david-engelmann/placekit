@@ -3616,6 +3616,37 @@ mod tests {
     }
 
     #[test]
+    fn gzip_success_body_one_byte_past_the_response_cap_is_refused() {
+        // The mirror of the at cap row above (Round 56 red
+        // team delta 2 Minor 1). The core side decode on the
+        // success path judges the decompressed form against
+        // the configured response cap, and a form one byte
+        // past it is refused with the exceeded maximum
+        // wording. Widening the bound handed to the judge at
+        // this one call site by a byte accepts the body whole
+        // instead, a wiring slip the pins on the shared judge
+        // cannot see because they move the judge itself and
+        // the driven lax row sits on the error path.
+        let cap = 2048usize;
+        let mut plain = b"{\"places\":[]}".to_vec();
+        plain.resize(cap + 1, b' ');
+        let stub = Stub::start(move |_| stub_gzip_response(200, "GZip", gzipped(&plain)));
+        let client = Client::builder("k")
+            .base_url(format!("{}/v1", stub.base_url))
+            .max_response_bytes(cap)
+            .build()
+            .unwrap();
+        let err = block_on(client.text_search(&gzip_probe_req(), None)).unwrap_err();
+        assert_eq!(err.kind(), "decode");
+        assert_eq!(err.status_code(), Some(200));
+        let text = err.to_string();
+        assert!(
+            text.contains("response body exceeded the maximum of 2048 bytes"),
+            "{text}"
+        );
+    }
+
+    #[test]
     fn plain_success_body_at_exactly_the_response_cap_reads_whole() {
         // The raw leg of the success boundary (Round 56 red
         // team delta Minor 2). The capped read serving the
@@ -3640,6 +3671,36 @@ mod tests {
         assert_eq!(value.places.len(), 0);
         assert_eq!(body.len(), cap);
         assert_eq!(body, body_text);
+    }
+
+    #[test]
+    fn plain_success_body_one_byte_past_the_response_cap_is_refused() {
+        // The mirror of the raw at cap row above (Round 56
+        // repair pass 3 completeness sweep). The capped read
+        // serving the success and photo paths aborts as soon
+        // as the running total passes the cap, so a raw body
+        // one byte past the configured cap is refused with
+        // the exceeded maximum wording. A judge that fires a
+        // byte late, or a bound handed to the read a byte
+        // wide, accepts the body whole instead.
+        let cap = 2048usize;
+        let mut raw_body = b"{\"places\":[]}".to_vec();
+        raw_body.resize(cap + 1, b' ');
+        let body_text = String::from_utf8(raw_body).unwrap();
+        let stub = Stub::start(move |_| stub_json(200, &body_text));
+        let client = Client::builder("k")
+            .base_url(format!("{}/v1", stub.base_url))
+            .max_response_bytes(cap)
+            .build()
+            .unwrap();
+        let err = block_on(client.text_search(&gzip_probe_req(), None)).unwrap_err();
+        assert_eq!(err.kind(), "decode");
+        assert_eq!(err.status_code(), Some(200));
+        let text = err.to_string();
+        assert!(
+            text.contains("response body exceeded the maximum of 2048 bytes"),
+            "{text}"
+        );
     }
 
     #[test]
