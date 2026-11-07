@@ -2542,6 +2542,11 @@ mod tests {
         /// Write these bytes verbatim instead of a composed response
         /// (for malformed and truncated wire shapes).
         raw: Option<Vec<u8>>,
+        /// Split the write of the final response bytes at this
+        /// offset, flushing and pausing between the two writes so
+        /// the peer reads the response as two chunks (for chunk
+        /// boundary shapes).
+        split_write_at: Option<usize>,
     }
 
     fn stub_json(status: u16, body: &str) -> StubResponse {
@@ -2551,6 +2556,7 @@ mod tests {
             headers: Vec::new(),
             body: body.as_bytes().to_vec(),
             raw: None,
+            split_write_at: None,
         }
     }
 
@@ -2671,8 +2677,17 @@ mod tests {
                             bytes.extend_from_slice(&response.body);
                             bytes
                         };
-                        let _ = stream.write_all(&bytes);
-                        let _ = stream.flush();
+                        if let Some(split) = response.split_write_at {
+                            let split = split.min(bytes.len());
+                            let _ = stream.write_all(&bytes[..split]);
+                            let _ = stream.flush();
+                            std::thread::sleep(std::time::Duration::from_millis(250));
+                            let _ = stream.write_all(&bytes[split..]);
+                            let _ = stream.flush();
+                        } else {
+                            let _ = stream.write_all(&bytes);
+                            let _ = stream.flush();
+                        }
                     }
                 })
             };
@@ -2751,6 +2766,7 @@ mod tests {
             headers: Vec::new(),
             body: PNG_BYTES.to_vec(),
             raw: None,
+            split_write_at: None,
         });
         let image_location = format!("{}/img", image.base_url);
         let media = Stub::start(move |_| {
@@ -2786,6 +2802,7 @@ mod tests {
             headers: Vec::new(),
             body: b"INTERNAL SERVICE RESPONSE".to_vec(),
             raw: None,
+            split_write_at: None,
         });
         let client = untyped.client("k");
         let err = block_on(client.place_photo("places/ChIJ/photos/ref", Some(100), None, false))
@@ -2813,6 +2830,7 @@ mod tests {
                     headers: Vec::new(),
                     body: PNG_BYTES.to_vec(),
                     raw: None,
+                    split_write_at: None,
                 }
             }
         });
@@ -2938,6 +2956,7 @@ mod tests {
             headers: Vec::new(),
             body: PNG_BYTES.to_vec(),
             raw: None,
+            split_write_at: None,
         });
         let location = format!(
             "http://user:sekret@{}/img",
@@ -3214,6 +3233,7 @@ mod tests {
                 b"HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: 100\r\nconnection: close\r\n\r\n{\"places\":"
                     .to_vec(),
             ),
+            split_write_at: None,
         }
         });
         let client = stub.client("k");
@@ -3251,6 +3271,7 @@ mod tests {
             headers: vec![("content-encoding".to_owned(), encoding.to_owned())],
             body,
             raw: None,
+            split_write_at: None,
         }
     }
 
@@ -3357,6 +3378,7 @@ mod tests {
             ],
             body: gzipped(GZIP_QUOTA_BODY.as_bytes()),
             raw: None,
+            split_write_at: None,
         });
         let client = stub.client("k");
         let err = block_on(client.text_search(&gzip_probe_req(), None)).unwrap_err();
@@ -3370,6 +3392,7 @@ mod tests {
             ],
             body: gzipped(GZIP_QUOTA_BODY.as_bytes()),
             raw: None,
+            split_write_at: None,
         });
         let client = stub.client("k");
         let err = block_on(client.text_search(&gzip_probe_req(), None)).unwrap_err();
@@ -3386,6 +3409,7 @@ mod tests {
             ],
             body: gzipped(plain.as_bytes()),
             raw: None,
+            split_write_at: None,
         });
         let client = stub.client("k");
         let (media, _body, _status) =
@@ -3558,5 +3582,103 @@ mod tests {
             "{text}"
         );
         assert!(!text.contains("error body of 262145 bytes"), "{text}");
+    }
+
+    #[test]
+    fn gzip_success_body_at_exactly_the_response_cap_reads_whole() {
+        // The success path half of the boundary (Round 56
+        // red team delta Minor 1). The core side decode on
+        // the success path judges the decompressed form
+        // against the configured response cap, and a form of
+        // exactly the cap is whole, not over it. The case
+        // variant spelling leaves the body to the core
+        // decode, because the transport honours only the
+        // exact lowercase token. A strict misjudgement at
+        // this call site refuses the body with the exceeded
+        // maximum wording.
+        let cap = 2048usize;
+        let mut plain = b"{\"places\":[]}".to_vec();
+        plain.resize(cap, b' ');
+        let expected = String::from_utf8(plain.clone()).unwrap();
+        let stub = Stub::start(move |_| stub_gzip_response(200, "GZip", gzipped(&plain)));
+        let client = Client::builder("k")
+            .base_url(format!("{}/v1", stub.base_url))
+            .max_response_bytes(cap)
+            .build()
+            .unwrap();
+        let (value, body, status) = block_on(client.text_search(&gzip_probe_req(), None)).unwrap();
+        assert_eq!(status, 200);
+        assert_eq!(value.places.len(), 0);
+        assert_eq!(body.len(), cap);
+        // The raw body handed back is the decompressed text,
+        // which proves the core decode ran on this path.
+        assert_eq!(body, expected);
+    }
+
+    #[test]
+    fn plain_success_body_at_exactly_the_response_cap_reads_whole() {
+        // The raw leg of the success boundary (Round 56 red
+        // team delta Minor 2). The capped read serving the
+        // success and photo paths aborts only past the cap,
+        // so a raw body totalling exactly the configured cap
+        // completes whole. A strict misjudgement in that read
+        // refuses it with the same exceeded maximum wording
+        // the decompressed leg gives.
+        let cap = 2048usize;
+        let mut raw_body = b"{\"places\":[]}".to_vec();
+        raw_body.resize(cap, b' ');
+        let body_text = String::from_utf8(raw_body).unwrap();
+        let served = body_text.clone();
+        let stub = Stub::start(move |_| stub_json(200, &served));
+        let client = Client::builder("k")
+            .base_url(format!("{}/v1", stub.base_url))
+            .max_response_bytes(cap)
+            .build()
+            .unwrap();
+        let (value, body, status) = block_on(client.text_search(&gzip_probe_req(), None)).unwrap();
+        assert_eq!(status, 200);
+        assert_eq!(value.places.len(), 0);
+        assert_eq!(body.len(), cap);
+        assert_eq!(body, body_text);
+    }
+
+    #[test]
+    fn raw_error_body_filling_the_cap_at_a_flush_boundary_reads_capped() {
+        // The raw leg of the error boundary (Round 56 red
+        // team delta Minor 3). The read fills the cap exactly
+        // at a flush boundary, so only the probe that asks
+        // the stream for more past an exact fill (Round 23)
+        // can tell the body kept going. The stub answers
+        // through the split write harness, the first flush
+        // carrying exactly 262144 body bytes and the second
+        // 100 more. With the probe gone the same wire body
+        // reads as a whole body of 262144 bytes, the false
+        // report the probe was built to prevent.
+        let head = "HTTP/1.1 400 Bad Request\r\ncontent-type: text/plain\r\ncontent-length: 262244\r\nconnection: close\r\n\r\n";
+        let split = head.len() + 262_144;
+        let mut wire = head.as_bytes().to_vec();
+        wire.extend_from_slice(&[b'a'; 262_144]);
+        wire.extend_from_slice(&[b'b'; 100]);
+        let stub = Stub::start(move |_| StubResponse {
+            status: 400,
+            content_type: None,
+            headers: Vec::new(),
+            body: Vec::new(),
+            raw: Some(wire.clone()),
+            split_write_at: Some(split),
+        });
+        let client = stub.client("k");
+        let err = block_on(client.text_search(&gzip_probe_req(), None)).unwrap_err();
+        assert_eq!(err.kind(), "invalid_request");
+        assert_eq!(err.status_code(), Some(400));
+        assert_eq!(err.google_status(), None);
+        let text = err.to_string();
+        assert!(
+            text.contains(
+                "error body read stopped at the 262144 byte cap, so the full size is unknown"
+            ),
+            "{text}"
+        );
+        assert!(!text.contains("error body of 262144 bytes"), "{text}");
     }
 }
