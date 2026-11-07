@@ -2395,6 +2395,116 @@ mod tests {
         );
     }
 
+    // Round 56 migration, family F3. The giant integer rows of
+    // Round 41, twinned from tests/test_round41.py. A body whose
+    // details carry an integer past the Python interpreter
+    // conversion limit of 4,300 digits must still classify by
+    // its envelope. The core stores numbers with arbitrary
+    // precision, so the digit run survives whole here, and the
+    // degradation the Python rows record happens at the
+    // bindings conversion, never in this parse. The digit
+    // literal is embedded as raw JSON text, as the Python rows
+    // build it, because no native integer of this size exists
+    // to format.
+
+    fn giant_probe_envelope(member_text: &str, code: u32, status_text: &str) -> String {
+        format!(
+            "{{\"error\": {{\"code\": {code}, \"message\": \"r41 probe\", \
+             \"status\": \"{status_text}\", \"details\": [{member_text}]}}}}"
+        )
+    }
+
+    #[test]
+    fn giant_integer_in_a_violation_keeps_the_classification() {
+        let digits = "9".repeat(4301);
+        let member = format!(
+            "{{\"@type\": \"type.googleapis.com/google.rpc.BadRequest\", \
+             \"fieldViolations\": [{{\"field\": \"pageSize\", \"description\": {digits}}}]}}"
+        );
+        let err =
+            Error::from_response(400, &giant_probe_envelope(&member, 400, "INVALID_ARGUMENT"));
+        assert_eq!(err.kind(), "invalid_request");
+        assert_eq!(err.google_status(), Some("INVALID_ARGUMENT"));
+        assert_eq!(err.error_code(), Some(400));
+        assert!(err.to_string().contains("r41 probe"), "{err}");
+        // The entry is stored whole, digit run intact, and the
+        // view rides it verbatim because a numeric description
+        // is not a well formed pair.
+        assert_eq!(err.details().len(), 1);
+        let stored = &err.details()[0]["fieldViolations"][0]["description"];
+        assert!(stored.is_number(), "{stored}");
+        assert_eq!(stored.to_string(), digits);
+        let view = err.field_violations();
+        assert_eq!(view.len(), 1);
+        assert_eq!(view[0]["field"], "pageSize");
+        assert_eq!(view[0]["description"].to_string(), digits);
+    }
+
+    #[test]
+    fn giant_integer_in_a_plain_detail_keeps_the_classification() {
+        let digits = "9".repeat(4301);
+        let member = format!(
+            "{{\"@type\": \"type.googleapis.com/google.rpc.DebugInfo\", \"detail\": {digits}}}"
+        );
+        let body = giant_probe_envelope(&member, 403, "PERMISSION_DENIED");
+        let err = Error::from_success_body(200, &body, None)
+            .expect("an envelope on a success status is an error");
+        assert_eq!(err.kind(), "auth");
+        assert_eq!(err.google_status(), Some("PERMISSION_DENIED"));
+        assert_eq!(err.error_code(), Some(403));
+        assert_eq!(err.details().len(), 1);
+        let stored = &err.details()[0]["detail"];
+        assert!(stored.is_number(), "{stored}");
+        assert_eq!(stored.to_string(), digits);
+    }
+
+    #[test]
+    fn giant_integer_in_a_quota_detail_keeps_class_and_retryable() {
+        let digits = "9".repeat(4301);
+        let member = format!(
+            "{{\"@type\": \"type.googleapis.com/google.rpc.QuotaFailure\", \
+             \"violations\": [{{\"subject\": \"s\", \"description\": \"d\", \
+             \"quotaValue\": {digits}}}]}}"
+        );
+        let err = Error::from_response(
+            429,
+            &giant_probe_envelope(&member, 429, "RESOURCE_EXHAUSTED"),
+        );
+        assert_eq!(err.kind(), "rate_limit");
+        assert!(err.retryable());
+        assert_eq!(err.google_status(), Some("RESOURCE_EXHAUSTED"));
+        let view = err.quota_violations();
+        assert_eq!(view.len(), 1);
+        assert_eq!(view[0]["quotaValue"].to_string(), digits);
+        assert!(err.field_violations().is_empty());
+    }
+
+    #[test]
+    fn integer_at_the_conversion_limit_is_stored_whole() {
+        // The boundary row of the family, written at the exact
+        // digit count the Python row uses. At 4,300 digits the
+        // value still converts whole on the Python side, and
+        // here both sides of the boundary store identically,
+        // which is what places the conversion cliff in the
+        // bindings rather than in this parse.
+        let digits = "9".repeat(4300);
+        let member = format!(
+            "{{\"@type\": \"type.googleapis.com/google.rpc.BadRequest\", \
+             \"fieldViolations\": [{{\"field\": \"pageSize\", \"description\": {digits}}}]}}"
+        );
+        let err =
+            Error::from_response(400, &giant_probe_envelope(&member, 400, "INVALID_ARGUMENT"));
+        assert_eq!(err.kind(), "invalid_request");
+        assert_eq!(err.details().len(), 1);
+        let stored = &err.details()[0]["fieldViolations"][0]["description"];
+        assert!(stored.is_number(), "{stored}");
+        assert_eq!(stored.to_string(), digits);
+        let view = err.field_violations();
+        assert_eq!(view.len(), 1);
+        assert_eq!(view[0]["field"], "pageSize");
+        assert_eq!(view[0]["description"].to_string(), digits);
+    }
+
     #[test]
     fn envelope_code_is_kept_even_when_it_disagrees_with_http_status() {
         // Classification follows the Google status string, but the
