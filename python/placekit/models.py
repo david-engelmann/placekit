@@ -60,6 +60,30 @@ from . import _placekit
 from .exceptions import ConfigError, DecodeError, PlacesError
 
 
+def _safe_type_name(value: Any) -> Optional[str]:
+    """The type name of a payload value, safe to name in a refusal.
+
+    Refusals name the values they refuse by type as well as by
+    repr, and a class can answer its name through a property
+    that raises or with something that is not a plain string,
+    so a refusal interpolating the raw name would break on the
+    name itself and escape bare. Where the name reads as a
+    plain string it is returned unchanged, so no honest refusal
+    message moves. Where it cannot be read as one, None stands
+    in and the caller names the value by the fixed
+    unrepresentable form instead. This is the one guarded name
+    reading in the module, and every site that names a type
+    reads through it.
+    """
+    try:
+        name = type(value).__name__
+    except Exception:
+        return None
+    if type(name) is str:
+        return name
+    return None
+
+
 def _safe_repr(value: Any) -> str:
     """The repr of a payload value, safe to name in a refusal.
 
@@ -67,12 +91,40 @@ def _safe_repr(value: Any) -> str:
     object whose own repr raises would break the refusal itself
     and escape bare. Where repr works its answer is returned
     unchanged, so no honest refusal message moves. Where it
-    raises, the value is named by its type instead.
+    raises, the value is named by its type instead, through
+    the guarded name reading, and where the name cannot be
+    read as a plain string a fixed form stands in its place.
     """
     try:
         return repr(value)
     except Exception:
-        return f"<unrepresentable {type(value).__name__}>"
+        pass
+    name = _safe_type_name(value)
+    if name is not None:
+        return f"<unrepresentable {name}>"
+    return "<unrepresentable value>"
+
+
+def _safe_message(exc: DecodeError) -> str:
+    """The message of a child failure, safe to name in a wrap.
+
+    The element wrap names the child message in its own refusal,
+    and a caller built error can carry a message object whose
+    formatting raises, which would break the wrap itself and
+    escape bare. Where the message reads and formats, its text
+    is returned unchanged, so no honest wrap message moves a
+    byte. Where reading it raises, the error is named through
+    the safe repr. Where formatting it raises, the message is
+    named through the safe repr instead.
+    """
+    try:
+        message = exc.message
+    except Exception:
+        return _safe_repr(exc)
+    try:
+        return f"{message}"
+    except Exception:
+        return _safe_repr(message)
 
 
 def _unreadable(model: str, exc: Exception, key: Optional[str] = None) -> DecodeError:
@@ -82,6 +134,12 @@ def _unreadable(model: str, exc: Exception, key: Optional[str] = None) -> Decode
     names a key uses the key form. A whole payload operation uses
     the payload form. The caught exception is named through the
     safe repr, because its own repr can raise too.
+
+    One rule stands behind every guard in this module. A member
+    of the library error family raised by a guarded operation
+    passes through untouched, with its class, message and chain
+    intact, and only an exception from outside the family is
+    converted through here.
     """
     if key is None:
         return DecodeError(
@@ -95,14 +153,20 @@ def _unreadable(model: str, exc: Exception, key: Optional[str] = None) -> Decode
 def _read(data: dict[str, Any], key: str, model: str) -> Any:
     """Read one payload key under the read guard (Round 55).
 
-    Exactly one get, the call the decoders always made, with any
+    Exactly one get, the call the decoders always made, with an
     Exception the mapping raises converted to a DecodeError
-    naming the model and the key, chained from the original.
-    BaseException is never caught, here as everywhere in this
-    module, so process control flow passes through untouched.
+    naming the model and the key, chained from the original, a
+    member of the library error family apart, which passes
+    through untouched. BaseException is never caught, here as
+    everywhere in this module, so process control flow passes
+    through untouched.
     """
     try:
         return data.get(key)
+    except PlacesError:
+        # The library's own verdict, not a payload failure.
+        # Never reclassified by this guard.
+        raise
     except Exception as exc:
         raise _unreadable(model, exc, key) from exc
 
@@ -116,6 +180,10 @@ def _read_or(data: dict[str, Any], key: str, default: Any, model: str) -> Any:
     """
     try:
         return data.get(key, default)
+    except PlacesError:
+        # The library's own verdict, not a payload failure.
+        # Never reclassified by this guard.
+        raise
     except Exception as exc:
         raise _unreadable(model, exc, key) from exc
 
@@ -129,12 +197,20 @@ def _require(data: dict[str, Any], key: str, model: str) -> Any:
     """
     try:
         present = key in data
+    except PlacesError:
+        # The library's own verdict, not a payload failure.
+        # Never reclassified by this guard.
+        raise
     except Exception as exc:
         raise _unreadable(model, exc, key) from exc
     if not present:
         raise DecodeError(f"{model} payload is missing required key {key!r}")
     try:
         return data[key]
+    except PlacesError:
+        # The library's own verdict, not a payload failure.
+        # Never reclassified by this guard.
+        raise
     except Exception as exc:
         raise _unreadable(model, exc, key) from exc
 
@@ -146,10 +222,16 @@ def _truthy(value: Any, model: str, key: Optional[str] = None) -> bool:
     present by asking its truthiness, and a value whose truthiness
     raises escaped bare at the gate. The value is evaluated
     exactly once, the evaluation the gate always made, with a
-    raise converted to the could not be read form.
+    raise converted to the could not be read form, a member of
+    the library error family apart, which passes through
+    untouched.
     """
     try:
         return bool(value)
+    except PlacesError:
+        # The library's own verdict, not a payload failure.
+        # Never reclassified by this guard.
+        raise
     except Exception as exc:
         raise _unreadable(model, exc, key) from exc
 
@@ -162,11 +244,12 @@ def _copy_source(value: Any, model: str) -> Any:
     _prepare (Round 55). A copy whose machinery raises surfaces
     as a DecodeError rather than the bare builtin it raised,
     a RecursionError from a deeply nested raw source included.
-    A DecodeError the machinery itself raised passes through.
+    A member of the library error family the machinery itself
+    raised passes through untouched.
     """
     try:
         return copy.deepcopy(value)
-    except DecodeError:
+    except PlacesError:
         raise
     except Exception as exc:
         raise _unreadable(model, exc) from exc
@@ -317,9 +400,13 @@ def _str_list(value: Any, model: str, key: str) -> list[str]:
         )
     try:
         items = list(value)
+    except PlacesError:
+        # The library's own verdict, not a payload failure.
+        # Never reclassified by this guard.
+        raise
     except Exception as exc:
         # A list subclass whose own iteration raises must surface
-        # as a DecodeError, not the bare builtin it raised; the
+        # as a DecodeError, not the bare builtin it raised. The
         # helper trusts the container protocol, so the read is
         # guarded the way the payload preparation is.
         raise DecodeError(
@@ -343,6 +430,10 @@ def _model_list(value: Any, model: str, key: str) -> list:
     if isinstance(value, (list, tuple)):
         try:
             return list(value)
+        except PlacesError:
+            # The library's own verdict, not a payload failure.
+            # Never reclassified by this guard.
+            raise
         except Exception as exc:
             raise DecodeError(
                 f"{model} payload key {key!r} could not be read "
@@ -370,6 +461,10 @@ def _model_elements(
     error family other than DecodeError, a ConfigError from a
     construction guard above all, is not reclassified here. It
     passes through with its class, message and chain untouched.
+    The child message the DecodeError arm names is rendered
+    through the safe message helper, so a caller built error
+    whose message object breaks formatting cannot break the
+    wrap itself.
     """
     decoded = []
     for i, item in enumerate(_model_list(value, model, key)):
@@ -378,7 +473,7 @@ def _model_elements(
         except DecodeError as exc:
             raise DecodeError(
                 f"{model} payload key {key!r} element {i} failed "
-                f"to decode: {exc.message}"
+                f"to decode: {_safe_message(exc)}"
             ) from exc
         except PlacesError:
             # The library's own verdict, not a payload read
@@ -417,8 +512,10 @@ def _validate_payload(data: Any, model: str) -> None:
     payload copy (R20-F06). The walk trusts the payload's own
     container protocols, so a mapping whose values method raises
     surfaces as a DecodeError rather than the bare builtin it
-    raised. BaseException subclasses are process control flow and
-    pass through untouched, here as everywhere in the library.
+    raised, a member of the library error family apart, which
+    passes through untouched. BaseException subclasses are
+    process control flow and pass through untouched, here as
+    everywhere in the library.
 
     The walk itself stays here, reading the payload through its
     own container protocols in the order it always has. The depth
@@ -428,9 +525,12 @@ def _validate_payload(data: Any, model: str) -> None:
     limit, so no container past that visit is read (Round 55).
     """
     if not isinstance(data, dict):
+        name = _safe_type_name(data)
+        if name is None:
+            name = "<unrepresentable value>"
         raise DecodeError(
             f"{model} payload must be an object, got "
-            f"{type(data).__name__}: {_safe_repr(data)}"
+            f"{name}: {_safe_repr(data)}"
         )
     trace: list[tuple[int, int]] = []
     try:
@@ -447,7 +547,7 @@ def _validate_payload(data: Any, model: str) -> None:
                 if depth > _MAX_PAYLOAD_DEPTH:
                     break
                 stack.extend((child, depth + 1) for child in node)
-    except DecodeError:
+    except PlacesError:
         raise
     except Exception as exc:
         raise DecodeError(
@@ -624,6 +724,10 @@ def _raw_element(raw: Any, key: str, index: int, fallback: Any, model: str) -> A
             try:
                 if index < len(items):
                     return items[index]
+            except PlacesError:
+                # The library's own verdict, not a payload failure.
+                # Never reclassified by this guard.
+                raise
             except Exception as exc:
                 raise _unreadable(model, exc, key) from exc
     return fallback
@@ -639,6 +743,28 @@ def _reject_bare_string(model: str, field_name: str, value: Any) -> None:
             f"{model} field {field_name!r} must be a list, not a "
             f"single string: {_safe_repr(value)}"
         )
+
+
+def _place_id_from_name(name_value: Optional[str]) -> str:
+    """The Place id derived from the decoded resource name.
+
+    The derivation strips the places prefix through the unbound
+    str method, so a string subclass override can neither raise
+    there nor steer the stored id (Round 55). A value that is
+    not a string derives nothing. A value that only claims to
+    be a string, through a class attribute answer the isinstance
+    test believes, makes the descriptor itself refuse, and that
+    refusal converts through the read wrap naming the name key,
+    so the derivation never escapes bare on a spoofed name. The
+    unbound call runs no caller code on a genuine string, so no
+    member of the library error family can arise inside it.
+    """
+    if not isinstance(name_value, str):
+        return ""
+    try:
+        return str.removeprefix(name_value, "places/")
+    except Exception as exc:
+        raise _unreadable("Place", exc, "name") from exc
 
 
 @dataclass(frozen=True, slots=True)
@@ -2013,11 +2139,7 @@ class Place:
             # whose truthiness raises converts like every other
             # read. A falsy answer still falls to the derivation,
             # followed as sent.
-            place_id = (
-                str.removeprefix(name_value, "places/")
-                if isinstance(name_value, str)
-                else ""
-            )
+            place_id = _place_id_from_name(name_value)
         if not _truthy(data, "Place"):
             # An empty payload is a truncated or wrong response, not a
             # place; a payload that merely lacks an id (a field mask
