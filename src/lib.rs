@@ -650,6 +650,31 @@ fn address_split_compound_code(compound_code: Vec<u8>) -> Option<(Vec<u8>, Vec<u
     placekit_core::address::split_compound_code(&compound_code)
 }
 
+/// Whether one field path matches the construction grammar of
+/// the Python `FieldMask`. The path crosses as a byte string in
+/// the surrogatepass form the Python layer produces, so a path
+/// carrying a lone surrogate is judged exactly (Round 54).
+#[pyfunction]
+fn mask_valid_path(path: Vec<u8>) -> bool {
+    placekit_core::mask::valid_path(&path)
+}
+
+/// The indices of the first occurrence of each distinct path,
+/// in first seen order, for the Python layer to pick its own
+/// caller objects at (Round 54).
+#[pyfunction]
+fn mask_unique_indices(paths: Vec<Vec<u8>>) -> Vec<usize> {
+    placekit_core::mask::unique_indices(&paths)
+}
+
+/// The deterministic order for the keyed members of a set of
+/// field paths, as index positions into the materialised list
+/// the Python layer holds (Round 54).
+#[pyfunction]
+fn mask_sorted_order(keys: Vec<(u8, Vec<u8>)>) -> Vec<usize> {
+    placekit_core::mask::sorted_order(&keys)
+}
+
 /// Body fields the typed requests declare as booleans, by wire name.
 /// The generic converter below applies Python truthiness to these,
 /// so the string "false" used to reach the API as true (R5-R2). The
@@ -1252,6 +1277,9 @@ fn _placekit(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(address_postal_code_result, m)?)?;
     m.add_function(wrap_pyfunction!(address_component_flags, m)?)?;
     m.add_function(wrap_pyfunction!(address_split_compound_code, m)?)?;
+    m.add_function(wrap_pyfunction!(mask_valid_path, m)?)?;
+    m.add_function(wrap_pyfunction!(mask_unique_indices, m)?)?;
+    m.add_function(wrap_pyfunction!(mask_sorted_order, m)?)?;
     Ok(())
 }
 

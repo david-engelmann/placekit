@@ -26,6 +26,9 @@ __all__ = [
     "address_short_texts",
     "address_split_compound_code",
     "address_untyped_indices",
+    "mask_sorted_order",
+    "mask_unique_indices",
+    "mask_valid_path",
 ]
 
 def address_matching_indices(
@@ -88,6 +91,9 @@ def address_component_flags(
 def address_split_compound_code(
     compound_code: bytes,
 ) -> Optional[tuple[bytes, bytes]]: ...
+def mask_valid_path(path: bytes) -> bool: ...
+def mask_unique_indices(paths: list[bytes]) -> list[int]: ...
+def mask_sorted_order(keys: list[tuple[int, bytes]]) -> list[int]: ...
 
 @final
 class CallHandle:
