@@ -18,7 +18,7 @@ cannot raise there and cannot steer the stored id.
 
 These pins hold the conversions, the controls that must pass
 through untouched, the genus fence (a caller operation returning
-a wrong answer is still followed as sent; only raises convert),
+a wrong answer is still followed as sent. Only raises convert),
 the refusal messages on honest shapes, and the read counts,
 which do not move.
 """

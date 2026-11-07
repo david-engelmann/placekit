@@ -79,7 +79,7 @@ def _unreadable(model: str, exc: Exception, key: Optional[str] = None) -> Decode
     """The DecodeError for a payload operation that raised.
 
     One form for every guarded read in this module. A read that
-    names a key uses the key form; a whole payload operation uses
+    names a key uses the key form. A whole payload operation uses
     the payload form. The caught exception is named through the
     safe repr, because its own repr can raise too.
     """
@@ -368,7 +368,7 @@ def _model_elements(
     class's ``from_api``, called with the element and its raw
     source at the same index. A failure in the library's own
     error family other than DecodeError, a ConfigError from a
-    construction guard above all, is not reclassified here; it
+    construction guard above all, is not reclassified here. It
     passes through with its class, message and chain untouched.
     """
     decoded = []
@@ -382,7 +382,7 @@ def _model_elements(
             ) from exc
         except PlacesError:
             # The library's own verdict, not a payload read
-            # failure; never reclassified by this catch.
+            # failure. Never reclassified by this catch.
             raise
         except Exception as exc:
             raise DecodeError(
