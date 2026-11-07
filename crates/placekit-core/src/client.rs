@@ -3215,4 +3215,265 @@ mod tests {
         assert_eq!(err.kind(), "decode");
         assert_eq!(err.status_code(), Some(200));
     }
+
+    // Round 56 migration, family F2. The gzip composition on
+    // the two client read paths, twinned from the driven rows
+    // of tests/test_round31.py and tests/test_round41.py with
+    // the cap boundary rows of tests/test_round25.py. The
+    // header matching, the transport judgement and the bounded
+    // decoder are pinned as units elsewhere in this module.
+    // These tests serve gzipped bodies through the public
+    // methods so the composition itself carries a native pin,
+    // including the Round 41 breaking repair that a corrupt
+    // gzip error body on a complete read reports unreadable.
+
+    fn gzip_probe_req() -> TextSearchRequest {
+        TextSearchRequest {
+            text_query: "cafes".to_owned(),
+            ..Default::default()
+        }
+    }
+
+    fn stub_gzip_response(status: u16, encoding: &str, body: Vec<u8>) -> StubResponse {
+        StubResponse {
+            status,
+            content_type: Some("application/json".to_owned()),
+            headers: vec![("content-encoding".to_owned(), encoding.to_owned())],
+            body,
+            raw: None,
+        }
+    }
+
+    const GZIP_QUOTA_BODY: &str = concat!(
+        "{\"error\": {\"code\": 429, \"message\": \"quota probe\", ",
+        "\"status\": \"RESOURCE_EXHAUSTED\", \"details\": [",
+        "{\"@type\": \"type.googleapis.com/google.rpc.DebugInfo\", ",
+        "\"detail\": \"dbg\"}, ",
+        "{\"@type\": \"type.googleapis.com/google.rpc.RetryInfo\", ",
+        "\"retryDelay\": \"1s\"}]}}"
+    );
+
+    #[test]
+    fn gzip_variant_spellings_decode_on_the_error_path() {
+        // The spellings hyper does not normalise away ride the
+        // error path of a text search, and every one decodes so
+        // the envelope classifies as itself.
+        for spelling in ["GZip", "GZIP", "gzip, identity", "identity, gzip"] {
+            let stub = Stub::start(move |_| {
+                stub_gzip_response(400, spelling, gzipped(GZIP_QUOTA_BODY.as_bytes()))
+            });
+            let client = stub.client("k");
+            let err = block_on(client.text_search(&gzip_probe_req(), None)).unwrap_err();
+            assert_eq!(err.kind(), "rate_limit", "{spelling}");
+            assert_eq!(
+                err.google_status(),
+                Some("RESOURCE_EXHAUSTED"),
+                "{spelling}"
+            );
+        }
+    }
+
+    #[test]
+    fn gzip_variant_spelling_decodes_on_the_success_status_path() {
+        // The same envelope on an HTTP 200 rides the success
+        // path and its envelope guard, and still classifies.
+        let stub =
+            Stub::start(|_| stub_gzip_response(200, "GZIP", gzipped(GZIP_QUOTA_BODY.as_bytes())));
+        let client = stub.client("k");
+        let err = block_on(client.text_search(&gzip_probe_req(), None)).unwrap_err();
+        assert_eq!(err.kind(), "rate_limit");
+        assert_eq!(err.google_status(), Some("RESOURCE_EXHAUSTED"));
+    }
+
+    #[test]
+    fn gzip_variant_token_list_decodes_a_success_body() {
+        let stub =
+            Stub::start(|_| stub_gzip_response(200, "gzip, identity", gzipped(b"{\"places\":[]}")));
+        let client = stub.client("k");
+        let (value, body, status) = block_on(client.text_search(&gzip_probe_req(), None)).unwrap();
+        assert_eq!(status, 200);
+        assert_eq!(value.places.len(), 0);
+        // The raw body handed back is the decompressed text.
+        assert_eq!(body, "{\"places\":[]}");
+    }
+
+    #[test]
+    fn gzip_variant_spelling_decodes_the_photo_json_form() {
+        let plain = "{\"name\":\"places/x/photos/y\",\"photoUri\":\"http://127.0.0.1/photo-uri\"}";
+        let stub = Stub::start(move |_| stub_gzip_response(200, "GZip", gzipped(plain.as_bytes())));
+        let client = stub.client("k");
+        let (media, _body, _status) =
+            block_on(client.place_photo("places/x/photos/y", Some(100), None, true)).unwrap();
+        match media {
+            PhotoMedia::Uri(media) => {
+                assert_eq!(media.name, "places/x/photos/y");
+                assert_eq!(media.photo_uri, "http://127.0.0.1/photo-uri");
+            }
+            PhotoMedia::Bytes(_) => panic!("expected the URI form"),
+        }
+    }
+
+    #[test]
+    fn gzip_twice_compressed_body_declared_once_stays_unseen() {
+        // One decode is all the guard performs, so a body
+        // compressed twice and declared once keeps its envelope
+        // hidden under the exact spelling and the variant alike,
+        // and the answer is the plain HTTP fallback for the
+        // status.
+        let twice = gzipped(&gzipped(GZIP_QUOTA_BODY.as_bytes()));
+        for spelling in ["gzip", "GZip"] {
+            let body = twice.clone();
+            let stub = Stub::start(move |_| stub_gzip_response(400, spelling, body.clone()));
+            let client = stub.client("k");
+            let err = block_on(client.text_search(&gzip_probe_req(), None)).unwrap_err();
+            assert_eq!(err.kind(), "invalid_request", "{spelling}");
+            assert_eq!(err.google_status(), None, "{spelling}");
+        }
+    }
+
+    #[test]
+    fn gzip_duplicate_encoding_headers_follow_the_first_value() {
+        // Duplicate Content-Encoding entries steer by the first
+        // value. Variant first still decodes, because the
+        // transport claim test reads the first value only and
+        // the magic test agrees, and exact first decodes as the
+        // plain transport claimed case.
+        let stub = Stub::start(|_| StubResponse {
+            status: 400,
+            content_type: Some("application/json".to_owned()),
+            headers: vec![
+                ("content-encoding".to_owned(), "GZip".to_owned()),
+                ("content-encoding".to_owned(), "gzip".to_owned()),
+            ],
+            body: gzipped(GZIP_QUOTA_BODY.as_bytes()),
+            raw: None,
+        });
+        let client = stub.client("k");
+        let err = block_on(client.text_search(&gzip_probe_req(), None)).unwrap_err();
+        assert_eq!(err.kind(), "rate_limit");
+        let stub = Stub::start(|_| StubResponse {
+            status: 400,
+            content_type: Some("application/json".to_owned()),
+            headers: vec![
+                ("content-encoding".to_owned(), "gzip".to_owned()),
+                ("content-encoding".to_owned(), "GZip".to_owned()),
+            ],
+            body: gzipped(GZIP_QUOTA_BODY.as_bytes()),
+            raw: None,
+        });
+        let client = stub.client("k");
+        let err = block_on(client.text_search(&gzip_probe_req(), None)).unwrap_err();
+        assert_eq!(err.kind(), "rate_limit");
+        // The photo form under a variant first duplicate pair
+        // decodes by the same steering.
+        let plain = "{\"name\":\"places/x/photos/y\",\"photoUri\":\"http://127.0.0.1/photo-uri\"}";
+        let stub = Stub::start(move |_| StubResponse {
+            status: 200,
+            content_type: Some("application/json".to_owned()),
+            headers: vec![
+                ("content-encoding".to_owned(), "GZip".to_owned()),
+                ("content-encoding".to_owned(), "gzip".to_owned()),
+            ],
+            body: gzipped(plain.as_bytes()),
+            raw: None,
+        });
+        let client = stub.client("k");
+        let (media, _body, _status) =
+            block_on(client.place_photo("places/x/photos/y", Some(100), None, true)).unwrap();
+        match media {
+            PhotoMedia::Uri(media) => {
+                assert_eq!(media.photo_uri, "http://127.0.0.1/photo-uri");
+            }
+            PhotoMedia::Bytes(_) => panic!("expected the URI form"),
+        }
+    }
+
+    #[test]
+    fn gzip_corrupt_body_on_a_complete_error_read_reports_unreadable() {
+        // The Round 41 breaking repair. A corrupt gzip stream
+        // whose raw read completes is an unreadable error body,
+        // reported as itself with the HTTP fallback class, and
+        // never as a capped read and never classified from an
+        // envelope the stream failed to carry. The late failure
+        // flips a byte at seventy percent of the compressed
+        // length, and the early failure flips the first deflate
+        // byte, mirroring the Python rows.
+        let mut late = gzipped(GZIP_QUOTA_BODY.as_bytes());
+        let at = late.len() * 7 / 10;
+        late[at] ^= 0xFF;
+        let mut early = gzipped(
+            b"{\"error\": {\"code\": 429, \"message\": \"x\", \"status\": \"RESOURCE_EXHAUSTED\"}}",
+        );
+        early[10] ^= 0xFF;
+        for (spelling, body) in [("GZip", late.clone()), ("gzip", late), ("GZip", early)] {
+            let stub = Stub::start(move |_| stub_gzip_response(400, spelling, body.clone()));
+            let client = stub.client("k");
+            let err = block_on(client.text_search(&gzip_probe_req(), None)).unwrap_err();
+            assert_eq!(err.kind(), "invalid_request", "{spelling}");
+            assert_eq!(err.status_code(), Some(400), "{spelling}");
+            assert_eq!(err.google_status(), None, "{spelling}");
+            let text = err.to_string();
+            assert!(text.contains("unreadable"), "{spelling} gave {text}");
+            assert!(!text.contains("stopped at"), "{spelling} gave {text}");
+            assert!(
+                !text.contains("RESOURCE_EXHAUSTED"),
+                "{spelling} gave {text}"
+            );
+        }
+    }
+
+    #[test]
+    fn gzip_decompressed_past_the_error_cap_classifies_by_the_prefix() {
+        // The decompressed form past the error body cap still
+        // classifies, because the envelope head rides the
+        // capped prefix through the recovery scan. The layout
+        // mirrors the Python row, with the padding inside the
+        // message, so the status string itself sits past the
+        // cap and the classification follows the envelope code
+        // the head carries.
+        let plain = format!(
+            "{{\"error\": {{\"code\": 429, \"message\": \"{}\", \"status\": \"RESOURCE_EXHAUSTED\"}}}}",
+            "z".repeat(300_000)
+        );
+        let stub = Stub::start(move |_| stub_gzip_response(400, "GZip", gzipped(plain.as_bytes())));
+        let client = stub.client("k");
+        let err = block_on(client.text_search(&gzip_probe_req(), None)).unwrap_err();
+        assert_eq!(err.kind(), "rate_limit");
+        assert!(err.retryable());
+        assert_eq!(err.google_status(), None);
+    }
+
+    #[test]
+    fn gzip_decompressed_exactly_at_the_error_cap_classifies_whole() {
+        // The boundary row, written at the exact byte count.
+        // A decompressed form of exactly the 262144 byte error
+        // cap is not over the cap, and the whole envelope,
+        // tail details included, is what classifies.
+        let skeleton = concat!(
+            "{\"error\": {\"code\": 429, \"message\": \"\", ",
+            "\"status\": \"RESOURCE_EXHAUSTED\", \"details\": [",
+            "{\"@type\": \"type.googleapis.com/google.rpc.QuotaFailure\", ",
+            "\"violations\": [{\"quotaMetric\": \"m\"}]}]}}"
+        );
+        let pad = 262_144 - skeleton.len();
+        let plain = format!(
+            "{{\"error\": {{\"code\": 429, \"message\": \"{}\", \"status\": \"RESOURCE_EXHAUSTED\", \"details\": [{{\"@type\": \"type.googleapis.com/google.rpc.QuotaFailure\", \"violations\": [{{\"quotaMetric\": \"m\"}}]}}]}}}}",
+            "z".repeat(pad)
+        );
+        assert_eq!(plain.len(), 262_144);
+        let stub = Stub::start(move |_| stub_gzip_response(400, "GZip", gzipped(plain.as_bytes())));
+        let client = stub.client("k");
+        let err = block_on(client.text_search(&gzip_probe_req(), None)).unwrap_err();
+        assert_eq!(err.kind(), "rate_limit");
+        assert_eq!(err.google_status(), Some("RESOURCE_EXHAUSTED"));
+        assert_eq!(err.error_code(), Some(429));
+        // The wholeness evidence is the tail. The violations
+        // sit in the details array behind the padded message,
+        // so the view can only answer if every byte up to the
+        // cap boundary survived the read.
+        assert_eq!(
+            err.quota_violations(),
+            vec![serde_json::json!({"quotaMetric": "m"})]
+        );
+    }
 }
