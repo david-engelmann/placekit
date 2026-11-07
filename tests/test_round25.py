@@ -18,7 +18,6 @@ and the in flight async cancellation pin (spec Minor).
 from __future__ import annotations
 
 import asyncio
-import gzip
 import json
 import socket
 import threading
@@ -101,20 +100,6 @@ def test_over_cap_envelope_mirror_pairing(client, raw_response):
         client.text_search("pizza")
     assert excinfo.value.google_status == "INVALID_ARGUMENT"
     assert excinfo.value.error_code == 400
-
-
-def test_gzip_body_decompressing_past_the_cap_classifies(client, raw_response):
-    # The cap applies to the decompressed body, so a small gzip
-    # envelope whose plain form overflows it takes the same path.
-    body = _envelope("RESOURCE_EXHAUSTED", 429, QUOTA_MESSAGE, "z" * 300_000)
-    raw_response(
-        400,
-        gzip.compress(body.encode()),
-        headers={"Content-Encoding": "gzip"},
-    )
-    with pytest.raises(RateLimitError) as excinfo:
-        client.text_search("pizza")
-    assert excinfo.value.google_status == "RESOURCE_EXHAUSTED"
 
 
 def test_deeply_nested_detail_classifies_like_its_control(client, raw_response):

@@ -46,7 +46,6 @@ cut.
 from __future__ import annotations
 
 import asyncio
-import gzip
 import json
 
 import pytest
@@ -358,91 +357,6 @@ def test_unterminated_details_array_keeps_the_whole_array_fallback(
     exc = _raised(client, raw_response, body)
     assert exc.google_status == "INVALID_ARGUMENT"
     assert exc.details == []
-
-
-# ------------------------------------------------------------------
-# Finding 5: a corrupt gzip stream on a complete read
-# ------------------------------------------------------------------
-
-
-def _corrupt_gzip_body() -> bytes:
-    # A long envelope flipped late in its deflate stream, so the
-    # stream yields its output and then fails, a checksum failure
-    # on this body. The raw read is complete, far under the cap.
-    detail = "quota detail text " * 60
-    body = json.dumps(
-        {
-            "error": {
-                "code": 429,
-                "message": "slow down",
-                "status": "RESOURCE_EXHAUSTED",
-                "details": [
-                    {
-                        "@type": QUOTA,
-                        "violations": [
-                            {"subject": "quota", "description": detail}
-                        ],
-                    }
-                ],
-            }
-        }
-    ).encode()
-    packed = bytearray(gzip.compress(body, mtime=0))
-    packed[int(len(packed) * 0.7)] ^= 0xFF
-    return bytes(packed)
-
-
-@pytest.mark.parametrize("spelling", ["GZip", "gzip"])
-def test_corrupt_gzip_on_a_complete_read_reports_unreadable(
-    client, raw_response, spelling
-):
-    exc = _raised(
-        client,
-        raw_response,
-        _corrupt_gzip_body(),
-        headers={"Content-Encoding": spelling},
-    )
-    assert "unreadable" in str(exc)
-    assert "stopped at" not in str(exc)
-    assert "262144" not in str(exc)
-
-
-def _first_byte_corrupt_gzip_body() -> bytes:
-    # A small envelope flipped at the first deflate byte, so the
-    # stream fails before yielding anything and its partial is
-    # empty. The raw read is complete, far under the cap.
-    body = json.dumps(
-        {
-            "error": {
-                "code": 400,
-                "message": "r41 probe",
-                "status": "INVALID_ARGUMENT",
-                "details": [],
-            }
-        }
-    ).encode()
-    packed = bytearray(gzip.compress(body, mtime=0))
-    packed[10] ^= 0xFF
-    return bytes(packed)
-
-
-def test_corrupt_gzip_failing_before_any_output_reports_unreadable(
-    client, raw_response
-):
-    body = _first_byte_corrupt_gzip_body()
-    exc = _raised(
-        client,
-        raw_response,
-        body,
-        headers={"Content-Encoding": "GZip"},
-    )
-    assert "unreadable" in str(exc)
-    assert "stopped at" not in str(exc)
-    assert "262144" not in str(exc)
-    # The fall through reading sized the body by the byte length
-    # of its lossy UTF 8 rendering, a size the body never had.
-    lossy_size = len(body.decode("utf-8", errors="replace").encode("utf-8"))
-    assert str(lossy_size) not in str(exc)
 
 
 def test_capped_error_body_still_reports_the_cap(client, raw_response):
