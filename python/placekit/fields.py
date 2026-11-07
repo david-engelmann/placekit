@@ -25,6 +25,19 @@ narrower ``fields`` set to control billing. The mask also decides
 what can be populated at all. An attribute outside the mask reads
 as not returned on the result, in the sense the models
 documentation defines, whether or not the API holds a value for it.
+
+Construction of a mask is computed in the Rust core since
+Round 54. This module reads the caller supplied values through
+the same guarded reads as before, converts the checked paths
+into plain data, and lets the core grammar, the duplicate
+dropping and the set ordering decide over those values, so the
+class keeps its signature and its ConfigError discipline and no
+caller code changes. The header value stays a join over the
+stored paths in this module, so it keeps returning the objects
+the old property returned. One boundary travels with the
+delegation. Where a caller supplied operation returns a wrong
+answer instead of raising, the construction follows the values
+as sent to the core rather than the answer the operation gave.
 """
 
 from __future__ import annotations
@@ -33,6 +46,7 @@ import re
 from dataclasses import dataclass
 from typing import Any, Iterable, Tuple, Union
 
+from . import _placekit
 from .exceptions import ConfigError
 
 #: The universal ceiling on caller iterables the client materialises
@@ -282,6 +296,7 @@ class FieldMask:
                 f"field paths, got {len(paths)}",
                 context="FieldMask",
             )
+        encoded = []
         for path in paths:
             if not isinstance(path, str):
                 raise ConfigError(
@@ -289,37 +304,52 @@ class FieldMask:
                     context="FieldMask",
                 )
             try:
-                valid = _valid_path(path)
+                _valid_path(path)
             except Exception as exc:
                 # The path check reads the member (strip,
                 # membership, split), and a string subclass whose
                 # read raises used to escape construction as a
                 # bare builtin. The member is rendered safely, so
                 # the refusal itself cannot be the escaping read
-                # (Round 31, Caller Minor 3).
+                # (Round 31, Caller Minor 3). The check now runs
+                # as the caller side exercise of the construction
+                # check, at the old site, so the raise still
+                # surfaces here, and the verdict that decides
+                # comes from the core over the value as sent
+                # (Round 54).
                 raise ConfigError(
                     f"invalid field mask path: {_safe_repr(path)}",
                     context="FieldMask",
                 ) from exc
-            if not valid:
+            data = _encode_path(path)
+            if not _placekit.mask_valid_path(data):
                 raise ConfigError(
                     f"invalid field mask path: {_safe_repr(path)}",
                     context="FieldMask",
                 )
+            encoded.append(data)
         # A mask is a set of paths; duplicates are dropped keeping
         # first seen order so the header is stable for a given input.
         # The dedupe reads the members once more, hashing and
         # comparing them, past the guarded path check above, and a
         # member whose hash or equality raises used to escape here
-        # as a bare builtin (Round 34, red team Minor 1).
+        # as a bare builtin (Round 34, red team Minor 1). The
+        # caller side pass below still performs those reads at
+        # this site so a raise still surfaces here, and the core
+        # picks the surviving members over the values as sent, so
+        # the tuple stored holds the caller's own first seen
+        # objects at the indices the core returns (Round 54).
         try:
-            unique = tuple(dict.fromkeys(paths))
+            dict.fromkeys(paths)
         except Exception as exc:
             raise ConfigError(
                 "a field mask path raised while its duplicates "
                 "were being dropped",
                 context="FieldMask",
             ) from exc
+        unique = tuple(
+            paths[index] for index in _placekit.mask_unique_indices(encoded)
+        )
         object.__setattr__(self, "paths", unique)
 
     @property
@@ -374,19 +404,28 @@ class FieldMask:
             raise
         if from_set:
             try:
-                items = sorted(items, key=_set_sort_key)
-            except Exception as exc:
+                keys = [_set_sort_key(item) for item in items]
                 # The sort key itself reads no member past its
                 # type, but comparing the keys of two string
                 # members reads the members themselves, and a
                 # member whose comparison raises used to escape
                 # here as a bare builtin (Round 34, red team
-                # Minor 1).
+                # Minor 1). The caller side pass below still
+                # performs those comparisons at this site, over
+                # the keys the old sort computed, so a raise still
+                # surfaces here, and the core then fixes the
+                # order over the values as sent (Round 54).
+                sorted(range(len(items)), key=keys.__getitem__)
+            except Exception as exc:
                 raise ConfigError(
                     "a field mask path raised while the set of "
                     "paths was being sorted",
                     context="FieldMask",
                 ) from exc
+            order = _placekit.mask_sorted_order(
+                [(rank, _encode_path(text)) for rank, text in keys]
+            )
+            items = [items[index] for index in order]
         return cls(*items)
 
     @classmethod
@@ -409,11 +448,34 @@ class FieldMask:
 FieldsLike = Union[FieldMask, Iterable[str], None]
 
 
+def _encode_path(path: str) -> bytes:
+    """The byte form of one path for the core crossing.
+
+    The core works on byte strings, and the surrogatepass codec
+    carries a lone surrogate in a caller string across exactly,
+    the crossing Round 53 settled for component texts. The
+    unbound ``str.encode`` reads the string's own buffer, so the
+    conversion performs no call on the caller's object, and a
+    subclass that overrides ``encode`` can neither raise nor lie
+    at a site the pre port code never called (Round 54).
+    """
+    return str.encode(path, "utf-8", "surrogatepass")
+
+
 def _valid_path(path: str) -> bool:
     """Whether one path matches the wire grammar: dot separated
     camelCase segments, no empty segments, whitespace, commas or
     wildcards. Semantic errors (snake_case names, stray punctuation)
-    fail here, locally, instead of at the API."""
+    fail here, locally, instead of at the API.
+
+    Since Round 54 this function is the caller side exercise of
+    the construction check. The constructor runs it at the old
+    site so a member whose own reads raise surfaces the raise
+    exactly where it always did, and its answer is no longer the
+    verdict. The verdict comes from the core over the value as
+    sent, which the module docstring states as the delegation
+    boundary.
+    """
     if not path or path.strip() != path or "," in path:
         return False
     return all(_SEGMENT.fullmatch(segment) for segment in path.split("."))
