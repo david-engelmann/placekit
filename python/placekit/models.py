@@ -57,7 +57,67 @@ from pathlib import Path
 from typing import Any, Iterator, Optional
 
 from . import _placekit
-from .exceptions import ConfigError, DecodeError
+from .exceptions import ConfigError, DecodeError, PlacesError
+
+
+def _safe_repr(value: Any) -> str:
+    """The repr of a payload value, safe to name in a refusal.
+
+    Refusals interpolate the values they refuse, and a payload
+    object whose own repr raises would break the refusal itself
+    and escape bare. Where repr works its answer is returned
+    unchanged, so no honest refusal message moves. Where it
+    raises, the value is named by its type instead.
+    """
+    try:
+        return repr(value)
+    except Exception:
+        return f"<unrepresentable {type(value).__name__}>"
+
+
+def _unreadable(model: str, exc: Exception, key: Optional[str] = None) -> DecodeError:
+    """The DecodeError for a payload operation that raised.
+
+    One form for every guarded read in this module. A read that
+    names a key uses the key form; a whole payload operation uses
+    the payload form. The caught exception is named through the
+    safe repr, because its own repr can raise too.
+    """
+    if key is None:
+        return DecodeError(
+            f"{model} payload could not be read: {_safe_repr(exc)}"
+        )
+    return DecodeError(
+        f"{model} payload key {key!r} could not be read: {_safe_repr(exc)}"
+    )
+
+
+def _read(data: dict[str, Any], key: str, model: str) -> Any:
+    """Read one payload key under the read guard (Round 55).
+
+    Exactly one get, the call the decoders always made, with any
+    Exception the mapping raises converted to a DecodeError
+    naming the model and the key, chained from the original.
+    BaseException is never caught, here as everywhere in this
+    module, so process control flow passes through untouched.
+    """
+    try:
+        return data.get(key)
+    except Exception as exc:
+        raise _unreadable(model, exc, key) from exc
+
+
+def _read_or(data: dict[str, Any], key: str, default: Any, model: str) -> Any:
+    """Read one payload key with a default, under the read guard.
+
+    Exactly one get carrying the default, which the caller still
+    evaluates at the call site as an argument, exactly as the
+    unguarded call did. A raise converts the same way as _read.
+    """
+    try:
+        return data.get(key, default)
+    except Exception as exc:
+        raise _unreadable(model, exc, key) from exc
 
 
 def _require(data: dict[str, Any], key: str, model: str) -> Any:
@@ -67,14 +127,56 @@ def _require(data: dict[str, Any], key: str, model: str) -> Any:
     required key is a DecodeError with the key and model named, never
     a bare KeyError and never a fabricated empty object.
     """
-    if key not in data:
+    try:
+        present = key in data
+    except Exception as exc:
+        raise _unreadable(model, exc, key) from exc
+    if not present:
         raise DecodeError(f"{model} payload is missing required key {key!r}")
-    return data[key]
+    try:
+        return data[key]
+    except Exception as exc:
+        raise _unreadable(model, exc, key) from exc
+
+
+def _truthy(value: Any, model: str, key: Optional[str] = None) -> bool:
+    """The truthiness of one payload value, under the guard.
+
+    The child slot gates ask whether a decoded child value is
+    present by asking its truthiness, and a value whose truthiness
+    raises escaped bare at the gate. The value is evaluated
+    exactly once, the evaluation the gate always made, with a
+    raise converted to the could not be read form.
+    """
+    try:
+        return bool(value)
+    except Exception as exc:
+        raise _unreadable(model, exc, key) from exc
+
+
+def _copy_source(value: Any, model: str) -> Any:
+    """Deep copy one payload source under the copy wrap.
+
+    The wrap _validate_and_copy_payload has always carried for
+    the payload copy, extended to the raw source copies in
+    _prepare (Round 55). A copy whose machinery raises surfaces
+    as a DecodeError rather than the bare builtin it raised,
+    a RecursionError from a deeply nested raw source included.
+    A DecodeError the machinery itself raised passes through.
+    """
+    try:
+        return copy.deepcopy(value)
+    except DecodeError:
+        raise
+    except Exception as exc:
+        raise _unreadable(model, exc) from exc
 
 
 def _as_float(value: Any, model: str, key: str) -> float:
     if isinstance(value, bool):
-        raise DecodeError(f"{model} payload key {key!r} is not a number: {value!r}")
+        raise DecodeError(
+            f"{model} payload key {key!r} is not a number: {_safe_repr(value)}"
+        )
     try:
         result = float(value)
     except Exception as exc:
@@ -86,7 +188,7 @@ def _as_float(value: Any, model: str, key: str) -> float:
         # the same way, as a DecodeError, never the bare builtin
         # it raised.
         raise DecodeError(
-            f"{model} payload key {key!r} is not a number: {value!r}"
+            f"{model} payload key {key!r} is not a number: {_safe_repr(value)}"
         ) from exc
     if not math.isfinite(result):
         # A payload float must be finite (Round 25, Major 2). An
@@ -102,14 +204,16 @@ def _as_float(value: Any, model: str, key: str) -> float:
         # hand with a non finite value is caller misuse, not a
         # payload.
         raise DecodeError(
-            f"{model} payload key {key!r} is not a finite number: {value!r}"
+            f"{model} payload key {key!r} is not a finite number: {_safe_repr(value)}"
         )
     return result
 
 
 def _as_int(value: Any, model: str, key: str) -> int:
     if isinstance(value, bool):
-        raise DecodeError(f"{model} payload key {key!r} is not an integer: {value!r}")
+        raise DecodeError(
+            f"{model} payload key {key!r} is not an integer: {_safe_repr(value)}"
+        )
     try:
         fractional = (
             (isinstance(value, float) and not value.is_integer())
@@ -121,7 +225,7 @@ def _as_int(value: Any, model: str, key: str) -> int:
         )
     except Exception as exc:
         raise DecodeError(
-            f"{model} payload key {key!r} is not an integer: {value!r}"
+            f"{model} payload key {key!r} is not an integer: {_safe_repr(value)}"
         ) from exc
     if fractional:
         # A fractional value in an integer position is refused, not
@@ -135,13 +239,13 @@ def _as_int(value: Any, model: str, key: str) -> int:
         # that yields Decimal values reaches the same defect with
         # a different type.
         raise DecodeError(
-            f"{model} payload key {key!r} is not an integer: {value!r}"
+            f"{model} payload key {key!r} is not an integer: {_safe_repr(value)}"
         )
     try:
         result = int(value)
     except Exception as exc:
         raise DecodeError(
-            f"{model} payload key {key!r} is not an integer: {value!r}"
+            f"{model} payload key {key!r} is not an integer: {_safe_repr(value)}"
         ) from exc
     try:
         str(result)
@@ -173,7 +277,7 @@ def _as_str(value: Any, model: str, key: str) -> Optional[str]:
     if value is None or isinstance(value, str):
         return value
     raise DecodeError(
-        f"{model} payload key {key!r} is not a string: {value!r}"
+        f"{model} payload key {key!r} is not a string: {_safe_repr(value)}"
     )
 
 
@@ -187,7 +291,7 @@ def _optional_bool(value: Any, model: str, key: str) -> Optional[bool]:
     if isinstance(value, bool):
         return value
     raise DecodeError(
-        f"{model} payload key {key!r} is not a boolean: {value!r}"
+        f"{model} payload key {key!r} is not a boolean: {_safe_repr(value)}"
     )
 
 
@@ -209,7 +313,7 @@ def _str_list(value: Any, model: str, key: str) -> list[str]:
         )
     if not isinstance(value, (list, tuple)):
         raise DecodeError(
-            f"{model} payload key {key!r} is not a list: {value!r}"
+            f"{model} payload key {key!r} is not a list: {_safe_repr(value)}"
         )
     try:
         items = list(value)
@@ -220,13 +324,13 @@ def _str_list(value: Any, model: str, key: str) -> list[str]:
         # guarded the way the payload preparation is.
         raise DecodeError(
             f"{model} payload key {key!r} could not be read "
-            f"as a list: {exc!r}"
+            f"as a list: {_safe_repr(exc)}"
         ) from exc
     for item in items:
         if item is not None and not isinstance(item, str):
             raise DecodeError(
                 f"{model} payload key {key!r} holds an item that "
-                f"is not a string: {item!r}"
+                f"is not a string: {_safe_repr(item)}"
             )
     return items
 
@@ -242,10 +346,10 @@ def _model_list(value: Any, model: str, key: str) -> list:
         except Exception as exc:
             raise DecodeError(
                 f"{model} payload key {key!r} could not be read "
-                f"as a list: {exc!r}"
+                f"as a list: {_safe_repr(exc)}"
             ) from exc
     raise DecodeError(
-        f"{model} payload key {key!r} is not a list: {value!r}"
+        f"{model} payload key {key!r} is not a list: {_safe_repr(value)}"
     )
 
 
@@ -262,16 +366,28 @@ def _model_elements(
     element of the collection failed (Round 24, the actionable
     half of the decode dialect finding). ``decode`` is the child
     class's ``from_api``, called with the element and its raw
-    source at the same index.
+    source at the same index. A failure in the library's own
+    error family other than DecodeError, a ConfigError from a
+    construction guard above all, is not reclassified here; it
+    passes through with its class, message and chain untouched.
     """
     decoded = []
     for i, item in enumerate(_model_list(value, model, key)):
         try:
-            decoded.append(decode(item, _raw_element(raw, key, i, item)))
+            decoded.append(decode(item, _raw_element(raw, key, i, item, model)))
         except DecodeError as exc:
             raise DecodeError(
                 f"{model} payload key {key!r} element {i} failed "
                 f"to decode: {exc.message}"
+            ) from exc
+        except PlacesError:
+            # The library's own verdict, not a payload read
+            # failure; never reclassified by this catch.
+            raise
+        except Exception as exc:
+            raise DecodeError(
+                f"{model} payload key {key!r} element {i} could not "
+                f"be read: {_safe_repr(exc)}"
             ) from exc
     return decoded
 
@@ -314,7 +430,7 @@ def _validate_payload(data: Any, model: str) -> None:
     if not isinstance(data, dict):
         raise DecodeError(
             f"{model} payload must be an object, got "
-            f"{type(data).__name__}: {data!r}"
+            f"{type(data).__name__}: {_safe_repr(data)}"
         )
     trace: list[tuple[int, int]] = []
     try:
@@ -335,7 +451,7 @@ def _validate_payload(data: Any, model: str) -> None:
         raise
     except Exception as exc:
         raise DecodeError(
-            f"{model} payload could not be read: {exc!r}"
+            f"{model} payload could not be read: {_safe_repr(exc)}"
         ) from exc
     if not _placekit.models_payload_depth_within_limit(trace):
         raise DecodeError(
@@ -354,17 +470,7 @@ def _validate_and_copy_payload(data: Any, model: str) -> dict[str, Any]:
     is it deep copied for decoding (R20-F05 and F06).
     """
     _validate_payload(data, model)
-    try:
-        return copy.deepcopy(data)
-    except DecodeError:
-        raise
-    except Exception as exc:
-        # An object whose copy machinery raises surfaces the same
-        # way as one whose containers cannot be read, as a
-        # DecodeError rather than the bare builtin it raised.
-        raise DecodeError(
-            f"{model} payload could not be read: {exc!r}"
-        ) from exc
+    return _copy_source(data, model)
 
 
 class _DecodeOwnership:
@@ -471,15 +577,15 @@ def _prepare(
             # A node whose raw source is its own payload, because
             # the raw tree held no subtree for it, still keeps a
             # raw of its own, copied from the payload it reads.
-            return data, copy.deepcopy(data)
-        return data, copy.deepcopy(raw)
+            return data, _copy_source(data, model)
+        return data, _copy_source(raw, model)
     prepared = _validate_and_copy_payload(data, model)
     if raw is None or raw is data:
         return prepared, prepared
-    return prepared, copy.deepcopy(raw)
+    return prepared, _copy_source(raw, model)
 
 
-def _raw_subtree(raw: Any, key: str, fallback: Any) -> Any:
+def _raw_subtree(raw: Any, key: str, fallback: Any, model: str) -> Any:
     """The raw source for a child model under one wire key.
 
     When the raw source carries the key, its subtree is the child's
@@ -500,18 +606,26 @@ def _raw_subtree(raw: Any, key: str, fallback: Any) -> Any:
     the decoders have always read that way.
     """
     if isinstance(raw, dict):
-        return raw.get(key, {})
+        return _read_or(raw, key, {}, model)
     return fallback
 
 
-def _raw_element(raw: Any, key: str, index: int, fallback: Any) -> Any:
+def _raw_element(raw: Any, key: str, index: int, fallback: Any, model: str) -> Any:
     """The raw source for one element of a list child, by wire
     index, with the attribute element as the fallback when the raw
-    source has no element at that index."""
+    source has no element at that index. The length test and the
+    index read sit under the same guard as the raw get above
+    them, because a container that passes the isinstance test can
+    still be a list subclass whose length or index operation
+    raises."""
     if isinstance(raw, dict):
-        items = raw.get(key)
-        if isinstance(items, list) and index < len(items):
-            return items[index]
+        items = _read(raw, key, model)
+        if isinstance(items, list):
+            try:
+                if index < len(items):
+                    return items[index]
+            except Exception as exc:
+                raise _unreadable(model, exc, key) from exc
     return fallback
 
 
@@ -523,7 +637,7 @@ def _reject_bare_string(model: str, field_name: str, value: Any) -> None:
     if isinstance(value, (str, bytes)):
         raise ConfigError(
             f"{model} field {field_name!r} must be a list, not a "
-            f"single string: {value!r}"
+            f"single string: {_safe_repr(value)}"
         )
 
 
@@ -541,9 +655,15 @@ class LocalizedText:
     ) -> "LocalizedText":
         data, raw = _prepare(data, raw, "LocalizedText")
         return cls(
-            text=_as_str(data.get("text", ""), "LocalizedText", "text"),
+            text=_as_str(
+                _read_or(data, "text", "", "LocalizedText"),
+                "LocalizedText",
+                "text",
+            ),
             language_code=_as_str(
-                data.get("languageCode"), "LocalizedText", "languageCode"
+                _read(data, "languageCode", "LocalizedText"),
+                "LocalizedText",
+                "languageCode",
             ),
             raw=raw,
         )
@@ -568,13 +688,18 @@ class LatLng:
             ("latitude", self.latitude),
             ("longitude", self.longitude),
         ):
-            if (
-                isinstance(value, bool)
-                or not isinstance(value, (int, float))
-                or not math.isfinite(float(value))
-            ):
+            try:
+                finite = (
+                    not isinstance(value, bool)
+                    and isinstance(value, (int, float))
+                    and math.isfinite(float(value))
+                )
+            except Exception:
+                finite = False
+            if not finite:
                 raise ConfigError(
-                    f"LatLng {name} must be a finite real number, got {value!r}"
+                    f"LatLng {name} must be a finite real number, "
+                    f"got {_safe_repr(value)}"
                 )
 
     @classmethod
@@ -610,11 +735,19 @@ class AuthorAttribution:
         data, raw = _prepare(data, raw, "AuthorAttribution")
         return cls(
             display_name=_as_str(
-                data.get("displayName", ""), "AuthorAttribution", "displayName"
+                _read_or(data, "displayName", "", "AuthorAttribution"),
+                "AuthorAttribution",
+                "displayName",
             ),
-            uri=_as_str(data.get("uri", ""), "AuthorAttribution", "uri"),
+            uri=_as_str(
+                _read_or(data, "uri", "", "AuthorAttribution"),
+                "AuthorAttribution",
+                "uri",
+            ),
             photo_uri=_as_str(
-                data.get("photoUri", ""), "AuthorAttribution", "photoUri"
+                _read_or(data, "photoUri", "", "AuthorAttribution"),
+                "AuthorAttribution",
+                "photoUri",
             ),
             raw=raw,
         )
@@ -634,9 +767,15 @@ class Attribution:
     ) -> "Attribution":
         data, raw = _prepare(data, raw, "Attribution")
         return cls(
-            provider=_as_str(data.get("provider", ""), "Attribution", "provider"),
+            provider=_as_str(
+                _read_or(data, "provider", "", "Attribution"),
+                "Attribution",
+                "provider",
+            ),
             provider_uri=_as_str(
-                data.get("providerUri", ""), "Attribution", "providerUri"
+                _read_or(data, "providerUri", "", "Attribution"),
+                "Attribution",
+                "providerUri",
             ),
             raw=raw,
         )
@@ -672,21 +811,25 @@ class Photo:
     ) -> "Photo":
         data, raw = _prepare(data, raw, "Photo")
         return cls(
-            name=_as_str(data.get("name", ""), "Photo", "name"),
-            width_px=_as_int(data.get("widthPx", 0), "Photo", "widthPx"),
-            height_px=_as_int(data.get("heightPx", 0), "Photo", "heightPx"),
+            name=_as_str(_read_or(data, "name", "", "Photo"), "Photo", "name"),
+            width_px=_as_int(_read_or(data, "widthPx", 0, "Photo"), "Photo", "widthPx"),
+            height_px=_as_int(
+                _read_or(data, "heightPx", 0, "Photo"),
+                "Photo",
+                "heightPx",
+            ),
             author_attributions=_model_elements(
-                data.get("authorAttributions", []),
+                _read_or(data, "authorAttributions", [], "Photo"),
                 "Photo",
                 "authorAttributions",
                 raw,
                 AuthorAttribution.from_api,
             ),
             flag_content_uri=_as_str(
-                data.get("flagContentUri"), "Photo", "flagContentUri"
+                _read(data, "flagContentUri", "Photo"), "Photo", "flagContentUri"
             ),
             google_maps_uri=_as_str(
-                data.get("googleMapsUri"), "Photo", "googleMapsUri"
+                _read(data, "googleMapsUri", "Photo"), "Photo", "googleMapsUri"
             ),
             raw=raw,
         )
@@ -707,9 +850,9 @@ class Date:
     ) -> "Date":
         data, raw = _prepare(data, raw, "Date")
         return cls(
-            year=_as_int(data.get("year", 0), "Date", "year"),
-            month=_as_int(data.get("month", 0), "Date", "month"),
-            day=_as_int(data.get("day", 0), "Date", "day"),
+            year=_as_int(_read_or(data, "year", 0, "Date"), "Date", "year"),
+            month=_as_int(_read_or(data, "month", 0, "Date"), "Date", "month"),
+            day=_as_int(_read_or(data, "day", 0, "Date"), "Date", "day"),
             raw=raw,
         )
 
@@ -735,15 +878,31 @@ class OpeningPoint:
         cls, data: dict[str, Any], raw: Optional[dict[str, Any]] = None
     ) -> "OpeningPoint":
         data, raw = _prepare(data, raw, "OpeningPoint")
-        date = data.get("date")
+        date = _read(data, "date", "OpeningPoint")
         return cls(
-            date=Date.from_api(date, _raw_subtree(raw, "date", date))
-            if date
+            date=Date.from_api(date, _raw_subtree(raw, "date", date, "OpeningPoint"))
+            if _truthy(date, "OpeningPoint", "date")
             else None,
-            truncated=_optional_bool(data.get("truncated"), "OpeningPoint", "truncated"),
-            day=_optional_int(data.get("day"), "OpeningPoint", "day"),
-            hour=_optional_int(data.get("hour"), "OpeningPoint", "hour"),
-            minute=_optional_int(data.get("minute"), "OpeningPoint", "minute"),
+            truncated=_optional_bool(
+                _read(data, "truncated", "OpeningPoint"),
+                "OpeningPoint",
+                "truncated",
+            ),
+            day=_optional_int(
+                _read(data, "day", "OpeningPoint"),
+                "OpeningPoint",
+                "day",
+            ),
+            hour=_optional_int(
+                _read(data, "hour", "OpeningPoint"),
+                "OpeningPoint",
+                "hour",
+            ),
+            minute=_optional_int(
+                _read(data, "minute", "OpeningPoint"),
+                "OpeningPoint",
+                "minute",
+            ),
             raw=raw,
         )
 
@@ -761,18 +920,18 @@ class Period:
         cls, data: dict[str, Any], raw: Optional[dict[str, Any]] = None
     ) -> "Period":
         data, raw = _prepare(data, raw, "Period")
-        open_point = data.get("open")
-        close_point = data.get("close")
+        open_point = _read(data, "open", "Period")
+        close_point = _read(data, "close", "Period")
         return cls(
             open=OpeningPoint.from_api(
-                open_point, _raw_subtree(raw, "open", open_point)
+                open_point, _raw_subtree(raw, "open", open_point, "Period")
             )
-            if open_point
+            if _truthy(open_point, "Period", "open")
             else None,
             close=OpeningPoint.from_api(
-                close_point, _raw_subtree(raw, "close", close_point)
+                close_point, _raw_subtree(raw, "close", close_point, "Period")
             )
-            if close_point
+            if _truthy(close_point, "Period", "close")
             else None,
             raw=raw,
         )
@@ -791,10 +950,10 @@ class SpecialDay:
         cls, data: dict[str, Any], raw: Optional[dict[str, Any]] = None
     ) -> "SpecialDay":
         data, raw = _prepare(data, raw, "SpecialDay")
-        date = data.get("date")
+        date = _read(data, "date", "SpecialDay")
         return cls(
-            date=Date.from_api(date, _raw_subtree(raw, "date", date))
-            if date
+            date=Date.from_api(date, _raw_subtree(raw, "date", date, "SpecialDay"))
+            if _truthy(date, "SpecialDay", "date")
             else None,
             raw=raw,
         )
@@ -832,34 +991,42 @@ class OpeningHours:
     ) -> "OpeningHours":
         data, raw = _prepare(data, raw, "OpeningHours")
         return cls(
-            open_now=_optional_bool(data.get("openNow"), "OpeningHours", "openNow"),
+            open_now=_optional_bool(
+                _read(data, "openNow", "OpeningHours"),
+                "OpeningHours",
+                "openNow",
+            ),
             periods=_model_elements(
-                data.get("periods", []),
+                _read_or(data, "periods", [], "OpeningHours"),
                 "OpeningHours",
                 "periods",
                 raw,
                 Period.from_api,
             ),
             weekday_descriptions=_str_list(
-                data.get("weekdayDescriptions", []),
+                _read_or(data, "weekdayDescriptions", [], "OpeningHours"),
                 "OpeningHours",
                 "weekdayDescriptions",
             ),
             next_close_time=_as_str(
-                data.get("nextCloseTime"), "OpeningHours", "nextCloseTime"
+                _read(data, "nextCloseTime", "OpeningHours"),
+                "OpeningHours",
+                "nextCloseTime",
             ),
             next_open_time=_as_str(
-                data.get("nextOpenTime"), "OpeningHours", "nextOpenTime"
+                _read(data, "nextOpenTime", "OpeningHours"),
+                "OpeningHours",
+                "nextOpenTime",
             ),
             special_days=_model_elements(
-                data.get("specialDays", []),
+                _read_or(data, "specialDays", [], "OpeningHours"),
                 "OpeningHours",
                 "specialDays",
                 raw,
                 SpecialDay.from_api,
             ),
             secondary_hours_type=_as_str(
-                data.get("secondaryHoursType"),
+                _read(data, "secondaryHoursType", "OpeningHours"),
                 "OpeningHours",
                 "secondaryHoursType",
             ),
@@ -887,14 +1054,24 @@ class AddressComponent:
         data, raw = _prepare(data, raw, "AddressComponent")
         return cls(
             long_text=_as_str(
-                data.get("longText", ""), "AddressComponent", "longText"
+                _read_or(data, "longText", "", "AddressComponent"),
+                "AddressComponent",
+                "longText",
             ),
             short_text=_as_str(
-                data.get("shortText", ""), "AddressComponent", "shortText"
+                _read_or(data, "shortText", "", "AddressComponent"),
+                "AddressComponent",
+                "shortText",
             ),
-            types=_str_list(data.get("types", []), "AddressComponent", "types"),
+            types=_str_list(
+                _read_or(data, "types", [], "AddressComponent"),
+                "AddressComponent",
+                "types",
+            ),
             language_code=_as_str(
-                data.get("languageCode"), "AddressComponent", "languageCode"
+                _read(data, "languageCode", "AddressComponent"),
+                "AddressComponent",
+                "languageCode",
             ),
             raw=raw,
         )
@@ -914,9 +1091,13 @@ class PlusCode:
     ) -> "PlusCode":
         data, raw = _prepare(data, raw, "PlusCode")
         return cls(
-            global_code=_as_str(data.get("globalCode", ""), "PlusCode", "globalCode"),
+            global_code=_as_str(
+                _read_or(data, "globalCode", "", "PlusCode"),
+                "PlusCode",
+                "globalCode",
+            ),
             compound_code=_as_str(
-                data.get("compoundCode"), "PlusCode", "compoundCode"
+                _read(data, "compoundCode", "PlusCode"), "PlusCode", "compoundCode"
             ),
             raw=raw,
         )
@@ -938,8 +1119,8 @@ class Viewport:
         low = _require(data, "low", "Viewport")
         high = _require(data, "high", "Viewport")
         return cls(
-            low=LatLng.from_api(low, _raw_subtree(raw, "low", low)),
-            high=LatLng.from_api(high, _raw_subtree(raw, "high", high)),
+            low=LatLng.from_api(low, _raw_subtree(raw, "low", low, "Viewport")),
+            high=LatLng.from_api(high, _raw_subtree(raw, "high", high, "Viewport")),
             raw=raw,
         )
 
@@ -970,31 +1151,49 @@ class PostalAddress:
         data, raw = _prepare(data, raw, "PostalAddress")
         return cls(
             region_code=_as_str(
-                data.get("regionCode"), "PostalAddress", "regionCode"
+                _read(data, "regionCode", "PostalAddress"),
+                "PostalAddress",
+                "regionCode",
             ),
             language_code=_as_str(
-                data.get("languageCode"), "PostalAddress", "languageCode"
+                _read(data, "languageCode", "PostalAddress"),
+                "PostalAddress",
+                "languageCode",
             ),
             postal_code=_as_str(
-                data.get("postalCode"), "PostalAddress", "postalCode"
+                _read(data, "postalCode", "PostalAddress"),
+                "PostalAddress",
+                "postalCode",
             ),
             administrative_area=_as_str(
-                data.get("administrativeArea"),
+                _read(data, "administrativeArea", "PostalAddress"),
                 "PostalAddress",
                 "administrativeArea",
             ),
-            locality=_as_str(data.get("locality"), "PostalAddress", "locality"),
+            locality=_as_str(
+                _read(data, "locality", "PostalAddress"),
+                "PostalAddress",
+                "locality",
+            ),
             address_lines=_str_list(
-                data.get("addressLines", []), "PostalAddress", "addressLines"
+                _read_or(data, "addressLines", [], "PostalAddress"),
+                "PostalAddress",
+                "addressLines",
             ),
             sublocality=_as_str(
-                data.get("sublocality"), "PostalAddress", "sublocality"
+                _read(data, "sublocality", "PostalAddress"),
+                "PostalAddress",
+                "sublocality",
             ),
             organization=_as_str(
-                data.get("organization"), "PostalAddress", "organization"
+                _read(data, "organization", "PostalAddress"),
+                "PostalAddress",
+                "organization",
             ),
             recipients=_str_list(
-                data.get("recipients", []), "PostalAddress", "recipients"
+                _read_or(data, "recipients", [], "PostalAddress"),
+                "PostalAddress",
+                "recipients",
             ),
             raw=raw,
         )
@@ -1022,25 +1221,25 @@ class Review:
         cls, data: dict[str, Any], raw: Optional[dict[str, Any]] = None
     ) -> "Review":
         data, raw = _prepare(data, raw, "Review")
-        text = data.get("text")
-        original = data.get("originalText")
-        rating = data.get("rating")
-        attribution = data.get("authorAttribution")
-        visit = data.get("visitDate")
+        text = _read(data, "text", "Review")
+        original = _read(data, "originalText", "Review")
+        rating = _read(data, "rating", "Review")
+        attribution = _read(data, "authorAttribution", "Review")
+        visit = _read(data, "visitDate", "Review")
         return cls(
-            name=_as_str(data.get("name", ""), "Review", "name"),
+            name=_as_str(_read_or(data, "name", "", "Review"), "Review", "name"),
             relative_publish_time_description=_as_str(
-                data.get("relativePublishTimeDescription", ""),
+                _read_or(data, "relativePublishTimeDescription", "", "Review"),
                 "Review",
                 "relativePublishTimeDescription",
             ),
-            text=LocalizedText.from_api(text, _raw_subtree(raw, "text", text))
-            if text
+            text=LocalizedText.from_api(text, _raw_subtree(raw, "text", text, "Review"))
+            if _truthy(text, "Review", "text")
             else None,
             original_text=LocalizedText.from_api(
-                original, _raw_subtree(raw, "originalText", original)
+                original, _raw_subtree(raw, "originalText", original, "Review")
             )
-            if original
+            if _truthy(original, "Review", "originalText")
             else None,
             rating=(
                 _as_float(rating, "Review", "rating")
@@ -1049,22 +1248,26 @@ class Review:
             ),
             author_attribution=(
                 AuthorAttribution.from_api(
-                    attribution, _raw_subtree(raw, "authorAttribution", attribution)
+                    attribution,
+                    _raw_subtree(raw, "authorAttribution", attribution, "Review"),
                 )
-                if attribution
+                if _truthy(attribution, "Review", "authorAttribution")
                 else None
             ),
             publish_time=_as_str(
-                data.get("publishTime"), "Review", "publishTime"
+                _read(data, "publishTime", "Review"), "Review", "publishTime"
             ),
             flag_content_uri=_as_str(
-                data.get("flagContentUri"), "Review", "flagContentUri"
+                _read(data, "flagContentUri", "Review"), "Review", "flagContentUri"
             ),
             google_maps_uri=_as_str(
-                data.get("googleMapsUri"), "Review", "googleMapsUri"
+                _read(data, "googleMapsUri", "Review"), "Review", "googleMapsUri"
             ),
-            visit_date=Date.from_api(visit, _raw_subtree(raw, "visitDate", visit))
-            if visit
+            visit_date=Date.from_api(
+                visit,
+                _raw_subtree(raw, "visitDate", visit, "Review"),
+            )
+            if _truthy(visit, "Review", "visitDate")
             else None,
             raw=raw,
         )
@@ -1087,16 +1290,24 @@ class PaymentOptions:
         data, raw = _prepare(data, raw, "PaymentOptions")
         return cls(
             accepts_credit_cards=_optional_bool(
-                data.get("acceptsCreditCards"), "PaymentOptions", "acceptsCreditCards"
+                _read(data, "acceptsCreditCards", "PaymentOptions"),
+                "PaymentOptions",
+                "acceptsCreditCards",
             ),
             accepts_debit_cards=_optional_bool(
-                data.get("acceptsDebitCards"), "PaymentOptions", "acceptsDebitCards"
+                _read(data, "acceptsDebitCards", "PaymentOptions"),
+                "PaymentOptions",
+                "acceptsDebitCards",
             ),
             accepts_cash_only=_optional_bool(
-                data.get("acceptsCashOnly"), "PaymentOptions", "acceptsCashOnly"
+                _read(data, "acceptsCashOnly", "PaymentOptions"),
+                "PaymentOptions",
+                "acceptsCashOnly",
             ),
             accepts_nfc=_optional_bool(
-                data.get("acceptsNfc"), "PaymentOptions", "acceptsNfc"
+                _read(data, "acceptsNfc", "PaymentOptions"),
+                "PaymentOptions",
+                "acceptsNfc",
             ),
             raw=raw,
         )
@@ -1122,25 +1333,39 @@ class ParkingOptions:
         data, raw = _prepare(data, raw, "ParkingOptions")
         return cls(
             free_parking_lot=_optional_bool(
-                data.get("freeParkingLot"), "ParkingOptions", "freeParkingLot"
+                _read(data, "freeParkingLot", "ParkingOptions"),
+                "ParkingOptions",
+                "freeParkingLot",
             ),
             paid_parking_lot=_optional_bool(
-                data.get("paidParkingLot"), "ParkingOptions", "paidParkingLot"
+                _read(data, "paidParkingLot", "ParkingOptions"),
+                "ParkingOptions",
+                "paidParkingLot",
             ),
             free_street_parking=_optional_bool(
-                data.get("freeStreetParking"), "ParkingOptions", "freeStreetParking"
+                _read(data, "freeStreetParking", "ParkingOptions"),
+                "ParkingOptions",
+                "freeStreetParking",
             ),
             paid_street_parking=_optional_bool(
-                data.get("paidStreetParking"), "ParkingOptions", "paidStreetParking"
+                _read(data, "paidStreetParking", "ParkingOptions"),
+                "ParkingOptions",
+                "paidStreetParking",
             ),
             valet_parking=_optional_bool(
-                data.get("valetParking"), "ParkingOptions", "valetParking"
+                _read(data, "valetParking", "ParkingOptions"),
+                "ParkingOptions",
+                "valetParking",
             ),
             free_garage_parking=_optional_bool(
-                data.get("freeGarageParking"), "ParkingOptions", "freeGarageParking"
+                _read(data, "freeGarageParking", "ParkingOptions"),
+                "ParkingOptions",
+                "freeGarageParking",
             ),
             paid_garage_parking=_optional_bool(
-                data.get("paidGarageParking"), "ParkingOptions", "paidGarageParking"
+                _read(data, "paidGarageParking", "ParkingOptions"),
+                "ParkingOptions",
+                "paidGarageParking",
             ),
             raw=raw,
         )
@@ -1163,22 +1388,22 @@ class AccessibilityOptions:
         data, raw = _prepare(data, raw, "AccessibilityOptions")
         return cls(
             wheelchair_accessible_parking=_optional_bool(
-                data.get("wheelchairAccessibleParking"),
+                _read(data, "wheelchairAccessibleParking", "AccessibilityOptions"),
                 "AccessibilityOptions",
                 "wheelchairAccessibleParking",
             ),
             wheelchair_accessible_entrance=_optional_bool(
-                data.get("wheelchairAccessibleEntrance"),
+                _read(data, "wheelchairAccessibleEntrance", "AccessibilityOptions"),
                 "AccessibilityOptions",
                 "wheelchairAccessibleEntrance",
             ),
             wheelchair_accessible_restroom=_optional_bool(
-                data.get("wheelchairAccessibleRestroom"),
+                _read(data, "wheelchairAccessibleRestroom", "AccessibilityOptions"),
                 "AccessibilityOptions",
                 "wheelchairAccessibleRestroom",
             ),
             wheelchair_accessible_seating=_optional_bool(
-                data.get("wheelchairAccessibleSeating"),
+                _read(data, "wheelchairAccessibleSeating", "AccessibilityOptions"),
                 "AccessibilityOptions",
                 "wheelchairAccessibleSeating",
             ),
@@ -1203,7 +1428,7 @@ class TimeZone:
     ) -> "TimeZone":
         data, raw = _prepare(data, raw, "TimeZone")
         return cls(
-            id=_as_str(data.get("id", ""), "TimeZone", "id"), raw=raw
+            id=_as_str(_read_or(data, "id", "", "TimeZone"), "TimeZone", "id"), raw=raw
         )
 
 
@@ -1223,12 +1448,12 @@ class GenerativeSummary:
         cls, data: dict[str, Any], raw: Optional[dict[str, Any]] = None
     ) -> "GenerativeSummary":
         data, raw = _prepare(data, raw, "GenerativeSummary")
-        overview = data.get("overview")
+        overview = _read(data, "overview", "GenerativeSummary")
         return cls(
             overview=LocalizedText.from_api(
-                overview, _raw_subtree(raw, "overview", overview)
+                overview, _raw_subtree(raw, "overview", overview, "GenerativeSummary")
             )
-            if overview
+            if _truthy(overview, "GenerativeSummary", "overview")
             else None,
             raw=raw,
         )
@@ -1250,10 +1475,13 @@ class ReviewSummary:
         cls, data: dict[str, Any], raw: Optional[dict[str, Any]] = None
     ) -> "ReviewSummary":
         data, raw = _prepare(data, raw, "ReviewSummary")
-        text = data.get("text")
+        text = _read(data, "text", "ReviewSummary")
         return cls(
-            text=LocalizedText.from_api(text, _raw_subtree(raw, "text", text))
-            if text
+            text=LocalizedText.from_api(
+                text,
+                _raw_subtree(raw, "text", text, "ReviewSummary"),
+            )
+            if _truthy(text, "ReviewSummary", "text")
             else None,
             raw=raw,
         )
@@ -1278,9 +1506,15 @@ class ConsumerAlert:
     ) -> "ConsumerAlert":
         data, raw = _prepare(data, raw, "ConsumerAlert")
         return cls(
-            overview=_as_str(data.get("overview", ""), "ConsumerAlert", "overview"),
+            overview=_as_str(
+                _read_or(data, "overview", "", "ConsumerAlert"),
+                "ConsumerAlert",
+                "overview",
+            ),
             language_code=_as_str(
-                data.get("languageCode"), "ConsumerAlert", "languageCode"
+                _read(data, "languageCode", "ConsumerAlert"),
+                "ConsumerAlert",
+                "languageCode",
             ),
             raw=raw,
         )
@@ -1305,21 +1539,29 @@ class GoogleMapsLinks:
         data, raw = _prepare(data, raw, "GoogleMapsLinks")
         return cls(
             directions_uri=_as_str(
-                data.get("directionsUri"), "GoogleMapsLinks", "directionsUri"
+                _read(data, "directionsUri", "GoogleMapsLinks"),
+                "GoogleMapsLinks",
+                "directionsUri",
             ),
             place_uri=_as_str(
-                data.get("placeUri"), "GoogleMapsLinks", "placeUri"
+                _read(data, "placeUri", "GoogleMapsLinks"),
+                "GoogleMapsLinks",
+                "placeUri",
             ),
             write_a_review_uri=_as_str(
-                data.get("writeAReviewUri"),
+                _read(data, "writeAReviewUri", "GoogleMapsLinks"),
                 "GoogleMapsLinks",
                 "writeAReviewUri",
             ),
             reviews_uri=_as_str(
-                data.get("reviewsUri"), "GoogleMapsLinks", "reviewsUri"
+                _read(data, "reviewsUri", "GoogleMapsLinks"),
+                "GoogleMapsLinks",
+                "reviewsUri",
             ),
             photos_uri=_as_str(
-                data.get("photosUri"), "GoogleMapsLinks", "photosUri"
+                _read(data, "photosUri", "GoogleMapsLinks"),
+                "GoogleMapsLinks",
+                "photosUri",
             ),
             raw=raw,
         )
@@ -1346,10 +1588,10 @@ class Money:
         data, raw = _prepare(data, raw, "Money")
         return cls(
             currency_code=_as_str(
-                data.get("currencyCode", ""), "Money", "currencyCode"
+                _read_or(data, "currencyCode", "", "Money"), "Money", "currencyCode"
             ),
-            units=_as_int(data.get("units", 0), "Money", "units"),
-            nanos=_as_int(data.get("nanos", 0), "Money", "nanos"),
+            units=_as_int(_read_or(data, "units", 0, "Money"), "Money", "units"),
+            nanos=_as_int(_read_or(data, "nanos", 0, "Money"), "Money", "nanos"),
             raw=raw,
         )
 
@@ -1371,14 +1613,20 @@ class PriceRange:
         cls, data: dict[str, Any], raw: Optional[dict[str, Any]] = None
     ) -> "PriceRange":
         data, raw = _prepare(data, raw, "PriceRange")
-        start = data.get("startPrice")
-        end = data.get("endPrice")
+        start = _read(data, "startPrice", "PriceRange")
+        end = _read(data, "endPrice", "PriceRange")
         return cls(
-            start_price=Money.from_api(start, _raw_subtree(raw, "startPrice", start))
-            if start
+            start_price=Money.from_api(
+                start,
+                _raw_subtree(raw, "startPrice", start, "PriceRange"),
+            )
+            if _truthy(start, "PriceRange", "startPrice")
             else None,
-            end_price=Money.from_api(end, _raw_subtree(raw, "endPrice", end))
-            if end
+            end_price=Money.from_api(
+                end,
+                _raw_subtree(raw, "endPrice", end, "PriceRange"),
+            )
+            if _truthy(end, "PriceRange", "endPrice")
             else None,
             raw=raw,
         )
@@ -1406,29 +1654,35 @@ class ConnectorAggregation:
         cls, data: dict[str, Any], raw: Optional[dict[str, Any]] = None
     ) -> "ConnectorAggregation":
         data, raw = _prepare(data, raw, "ConnectorAggregation")
-        rate = data.get("maxChargeRateKw")
+        rate = _read(data, "maxChargeRateKw", "ConnectorAggregation")
         return cls(
-            type=_as_str(data.get("type", ""), "ConnectorAggregation", "type"),
+            type=_as_str(
+                _read_or(data, "type", "", "ConnectorAggregation"),
+                "ConnectorAggregation",
+                "type",
+            ),
             max_charge_rate_kw=(
                 _as_float(rate, "ConnectorAggregation", "maxChargeRateKw")
                 if rate is not None
                 else None
             ),
             count=_optional_int(
-                data.get("count"), "ConnectorAggregation", "count"
+                _read(data, "count", "ConnectorAggregation"),
+                "ConnectorAggregation",
+                "count",
             ),
             available_count=_optional_int(
-                data.get("availableCount"),
+                _read(data, "availableCount", "ConnectorAggregation"),
                 "ConnectorAggregation",
                 "availableCount",
             ),
             out_of_service_count=_optional_int(
-                data.get("outOfServiceCount"),
+                _read(data, "outOfServiceCount", "ConnectorAggregation"),
                 "ConnectorAggregation",
                 "outOfServiceCount",
             ),
             availability_last_update_time=_as_str(
-                data.get("availabilityLastUpdateTime"),
+                _read(data, "availabilityLastUpdateTime", "ConnectorAggregation"),
                 "ConnectorAggregation",
                 "availabilityLastUpdateTime",
             ),
@@ -1460,10 +1714,12 @@ class EvChargeOptions:
         data, raw = _prepare(data, raw, "EvChargeOptions")
         return cls(
             connector_count=_optional_int(
-                data.get("connectorCount"), "EvChargeOptions", "connectorCount"
+                _read(data, "connectorCount", "EvChargeOptions"),
+                "EvChargeOptions",
+                "connectorCount",
             ),
             connector_aggregation=_model_elements(
-                data.get("connectorAggregation", []),
+                _read_or(data, "connectorAggregation", [], "EvChargeOptions"),
                 "EvChargeOptions",
                 "connectorAggregation",
                 raw,
@@ -1494,20 +1750,28 @@ class Landmark:
         cls, data: dict[str, Any], raw: Optional[dict[str, Any]] = None
     ) -> "Landmark":
         data, raw = _prepare(data, raw, "Landmark")
-        display = data.get("displayName")
-        straight = data.get("straightLineDistanceMeters")
-        travel = data.get("travelDistanceMeters")
+        display = _read(data, "displayName", "Landmark")
+        straight = _read(data, "straightLineDistanceMeters", "Landmark")
+        travel = _read(data, "travelDistanceMeters", "Landmark")
         return cls(
-            name=_as_str(data.get("name", ""), "Landmark", "name"),
-            place_id=_as_str(data.get("placeId", ""), "Landmark", "placeId"),
+            name=_as_str(_read_or(data, "name", "", "Landmark"), "Landmark", "name"),
+            place_id=_as_str(
+                _read_or(data, "placeId", "", "Landmark"),
+                "Landmark",
+                "placeId",
+            ),
             display_name=LocalizedText.from_api(
-                display, _raw_subtree(raw, "displayName", display)
+                display, _raw_subtree(raw, "displayName", display, "Landmark")
             )
-            if display
+            if _truthy(display, "Landmark", "displayName")
             else None,
-            types=_str_list(data.get("types", []), "Landmark", "types"),
+            types=_str_list(
+                _read_or(data, "types", [], "Landmark"),
+                "Landmark",
+                "types",
+            ),
             spatial_relationship=_as_str(
-                data.get("spatialRelationship"),
+                _read(data, "spatialRelationship", "Landmark"),
                 "Landmark",
                 "spatialRelationship",
             ),
@@ -1540,16 +1804,20 @@ class Area:
         cls, data: dict[str, Any], raw: Optional[dict[str, Any]] = None
     ) -> "Area":
         data, raw = _prepare(data, raw, "Area")
-        display = data.get("displayName")
+        display = _read(data, "displayName", "Area")
         return cls(
-            name=_as_str(data.get("name", ""), "Area", "name"),
-            place_id=_as_str(data.get("placeId", ""), "Area", "placeId"),
+            name=_as_str(_read_or(data, "name", "", "Area"), "Area", "name"),
+            place_id=_as_str(_read_or(data, "placeId", "", "Area"), "Area", "placeId"),
             display_name=LocalizedText.from_api(
-                display, _raw_subtree(raw, "displayName", display)
+                display, _raw_subtree(raw, "displayName", display, "Area")
             )
-            if display
+            if _truthy(display, "Area", "displayName")
             else None,
-            containment=_as_str(data.get("containment"), "Area", "containment"),
+            containment=_as_str(
+                _read(data, "containment", "Area"),
+                "Area",
+                "containment",
+            ),
             raw=raw,
         )
 
@@ -1573,14 +1841,14 @@ class AddressDescriptor:
         data, raw = _prepare(data, raw, "AddressDescriptor")
         return cls(
             landmarks=_model_elements(
-                data.get("landmarks", []),
+                _read_or(data, "landmarks", [], "AddressDescriptor"),
                 "AddressDescriptor",
                 "landmarks",
                 raw,
                 Landmark.from_api,
             ),
             areas=_model_elements(
-                data.get("areas", []),
+                _read_or(data, "areas", [], "AddressDescriptor"),
                 "AddressDescriptor",
                 "areas",
                 raw,
@@ -1715,35 +1983,42 @@ class Place:
         cls, data: dict[str, Any], raw: Optional[dict[str, Any]] = None
     ) -> "Place":
         data, raw = _prepare(data, raw, "Place")
-        display = data.get("displayName")
-        location = data.get("location")
-        hours = data.get("regularOpeningHours")
-        current_hours = data.get("currentOpeningHours")
-        plus_code = data.get("plusCode")
-        viewport = data.get("viewport")
-        postal = data.get("postalAddress")
-        type_display = data.get("primaryTypeDisplayName")
-        type_label = data.get("googleMapsTypeLabel")
-        summary = data.get("editorialSummary")
-        opening = data.get("openingDate")
-        payment = data.get("paymentOptions")
-        parking = data.get("parkingOptions")
-        accessibility = data.get("accessibilityOptions")
-        time_zone = data.get("timeZone")
-        generative = data.get("generativeSummary")
-        review_summary = data.get("reviewSummary")
-        alert = data.get("consumerAlert")
-        links = data.get("googleMapsLinks")
-        price_range = data.get("priceRange")
-        ev = data.get("evChargeOptions")
-        descriptor = data.get("addressDescriptor")
-        name_value = _as_str(data.get("name", ""), "Place", "name")
-        place_id = _as_str(data.get("id"), "Place", "id") or (
-            name_value.removeprefix("places/")
-            if isinstance(name_value, str)
-            else ""
-        )
-        if not data:
+        display = _read(data, "displayName", "Place")
+        location = _read(data, "location", "Place")
+        hours = _read(data, "regularOpeningHours", "Place")
+        current_hours = _read(data, "currentOpeningHours", "Place")
+        plus_code = _read(data, "plusCode", "Place")
+        viewport = _read(data, "viewport", "Place")
+        postal = _read(data, "postalAddress", "Place")
+        type_display = _read(data, "primaryTypeDisplayName", "Place")
+        type_label = _read(data, "googleMapsTypeLabel", "Place")
+        summary = _read(data, "editorialSummary", "Place")
+        opening = _read(data, "openingDate", "Place")
+        payment = _read(data, "paymentOptions", "Place")
+        parking = _read(data, "parkingOptions", "Place")
+        accessibility = _read(data, "accessibilityOptions", "Place")
+        time_zone = _read(data, "timeZone", "Place")
+        generative = _read(data, "generativeSummary", "Place")
+        review_summary = _read(data, "reviewSummary", "Place")
+        alert = _read(data, "consumerAlert", "Place")
+        links = _read(data, "googleMapsLinks", "Place")
+        price_range = _read(data, "priceRange", "Place")
+        ev = _read(data, "evChargeOptions", "Place")
+        descriptor = _read(data, "addressDescriptor", "Place")
+        name_value = _as_str(_read_or(data, "name", "", "Place"), "Place", "name")
+        place_id = _as_str(_read(data, "id", "Place"), "Place", "id")
+        if not _truthy(place_id, "Place", "id"):
+            # The one truthiness evaluation the old or form made
+            # itself, asked through the guard, so a decoded id
+            # whose truthiness raises converts like every other
+            # read. A falsy answer still falls to the derivation,
+            # followed as sent.
+            place_id = (
+                str.removeprefix(name_value, "places/")
+                if isinstance(name_value, str)
+                else ""
+            )
+        if not _truthy(data, "Place"):
             # An empty payload is a truncated or wrong response, not a
             # place; a payload that merely lacks an id (a field mask
             # that did not request one) still decodes, with id "".
@@ -1751,32 +2026,32 @@ class Place:
                 "Place payload is empty; refusing to fabricate an "
                 "empty place from it"
             )
-        rating = data.get("rating")
-        user_rating_count = data.get("userRatingCount")
+        rating = _read(data, "rating", "Place")
+        user_rating_count = _read(data, "userRatingCount", "Place")
         return cls(
             id=place_id,
             name=name_value,
             display_name=LocalizedText.from_api(
-                display, _raw_subtree(raw, "displayName", display)
+                display, _raw_subtree(raw, "displayName", display, "Place")
             )
-            if display
+            if _truthy(display, "Place", "displayName")
             else None,
             formatted_address=_as_str(
-                data.get("formattedAddress"), "Place", "formattedAddress"
+                _read(data, "formattedAddress", "Place"), "Place", "formattedAddress"
             ),
             short_formatted_address=_as_str(
-                data.get("shortFormattedAddress"),
+                _read(data, "shortFormattedAddress", "Place"),
                 "Place",
                 "shortFormattedAddress",
             ),
             location=LatLng.from_api(
-                location, _raw_subtree(raw, "location", location)
+                location, _raw_subtree(raw, "location", location, "Place")
             )
-            if location
+            if _truthy(location, "Place", "location")
             else None,
-            types=_str_list(data.get("types", []), "Place", "types"),
+            types=_str_list(_read_or(data, "types", [], "Place"), "Place", "types"),
             primary_type=_as_str(
-                data.get("primaryType"), "Place", "primaryType"
+                _read(data, "primaryType", "Place"), "Place", "primaryType"
             ),
             rating=(
                 _as_float(rating, "Place", "rating") if rating is not None else None
@@ -1786,273 +2061,301 @@ class Place:
                 if user_rating_count is not None
                 else None
             ),
-            price_level=_as_str(data.get("priceLevel"), "Place", "priceLevel"),
+            price_level=_as_str(
+                _read(data, "priceLevel", "Place"),
+                "Place",
+                "priceLevel",
+            ),
             business_status=_as_str(
-                data.get("businessStatus"), "Place", "businessStatus"
+                _read(data, "businessStatus", "Place"), "Place", "businessStatus"
             ),
             national_phone_number=_as_str(
-                data.get("nationalPhoneNumber"), "Place", "nationalPhoneNumber"
+                _read(data, "nationalPhoneNumber", "Place"),
+                "Place",
+                "nationalPhoneNumber",
             ),
             international_phone_number=_as_str(
-                data.get("internationalPhoneNumber"),
+                _read(data, "internationalPhoneNumber", "Place"),
                 "Place",
                 "internationalPhoneNumber",
             ),
-            website_uri=_as_str(data.get("websiteUri"), "Place", "websiteUri"),
+            website_uri=_as_str(
+                _read(data, "websiteUri", "Place"),
+                "Place",
+                "websiteUri",
+            ),
             google_maps_uri=_as_str(
-                data.get("googleMapsUri"), "Place", "googleMapsUri"
+                _read(data, "googleMapsUri", "Place"), "Place", "googleMapsUri"
             ),
             opening_hours=OpeningHours.from_api(
-                hours, _raw_subtree(raw, "regularOpeningHours", hours)
+                hours, _raw_subtree(raw, "regularOpeningHours", hours, "Place")
             )
-            if hours
+            if _truthy(hours, "Place", "regularOpeningHours")
             else None,
             current_opening_hours=(
                 OpeningHours.from_api(
                     current_hours,
-                    _raw_subtree(raw, "currentOpeningHours", current_hours),
+                    _raw_subtree(raw, "currentOpeningHours", current_hours, "Place"),
                 )
-                if current_hours
+                if _truthy(current_hours, "Place", "currentOpeningHours")
                 else None
             ),
             current_secondary_opening_hours=_model_elements(
-                data.get("currentSecondaryOpeningHours", []),
+                _read_or(data, "currentSecondaryOpeningHours", [], "Place"),
                 "Place",
                 "currentSecondaryOpeningHours",
                 raw,
                 OpeningHours.from_api,
             ),
             regular_secondary_opening_hours=_model_elements(
-                data.get("regularSecondaryOpeningHours", []),
+                _read_or(data, "regularSecondaryOpeningHours", [], "Place"),
                 "Place",
                 "regularSecondaryOpeningHours",
                 raw,
                 OpeningHours.from_api,
             ),
             address_components=_model_elements(
-                data.get("addressComponents", []),
+                _read_or(data, "addressComponents", [], "Place"),
                 "Place",
                 "addressComponents",
                 raw,
                 AddressComponent.from_api,
             ),
             plus_code=PlusCode.from_api(
-                plus_code, _raw_subtree(raw, "plusCode", plus_code)
+                plus_code, _raw_subtree(raw, "plusCode", plus_code, "Place")
             )
-            if plus_code
+            if _truthy(plus_code, "Place", "plusCode")
             else None,
             viewport=Viewport.from_api(
-                viewport, _raw_subtree(raw, "viewport", viewport)
+                viewport, _raw_subtree(raw, "viewport", viewport, "Place")
             )
-            if viewport
+            if _truthy(viewport, "Place", "viewport")
             else None,
             postal_address=PostalAddress.from_api(
-                postal, _raw_subtree(raw, "postalAddress", postal)
+                postal, _raw_subtree(raw, "postalAddress", postal, "Place")
             )
-            if postal
+            if _truthy(postal, "Place", "postalAddress")
             else None,
             adr_format_address=_as_str(
-                data.get("adrFormatAddress"), "Place", "adrFormatAddress"
+                _read(data, "adrFormatAddress", "Place"), "Place", "adrFormatAddress"
             ),
             primary_type_display_name=(
                 LocalizedText.from_api(
                     type_display,
-                    _raw_subtree(raw, "primaryTypeDisplayName", type_display),
+                    _raw_subtree(raw, "primaryTypeDisplayName", type_display, "Place"),
                 )
-                if type_display
+                if _truthy(type_display, "Place", "primaryTypeDisplayName")
                 else None
             ),
             google_maps_type_label=(
                 LocalizedText.from_api(
                     type_label,
-                    _raw_subtree(raw, "googleMapsTypeLabel", type_label),
+                    _raw_subtree(raw, "googleMapsTypeLabel", type_label, "Place"),
                 )
-                if type_label
+                if _truthy(type_label, "Place", "googleMapsTypeLabel")
                 else None
             ),
             editorial_summary=(
                 LocalizedText.from_api(
-                    summary, _raw_subtree(raw, "editorialSummary", summary)
+                    summary, _raw_subtree(raw, "editorialSummary", summary, "Place")
                 )
-                if summary
+                if _truthy(summary, "Place", "editorialSummary")
                 else None
             ),
             icon_mask_base_uri=_as_str(
-                data.get("iconMaskBaseUri"), "Place", "iconMaskBaseUri"
+                _read(data, "iconMaskBaseUri", "Place"), "Place", "iconMaskBaseUri"
             ),
             icon_background_color=_as_str(
-                data.get("iconBackgroundColor"), "Place", "iconBackgroundColor"
+                _read(data, "iconBackgroundColor", "Place"),
+                "Place",
+                "iconBackgroundColor",
             ),
             opening_date=Date.from_api(
-                opening, _raw_subtree(raw, "openingDate", opening)
+                opening, _raw_subtree(raw, "openingDate", opening, "Place")
             )
-            if opening
+            if _truthy(opening, "Place", "openingDate")
             else None,
             utc_offset_minutes=_optional_int(
-                data.get("utcOffsetMinutes"), "Place", "utcOffsetMinutes"
+                _read(data, "utcOffsetMinutes", "Place"), "Place", "utcOffsetMinutes"
             ),
             pure_service_area_business=_optional_bool(
-                data.get("pureServiceAreaBusiness"),
+                _read(data, "pureServiceAreaBusiness", "Place"),
                 "Place",
                 "pureServiceAreaBusiness",
             ),
-            moved_place=_as_str(data.get("movedPlace"), "Place", "movedPlace"),
+            moved_place=_as_str(
+                _read(data, "movedPlace", "Place"),
+                "Place",
+                "movedPlace",
+            ),
             moved_place_id=_as_str(
-                data.get("movedPlaceId"), "Place", "movedPlaceId"
+                _read(data, "movedPlaceId", "Place"), "Place", "movedPlaceId"
             ),
             photos=_model_elements(
-                data.get("photos", []),
+                _read_or(data, "photos", [], "Place"),
                 "Place",
                 "photos",
                 raw,
                 Photo.from_api,
             ),
             attributions=_model_elements(
-                data.get("attributions", []),
+                _read_or(data, "attributions", [], "Place"),
                 "Place",
                 "attributions",
                 raw,
                 Attribution.from_api,
             ),
             reviews=_model_elements(
-                data.get("reviews", []),
+                _read_or(data, "reviews", [], "Place"),
                 "Place",
                 "reviews",
                 raw,
                 Review.from_api,
             ),
-            takeout=_optional_bool(data.get("takeout"), "Place", "takeout"),
-            delivery=_optional_bool(data.get("delivery"), "Place", "delivery"),
-            dine_in=_optional_bool(data.get("dineIn"), "Place", "dineIn"),
+            takeout=_optional_bool(_read(data, "takeout", "Place"), "Place", "takeout"),
+            delivery=_optional_bool(
+                _read(data, "delivery", "Place"),
+                "Place",
+                "delivery",
+            ),
+            dine_in=_optional_bool(_read(data, "dineIn", "Place"), "Place", "dineIn"),
             curbside_pickup=_optional_bool(
-                data.get("curbsidePickup"), "Place", "curbsidePickup"
+                _read(data, "curbsidePickup", "Place"), "Place", "curbsidePickup"
             ),
             reservable=_optional_bool(
-                data.get("reservable"), "Place", "reservable"
+                _read(data, "reservable", "Place"), "Place", "reservable"
             ),
             serves_breakfast=_optional_bool(
-                data.get("servesBreakfast"), "Place", "servesBreakfast"
+                _read(data, "servesBreakfast", "Place"), "Place", "servesBreakfast"
             ),
             serves_lunch=_optional_bool(
-                data.get("servesLunch"), "Place", "servesLunch"
+                _read(data, "servesLunch", "Place"), "Place", "servesLunch"
             ),
             serves_dinner=_optional_bool(
-                data.get("servesDinner"), "Place", "servesDinner"
+                _read(data, "servesDinner", "Place"), "Place", "servesDinner"
             ),
             serves_beer=_optional_bool(
-                data.get("servesBeer"), "Place", "servesBeer"
+                _read(data, "servesBeer", "Place"), "Place", "servesBeer"
             ),
             serves_wine=_optional_bool(
-                data.get("servesWine"), "Place", "servesWine"
+                _read(data, "servesWine", "Place"), "Place", "servesWine"
             ),
             serves_brunch=_optional_bool(
-                data.get("servesBrunch"), "Place", "servesBrunch"
+                _read(data, "servesBrunch", "Place"), "Place", "servesBrunch"
             ),
             serves_vegetarian_food=_optional_bool(
-                data.get("servesVegetarianFood"), "Place", "servesVegetarianFood"
+                _read(data, "servesVegetarianFood", "Place"),
+                "Place",
+                "servesVegetarianFood",
             ),
             outdoor_seating=_optional_bool(
-                data.get("outdoorSeating"), "Place", "outdoorSeating"
+                _read(data, "outdoorSeating", "Place"), "Place", "outdoorSeating"
             ),
             live_music=_optional_bool(
-                data.get("liveMusic"), "Place", "liveMusic"
+                _read(data, "liveMusic", "Place"), "Place", "liveMusic"
             ),
             menu_for_children=_optional_bool(
-                data.get("menuForChildren"), "Place", "menuForChildren"
+                _read(data, "menuForChildren", "Place"), "Place", "menuForChildren"
             ),
             serves_cocktails=_optional_bool(
-                data.get("servesCocktails"), "Place", "servesCocktails"
+                _read(data, "servesCocktails", "Place"), "Place", "servesCocktails"
             ),
             serves_dessert=_optional_bool(
-                data.get("servesDessert"), "Place", "servesDessert"
+                _read(data, "servesDessert", "Place"), "Place", "servesDessert"
             ),
             serves_coffee=_optional_bool(
-                data.get("servesCoffee"), "Place", "servesCoffee"
+                _read(data, "servesCoffee", "Place"), "Place", "servesCoffee"
             ),
             good_for_children=_optional_bool(
-                data.get("goodForChildren"), "Place", "goodForChildren"
+                _read(data, "goodForChildren", "Place"), "Place", "goodForChildren"
             ),
             allows_dogs=_optional_bool(
-                data.get("allowsDogs"), "Place", "allowsDogs"
+                _read(data, "allowsDogs", "Place"), "Place", "allowsDogs"
             ),
-            restroom=_optional_bool(data.get("restroom"), "Place", "restroom"),
+            restroom=_optional_bool(
+                _read(data, "restroom", "Place"),
+                "Place",
+                "restroom",
+            ),
             good_for_groups=_optional_bool(
-                data.get("goodForGroups"), "Place", "goodForGroups"
+                _read(data, "goodForGroups", "Place"), "Place", "goodForGroups"
             ),
             good_for_watching_sports=_optional_bool(
-                data.get("goodForWatchingSports"), "Place", "goodForWatchingSports"
+                _read(data, "goodForWatchingSports", "Place"),
+                "Place",
+                "goodForWatchingSports",
             ),
             payment_options=(
                 PaymentOptions.from_api(
-                    payment, _raw_subtree(raw, "paymentOptions", payment)
+                    payment, _raw_subtree(raw, "paymentOptions", payment, "Place")
                 )
-                if payment
+                if _truthy(payment, "Place", "paymentOptions")
                 else None
             ),
             parking_options=(
                 ParkingOptions.from_api(
-                    parking, _raw_subtree(raw, "parkingOptions", parking)
+                    parking, _raw_subtree(raw, "parkingOptions", parking, "Place")
                 )
-                if parking
+                if _truthy(parking, "Place", "parkingOptions")
                 else None
             ),
             accessibility_options=(
                 AccessibilityOptions.from_api(
                     accessibility,
-                    _raw_subtree(raw, "accessibilityOptions", accessibility),
+                    _raw_subtree(raw, "accessibilityOptions", accessibility, "Place"),
                 )
-                if accessibility
+                if _truthy(accessibility, "Place", "accessibilityOptions")
                 else None
             ),
             time_zone=TimeZone.from_api(
-                time_zone, _raw_subtree(raw, "timeZone", time_zone)
+                time_zone, _raw_subtree(raw, "timeZone", time_zone, "Place")
             )
-            if time_zone
+            if _truthy(time_zone, "Place", "timeZone")
             else None,
             generative_summary=(
                 GenerativeSummary.from_api(
                     generative,
-                    _raw_subtree(raw, "generativeSummary", generative),
+                    _raw_subtree(raw, "generativeSummary", generative, "Place"),
                 )
-                if generative
+                if _truthy(generative, "Place", "generativeSummary")
                 else None
             ),
             review_summary=(
                 ReviewSummary.from_api(
                     review_summary,
-                    _raw_subtree(raw, "reviewSummary", review_summary),
+                    _raw_subtree(raw, "reviewSummary", review_summary, "Place"),
                 )
-                if review_summary
+                if _truthy(review_summary, "Place", "reviewSummary")
                 else None
             ),
             consumer_alert=ConsumerAlert.from_api(
-                alert, _raw_subtree(raw, "consumerAlert", alert)
+                alert, _raw_subtree(raw, "consumerAlert", alert, "Place")
             )
-            if alert
+            if _truthy(alert, "Place", "consumerAlert")
             else None,
             google_maps_links=(
                 GoogleMapsLinks.from_api(
-                    links, _raw_subtree(raw, "googleMapsLinks", links)
+                    links, _raw_subtree(raw, "googleMapsLinks", links, "Place")
                 )
-                if links
+                if _truthy(links, "Place", "googleMapsLinks")
                 else None
             ),
             price_range=PriceRange.from_api(
-                price_range, _raw_subtree(raw, "priceRange", price_range)
+                price_range, _raw_subtree(raw, "priceRange", price_range, "Place")
             )
-            if price_range
+            if _truthy(price_range, "Place", "priceRange")
             else None,
             ev_charge_options=EvChargeOptions.from_api(
-                ev, _raw_subtree(raw, "evChargeOptions", ev)
+                ev, _raw_subtree(raw, "evChargeOptions", ev, "Place")
             )
-            if ev
+            if _truthy(ev, "Place", "evChargeOptions")
             else None,
             address_descriptor=(
                 AddressDescriptor.from_api(
                     descriptor,
-                    _raw_subtree(raw, "addressDescriptor", descriptor),
+                    _raw_subtree(raw, "addressDescriptor", descriptor, "Place"),
                 )
-                if descriptor
+                if _truthy(descriptor, "Place", "addressDescriptor")
                 else None
             ),
             raw=raw,
@@ -2077,9 +2380,9 @@ class Leg:
     ) -> "Leg":
         data, raw = _prepare(data, raw, "Leg")
         return cls(
-            duration=_as_str(data.get("duration", ""), "Leg", "duration"),
+            duration=_as_str(_read_or(data, "duration", "", "Leg"), "Leg", "duration"),
             distance_meters=_optional_int(
-                data.get("distanceMeters"), "Leg", "distanceMeters"
+                _read(data, "distanceMeters", "Leg"), "Leg", "distanceMeters"
             ),
             raw=raw,
         )
@@ -2103,14 +2406,16 @@ class RoutingSummary:
         data, raw = _prepare(data, raw, "RoutingSummary")
         return cls(
             legs=_model_elements(
-                data.get("legs", []),
+                _read_or(data, "legs", [], "RoutingSummary"),
                 "RoutingSummary",
                 "legs",
                 raw,
                 Leg.from_api,
             ),
             directions_uri=_as_str(
-                data.get("directionsUri"), "RoutingSummary", "directionsUri"
+                _read(data, "directionsUri", "RoutingSummary"),
+                "RoutingSummary",
+                "directionsUri",
             ),
             raw=raw,
         )
@@ -2145,20 +2450,24 @@ class TextSearchResult:
         data, raw = _prepare(data, raw, "TextSearchResult")
         return cls(
             places=_model_elements(
-                data.get("places", []),
+                _read_or(data, "places", [], "TextSearchResult"),
                 "TextSearchResult",
                 "places",
                 raw,
                 Place.from_api,
             ),
             next_page_token=_as_str(
-                data.get("nextPageToken"), "TextSearchResult", "nextPageToken"
+                _read(data, "nextPageToken", "TextSearchResult"),
+                "TextSearchResult",
+                "nextPageToken",
             ),
             search_uri=_as_str(
-                data.get("searchUri"), "TextSearchResult", "searchUri"
+                _read(data, "searchUri", "TextSearchResult"),
+                "TextSearchResult",
+                "searchUri",
             ),
             routing_summaries=_model_elements(
-                data.get("routingSummaries", []),
+                _read_or(data, "routingSummaries", [], "TextSearchResult"),
                 "TextSearchResult",
                 "routingSummaries",
                 raw,
@@ -2197,14 +2506,14 @@ class NearbySearchResult:
         data, raw = _prepare(data, raw, "NearbySearchResult")
         return cls(
             places=_model_elements(
-                data.get("places", []),
+                _read_or(data, "places", [], "NearbySearchResult"),
                 "NearbySearchResult",
                 "places",
                 raw,
                 Place.from_api,
             ),
             routing_summaries=_model_elements(
-                data.get("routingSummaries", []),
+                _read_or(data, "routingSummaries", [], "NearbySearchResult"),
                 "NearbySearchResult",
                 "routingSummaries",
                 raw,
@@ -2228,8 +2537,16 @@ class StringMatch:
     ) -> "StringMatch":
         data, raw = _prepare(data, raw, "StringMatch")
         return cls(
-            start_offset=_optional_int(data.get("startOffset"), "StringMatch", "startOffset"),
-            end_offset=_optional_int(data.get("endOffset"), "StringMatch", "endOffset"),
+            start_offset=_optional_int(
+                _read(data, "startOffset", "StringMatch"),
+                "StringMatch",
+                "startOffset",
+            ),
+            end_offset=_optional_int(
+                _read(data, "endOffset", "StringMatch"),
+                "StringMatch",
+                "endOffset",
+            ),
             raw=raw,
         )
 
@@ -2251,9 +2568,13 @@ class FormattedText:
     ) -> "FormattedText":
         data, raw = _prepare(data, raw, "FormattedText")
         return cls(
-            text=_as_str(data.get("text", ""), "FormattedText", "text"),
+            text=_as_str(
+                _read_or(data, "text", "", "FormattedText"),
+                "FormattedText",
+                "text",
+            ),
             matches=_model_elements(
-                data.get("matches", []),
+                _read_or(data, "matches", [], "FormattedText"),
                 "FormattedText",
                 "matches",
                 raw,
@@ -2286,36 +2607,65 @@ class PlacePrediction:
         cls, data: dict[str, Any], raw: Optional[dict[str, Any]] = None
     ) -> "PlacePrediction":
         data, raw = _prepare(data, raw, "PlacePrediction")
-        text = data.get("text")
-        structured = data.get("structuredFormat") or {}
+        text = _read(data, "text", "PlacePrediction")
+        structured = _read(data, "structuredFormat", "PlacePrediction")
+        if not _truthy(structured, "PlacePrediction", "structuredFormat"):
+            structured = {}
         if not isinstance(structured, dict):
             raise DecodeError(
                 "PlacePrediction payload key 'structuredFormat' is "
-                f"not an object: {structured!r}"
+                f"not an object: {_safe_repr(structured)}"
             )
-        raw_structured = _raw_subtree(raw, "structuredFormat", structured)
-        main = structured.get("mainText")
-        secondary = structured.get("secondaryText")
+        raw_structured = _raw_subtree(
+            raw,
+            "structuredFormat",
+            structured,
+            "PlacePrediction",
+        )
+        main = _read(structured, "mainText", "PlacePrediction")
+        secondary = _read(structured, "secondaryText", "PlacePrediction")
         return cls(
-            place_id=_as_str(data.get("placeId", ""), "PlacePrediction", "placeId"),
-            place=_as_str(data.get("place", ""), "PlacePrediction", "place"),
-            text=FormattedText.from_api(text, _raw_subtree(raw, "text", text))
-            if text
+            place_id=_as_str(
+                _read_or(data, "placeId", "", "PlacePrediction"),
+                "PlacePrediction",
+                "placeId",
+            ),
+            place=_as_str(
+                _read_or(data, "place", "", "PlacePrediction"),
+                "PlacePrediction",
+                "place",
+            ),
+            text=FormattedText.from_api(
+                text,
+                _raw_subtree(raw, "text", text, "PlacePrediction"),
+            )
+            if _truthy(text, "PlacePrediction", "text")
             else None,
             main_text=FormattedText.from_api(
-                main, _raw_subtree(raw_structured, "mainText", main)
+                main, _raw_subtree(raw_structured, "mainText", main, "PlacePrediction")
             )
-            if main
+            if _truthy(main, "PlacePrediction", "mainText")
             else None,
             secondary_text=FormattedText.from_api(
                 secondary,
-                _raw_subtree(raw_structured, "secondaryText", secondary),
+                _raw_subtree(
+                    raw_structured,
+                    "secondaryText",
+                    secondary,
+                    "PlacePrediction",
+                ),
             )
-            if secondary
+            if _truthy(secondary, "PlacePrediction", "secondaryText")
             else None,
-            types=_str_list(data.get("types", []), "PlacePrediction", "types"),
+            types=_str_list(
+                _read_or(data, "types", [], "PlacePrediction"),
+                "PlacePrediction",
+                "types",
+            ),
             distance_meters=_optional_int(
-                data.get("distanceMeters"), "PlacePrediction", "distanceMeters"
+                _read(data, "distanceMeters", "PlacePrediction"),
+                "PlacePrediction",
+                "distanceMeters",
             ),
             raw=raw,
         )
@@ -2336,30 +2686,45 @@ class QueryPrediction:
         cls, data: dict[str, Any], raw: Optional[dict[str, Any]] = None
     ) -> "QueryPrediction":
         data, raw = _prepare(data, raw, "QueryPrediction")
-        text = data.get("text")
-        structured = data.get("structuredFormat") or {}
+        text = _read(data, "text", "QueryPrediction")
+        structured = _read(data, "structuredFormat", "QueryPrediction")
+        if not _truthy(structured, "QueryPrediction", "structuredFormat"):
+            structured = {}
         if not isinstance(structured, dict):
             raise DecodeError(
                 "QueryPrediction payload key 'structuredFormat' is "
-                f"not an object: {structured!r}"
+                f"not an object: {_safe_repr(structured)}"
             )
-        raw_structured = _raw_subtree(raw, "structuredFormat", structured)
-        main = structured.get("mainText")
-        secondary = structured.get("secondaryText")
+        raw_structured = _raw_subtree(
+            raw,
+            "structuredFormat",
+            structured,
+            "QueryPrediction",
+        )
+        main = _read(structured, "mainText", "QueryPrediction")
+        secondary = _read(structured, "secondaryText", "QueryPrediction")
         return cls(
-            text=FormattedText.from_api(text, _raw_subtree(raw, "text", text))
-            if text
+            text=FormattedText.from_api(
+                text,
+                _raw_subtree(raw, "text", text, "QueryPrediction"),
+            )
+            if _truthy(text, "QueryPrediction", "text")
             else None,
             main_text=FormattedText.from_api(
-                main, _raw_subtree(raw_structured, "mainText", main)
+                main, _raw_subtree(raw_structured, "mainText", main, "QueryPrediction")
             )
-            if main
+            if _truthy(main, "QueryPrediction", "mainText")
             else None,
             secondary_text=FormattedText.from_api(
                 secondary,
-                _raw_subtree(raw_structured, "secondaryText", secondary),
+                _raw_subtree(
+                    raw_structured,
+                    "secondaryText",
+                    secondary,
+                    "QueryPrediction",
+                ),
             )
-            if secondary
+            if _truthy(secondary, "QueryPrediction", "secondaryText")
             else None,
             raw=raw,
         )
@@ -2383,18 +2748,19 @@ class Suggestion:
         cls, data: dict[str, Any], raw: Optional[dict[str, Any]] = None
     ) -> "Suggestion":
         data, raw = _prepare(data, raw, "Suggestion")
-        prediction = data.get("placePrediction")
-        query = data.get("queryPrediction")
+        prediction = _read(data, "placePrediction", "Suggestion")
+        query = _read(data, "queryPrediction", "Suggestion")
         return cls(
             place_prediction=PlacePrediction.from_api(
-                prediction, _raw_subtree(raw, "placePrediction", prediction)
+                prediction,
+                _raw_subtree(raw, "placePrediction", prediction, "Suggestion"),
             )
-            if prediction
+            if _truthy(prediction, "Suggestion", "placePrediction")
             else None,
             query_prediction=QueryPrediction.from_api(
-                query, _raw_subtree(raw, "queryPrediction", query)
+                query, _raw_subtree(raw, "queryPrediction", query, "Suggestion")
             )
-            if query
+            if _truthy(query, "Suggestion", "queryPrediction")
             else None,
             raw=raw,
         )
@@ -2427,7 +2793,7 @@ class AutocompleteResult:
         data, raw = _prepare(data, raw, "AutocompleteResult")
         return cls(
             suggestions=_model_elements(
-                data.get("suggestions", []),
+                _read_or(data, "suggestions", [], "AutocompleteResult"),
                 "AutocompleteResult",
                 "suggestions",
                 raw,
@@ -2495,8 +2861,16 @@ class PhotoUriResult:
     ) -> "PhotoUriResult":
         data, raw = _prepare(data, raw, "PhotoUriResult")
         return cls(
-            photo_uri=_as_str(data.get("photoUri", ""), "PhotoUriResult", "photoUri"),
-            name=_as_str(data.get("name", ""), "PhotoUriResult", "name"),
+            photo_uri=_as_str(
+                _read_or(data, "photoUri", "", "PhotoUriResult"),
+                "PhotoUriResult",
+                "photoUri",
+            ),
+            name=_as_str(
+                _read_or(data, "name", "", "PhotoUriResult"),
+                "PhotoUriResult",
+                "name",
+            ),
             raw=raw,
         )
 
