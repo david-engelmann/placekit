@@ -1967,6 +1967,16 @@ mod tests {
             Gunzip::OverCap(out) => assert_eq!(out.len(), 1000),
             _ => panic!("an over cap decompression must report its prefix"),
         }
+        // A decompressed form of exactly the cap is not over
+        // the cap. The judge fires only past the cap, so the
+        // form decodes whole and byte for byte (Round 56 red
+        // team Minor 1).
+        let exact = vec![b'z'; 1000];
+        let packed = gzipped(&exact);
+        match gunzip_capped(&packed, 1000) {
+            Gunzip::Done(out) => assert_eq!(out, exact),
+            _ => panic!("a decompressed form of exactly the cap must decode whole"),
+        }
         // A stream that is not gzip fails with no output.
         match gunzip_capped(b"not a gzip stream", 1024) {
             Gunzip::Failed { partial, .. } => assert!(partial.is_empty()),
@@ -3475,5 +3485,78 @@ mod tests {
             err.quota_violations(),
             vec![serde_json::json!({"quotaMetric": "m"})]
         );
+    }
+
+    #[test]
+    fn gzip_body_decompressing_past_the_cap_recovers_the_status() {
+        // The Round 25 row itself, twinned from
+        // test_gzip_body_decompressing_past_the_cap_classifies
+        // in tests/test_round25.py with the wire body built as
+        // the Python envelope helper builds it. The padding
+        // sits inside a DebugInfo detail behind the status
+        // string, so the status stands inside the decompressed
+        // cap while the body runs far past it, and the
+        // recovered status is the classification the row pins.
+        let plain = format!(
+            "{{\"error\": {{\"code\": 429, \"message\": \"Quota exceeded for this key\", \"status\": \"RESOURCE_EXHAUSTED\", \"details\": [{{\"@type\": \"type.googleapis.com/google.rpc.DebugInfo\", \"detail\": \"{}\"}}]}}}}",
+            "z".repeat(300_000)
+        );
+        let stub = Stub::start(move |_| stub_gzip_response(400, "gzip", gzipped(plain.as_bytes())));
+        let client = stub.client("k");
+        let err = block_on(client.text_search(&gzip_probe_req(), None)).unwrap_err();
+        assert_eq!(err.kind(), "rate_limit");
+        assert_eq!(err.google_status(), Some("RESOURCE_EXHAUSTED"));
+        assert_eq!(err.error_code(), Some(429));
+    }
+
+    #[test]
+    fn gzip_plain_body_at_exactly_the_error_cap_reads_whole() {
+        // The strict side of the cap boundary, driven on a
+        // non envelope body (Round 56 red team Minor 1). At
+        // exactly the cap the whole and over cap outcomes of
+        // the decode carry the same bytes and differ only in
+        // the capped flag, and that flag reaches the built
+        // error only through the non envelope message, so no
+        // envelope row can see a strict misjudgement of it.
+        // A gzipped plain text body decompressing to exactly
+        // 262144 bytes reads as the whole body it is.
+        let plain = vec![b'x'; 262_144];
+        let stub = Stub::start(move |_| stub_gzip_response(400, "GZip", gzipped(&plain)));
+        let client = stub.client("k");
+        let err = block_on(client.text_search(&gzip_probe_req(), None)).unwrap_err();
+        assert_eq!(err.kind(), "invalid_request");
+        assert_eq!(err.status_code(), Some(400));
+        assert_eq!(err.google_status(), None);
+        let text = err.to_string();
+        assert!(
+            text.contains("error body of 262144 bytes, not a Places error envelope"),
+            "{text}"
+        );
+        assert!(!text.contains("stopped at"), "{text}");
+    }
+
+    #[test]
+    fn gzip_plain_body_one_byte_past_the_error_cap_reads_capped() {
+        // The lax side of the same boundary (Round 56 red
+        // team Minor 2). One byte past the cap the
+        // decompressed form is over the cap and the capped
+        // reading is owed, and the non envelope message is
+        // the driven surface where that reading speaks. A
+        // judge firing one byte late hands this body back
+        // whole at 262145 bytes, and the wording gives the
+        // swap away.
+        let plain = vec![b'x'; 262_145];
+        let stub = Stub::start(move |_| stub_gzip_response(400, "GZip", gzipped(&plain)));
+        let client = stub.client("k");
+        let err = block_on(client.text_search(&gzip_probe_req(), None)).unwrap_err();
+        assert_eq!(err.kind(), "invalid_request");
+        assert_eq!(err.status_code(), Some(400));
+        assert_eq!(err.google_status(), None);
+        let text = err.to_string();
+        assert!(
+            text.contains("error body read stopped at the 262144 byte cap"),
+            "{text}"
+        );
+        assert!(!text.contains("error body of 262145 bytes"), "{text}");
     }
 }
