@@ -18,6 +18,73 @@ const MAX_MASK_PATHS: usize = 100;
 /// a realistic field list produce and below common header limits.
 const MAX_MASK_HEADER_LEN: usize = 4096;
 
+/// Whether one path matches the construction grammar the Python
+/// `FieldMask` enforces when a mask is built, read over the byte
+/// form the Python layer sends across (Round 54).
+///
+/// The grammar is the one the Python check has always applied. A
+/// path is dot separated segments, and every segment is a camelCase
+/// identifier of at least two characters, an ASCII letter followed
+/// by ASCII letters and digits. The Python check reaches the same
+/// verdict through its own reads, because its opening tests name
+/// exactly the characters this grammar excludes. An empty path has
+/// one empty segment, a path that begins or ends with whitespace
+/// or carries a comma puts a character outside the segment alphabet
+/// into some segment, and a wildcard is outside the alphabet too,
+/// so the segment test alone decides every case. This grammar is
+/// deliberately stricter than the call time grammar [`FieldMask::new`]
+/// enforces on paths already built, where one character segments
+/// and underscores pass. Construction is where semantic errors such
+/// as snake_case names are refused locally, and the two rule sets
+/// are not interchangeable.
+pub fn valid_path(path: &[u8]) -> bool {
+    if path.is_empty() {
+        return false;
+    }
+    path.split(|byte| *byte == b'.').all(|segment| {
+        segment.len() >= 2
+            && segment[0].is_ascii_alphabetic()
+            && segment.iter().all(|byte| byte.is_ascii_alphanumeric())
+    })
+}
+
+/// The indices of the first occurrence of each distinct path, in
+/// first seen order (Round 54).
+///
+/// This is the duplicate dropping the Python `FieldMask`
+/// construction performs, decided over the byte forms as sent. The
+/// Python layer stores its own caller objects at these indices, so
+/// the mask keeps the first seen object for each distinct path the
+/// way the Python dict pass it replaces always did.
+pub fn unique_indices(paths: &[Vec<u8>]) -> Vec<usize> {
+    let mut seen = std::collections::HashSet::new();
+    let mut indices = Vec::new();
+    for (index, path) in paths.iter().enumerate() {
+        if seen.insert(path.as_slice()) {
+            indices.push(index);
+        }
+    }
+    indices
+}
+
+/// The order that sorts keyed members the way the set door of the
+/// Python `FieldMask.of` sorts them (Round 54).
+///
+/// Each key is the pair the Python sort key computes, a rank and a
+/// byte form. String members carry rank 0 with their own bytes, so
+/// they sort among themselves in string order (byte order over the
+/// surrogatepass form is code point order), and every other member
+/// carries rank 1 with the bytes of its safe repr, so it sorts
+/// after the strings by that text and is refused by the constructor
+/// afterwards. The sort is stable, so members whose keys compare
+/// equal keep their materialised order, as they do under the
+/// Python sort.
+pub fn sorted_order(keys: &[(u8, Vec<u8>)]) -> Vec<usize> {
+    let mut order: Vec<usize> = (0..keys.len()).collect();
+    order.sort_by(|a, b| keys[*a].cmp(&keys[*b]));
+    order
+}
+
 /// A validated set of field paths for one request.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FieldMask(Vec<String>);
@@ -274,6 +341,113 @@ mod tests {
         assert_eq!(FieldMask::new(many).unwrap_err().kind(), "config");
         let long = vec![format!("places.{}", "x".repeat(5000))];
         assert_eq!(FieldMask::new(long).unwrap_err().kind(), "config");
+    }
+
+    #[test]
+    fn construction_grammar_accepts_wire_paths() {
+        // The valid side of the Python construction check, whose
+        // refusals are mirrored in the next test (tests/test_client.py
+        // test_field_mask_grammar_rejects_semantic_errors and
+        // tests/test_round31.py test_mask_plain_members_behave_as_before).
+        for good in [
+            "places.displayName",
+            "places.id",
+            "places.addressComponents",
+            "id",
+            "name",
+            "nextPageToken",
+            "ab",
+            "aB.cD9",
+        ] {
+            assert!(valid_path(good.as_bytes()), "path {good:?} should be valid");
+        }
+    }
+
+    #[test]
+    fn construction_grammar_rejects_the_python_refusals() {
+        // Mirrors the refusal list of the Python grammar test in
+        // tests/test_client.py (snake_case, empty segments, stray
+        // punctuation, spaces, wildcards and one letter segments),
+        // plus the shapes the core call time grammar test above
+        // already names and the non ASCII and surrogate forms the
+        // byte crossing can carry.
+        for bad in [
+            "",
+            "a",
+            "places.i",
+            "a.b",
+            "ab.c",
+            "places.display_name",
+            "places..rating",
+            "places.",
+            ".places",
+            "not a field!!!",
+            "a b",
+            "not a path",
+            "*",
+            "places.*",
+            " places.id",
+            "places.id ",
+            "places.id,places.name",
+            "places.display Name",
+        ] {
+            assert!(
+                !valid_path(bad.as_bytes()),
+                "path {bad:?} should be invalid"
+            );
+        }
+        assert!(!valid_path("places.idé".as_bytes()));
+        // A lone surrogate crosses in surrogatepass form as the
+        // three bytes ED A0 80, which sit outside the segment
+        // alphabet like every other non ASCII byte.
+        assert!(!valid_path(b"places.id\xed\xa0\x80"));
+    }
+
+    #[test]
+    fn unique_indices_keeps_first_seen_order() {
+        // Mirrors the dedupe half of the Python test
+        // test_field_mask_deduplicates_and_set_input_is_deterministic
+        // in tests/test_client.py.
+        let paths: Vec<Vec<u8>> = ["places.id", "places.id", "places.rating"]
+            .iter()
+            .map(|s| s.as_bytes().to_vec())
+            .collect();
+        assert_eq!(unique_indices(&paths), vec![0, 2]);
+        let distinct: Vec<Vec<u8>> = ["places.id", "places.rating"]
+            .iter()
+            .map(|s| s.as_bytes().to_vec())
+            .collect();
+        assert_eq!(unique_indices(&distinct), vec![0, 1]);
+        let repeated: Vec<Vec<u8>> = ["ab", "ab", "ab"]
+            .iter()
+            .map(|s| s.as_bytes().to_vec())
+            .collect();
+        assert_eq!(unique_indices(&repeated), vec![0]);
+        assert!(unique_indices(&[]).is_empty());
+    }
+
+    #[test]
+    fn sorted_order_places_strings_first_in_string_order() {
+        // Mirrors the set determinism half of the Python test
+        // test_field_mask_deduplicates_and_set_input_is_deterministic
+        // and the mixed type set ordering behind
+        // test_fieldmask_of_mixed_type_set_is_config_error in
+        // tests/test_round24.py, where the non string member sorts
+        // after every string and is refused by the constructor.
+        let keys: Vec<(u8, Vec<u8>)> = [
+            (0u8, b"places.rating".to_vec()),
+            (0u8, b"places.id".to_vec()),
+            (0u8, b"places.name".to_vec()),
+        ]
+        .to_vec();
+        assert_eq!(sorted_order(&keys), vec![1, 2, 0]);
+        let mixed: Vec<(u8, Vec<u8>)> =
+            [(1u8, b"7".to_vec()), (0u8, b"places.id".to_vec())].to_vec();
+        assert_eq!(sorted_order(&mixed), vec![1, 0]);
+        // Equal keys keep their materialised order.
+        let equal: Vec<(u8, Vec<u8>)> = [(0u8, b"ab".to_vec()), (0u8, b"ab".to_vec())].to_vec();
+        assert_eq!(sorted_order(&equal), vec![0, 1]);
+        assert!(sorted_order(&[]).is_empty());
     }
 
     #[test]
