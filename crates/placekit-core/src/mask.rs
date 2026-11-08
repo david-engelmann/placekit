@@ -448,12 +448,16 @@ mod tests {
         // The segment alphabet is ASCII letters and digits, and
         // every other byte is refused in a segment. The refusal
         // lists above name the space, the comma, the underscore,
-        // the asterisk and the bang and the non ASCII shapes.
-        // This test names the rest of the boundary, so an edit
-        // that admits one more byte to the alphabet fails here
-        // instead of passing both suites in silence. The hyphen
-        // and the tab open the list, in a tail, at the head of a
-        // segment and across segments.
+        // the asterisk and the bang and the non ASCII shapes, but
+        // the asterisk and the bang stand there in shapes that
+        // other rules refuse first, the length floor for the
+        // asterisk and the spaces for the bang, so neither byte
+        // decides a verdict there. This test names the rest of
+        // the boundary and both of those again in a deciding
+        // seat, so an edit that admits one more byte to the
+        // alphabet fails here instead of passing both suites in
+        // silence. The hyphen and the tab open the list, in a
+        // tail, at the head of a segment and across segments.
         for bad in [
             "places.display-name",
             "places.-name",
@@ -468,12 +472,17 @@ mod tests {
                 "path {bad:?} should be invalid"
             );
         }
-        // The remaining printable punctuation, one tail probe
-        // each in a segment that is well formed in every other
-        // respect, so the probed byte alone decides the verdict.
+        // The printable punctuation, one tail probe each in a
+        // segment that is well formed in every other respect, so
+        // the probed byte alone decides the verdict. The bang
+        // and the asterisk stand here because the shapes that
+        // name them above are refused on other grounds. The
+        // hyphen, the plus and the slash stand in the literal
+        // shapes above, and the comma and the underscore decide
+        // in the refusal lists above.
         for byte in [
-            b'"', b'#', b'$', b'%', b'&', b'\'', b'(', b')', b':', b';', b'<', b'=', b'>', b'?',
-            b'@', b'[', b'\\', b']', b'^', b'`', b'{', b'|', b'}', b'~',
+            b'!', b'"', b'#', b'$', b'%', b'&', b'\'', b'(', b')', b'*', b':', b';', b'<', b'=',
+            b'>', b'?', b'@', b'[', b'\\', b']', b'^', b'`', b'{', b'|', b'}', b'~',
         ] {
             let path = [b'a', b'b', byte, b'c', b'd'];
             assert!(
