@@ -3733,7 +3733,13 @@ def _fixtures_a_test_loads(
     after a region extends only the paths that fell through
     it, so when every path through a region ends, the rest
     of the block holding it is dead too. A try carries a
-    raised path onward through its handlers, and a with
+    raised path onward through its handlers where a handler
+    the try names could catch the error the path raises,
+    read by the plain names of its handler seats on the
+    terms the try walk states, and a raised path no named
+    handler could catch leaves the try standing as the
+    raised path it is, for the regions outside the try to
+    carry in their own terms. A with
     body forks like any other region, its raised paths
     resuming after the with holding their state at the
     raise, because a context manager may suppress the
@@ -3825,6 +3831,15 @@ def _fixtures_a_test_loads(
     # that have already returned, and the depth of credit
     # suppression in force, one record every branch shares.
     flow = {"alive": True, "finished": None, "suppress": 0}
+    # The statically plain name each raised path end stands
+    # under, where its raise expression carries one, recorded
+    # beside the end itself as the walk creates it, so a try
+    # the end is handed to later can read the name from the
+    # end rather than from the statement that raised it,
+    # which the walk has long since left behind. An end whose
+    # raise expression carries no plain name stands here with
+    # None in its place.
+    raise_end_names = []
     try_types = (ast.Try,)
     if hasattr(ast, "TryStar"):
         try_types = try_types + (ast.TryStar,)
@@ -4516,6 +4531,94 @@ def _fixtures_a_test_loads(
         for child in ast.iter_child_nodes(node):
             scan(child)
 
+    def plain_raise_name(expression):
+        """The statically plain name a raise expression stands under.
+
+        A raise of a bare name stands under that name, and a
+        raise calling a bare name stands under the name it
+        calls, because calling an error class by its name
+        constructs that error. Any other head, an attribute,
+        a subscript, or a call of a call, carries no plain
+        name the walk can read, and neither does a bare raise
+        with no expression at all, so those stand under None
+        and keep the treatment the shipped walk gives a raised
+        path whose error no static reading can name.
+        """
+        if isinstance(expression, ast.Name):
+            return expression.id
+        if isinstance(expression, ast.Call) and isinstance(
+            expression.func, ast.Name
+        ):
+            return expression.func.id
+        return None
+
+    def plain_catch_names(handlers):
+        """The error names a try its handlers could catch, read by name.
+
+        The result is the set of names the handlers name when
+        every handler seat stands as a plain name or a tuple
+        of plain names and no seat stands open to every error,
+        and None when any seat is a bare handler with no type,
+        a seat that is not a plain name or a tuple of plain
+        names, or a seat naming one of the base error classes.
+        On a None result the question of what the handlers
+        catch is not one a static reading can settle by name,
+        so the try keeps the shipped join for every raised
+        path it carries.
+        """
+        names = set()
+        for handler in handlers:
+            seat = handler.type
+            if seat is None:
+                return None
+            if isinstance(seat, ast.Name):
+                named = (seat.id,)
+            elif isinstance(seat, ast.Tuple):
+                named = []
+                for element in seat.elts:
+                    if not isinstance(element, ast.Name):
+                        return None
+                    named.append(element.id)
+            else:
+                return None
+            for name in named:
+                if name in ("Exception", "BaseException"):
+                    return None
+                names.add(name)
+        return frozenset(names)
+
+    def raised_end_leaves(end, catch_names):
+        """Whether a raised path end leaves a try instead of rejoining it.
+
+        The end leaves when the handlers of the try all stand
+        under plain names, read by plain_catch_names, and no
+        name among them could catch the error the end raises.
+        An end of the assert kind raises the error of the
+        assert statement, whose name every assert shares. An
+        end of the raise kind raises the error its raise
+        expression stands under, recorded beside the end when
+        the walk created it, and an end whose expression
+        carried no plain name never leaves, because the
+        shipped join is the only treatment a static reading
+        can give it. A try whose seats are not all plain, where
+        catch_names reads None, lets no end leave either, so
+        the only ends that escape are the ones a plain reading
+        of the seats proves no handler could catch.
+        """
+        if catch_names is None:
+            return False
+        if end[2] == "assert":
+            name = "AssertionError"
+        else:
+            name = None
+            for raised_end, plain_name in raise_end_names:
+                if raised_end is end:
+                    name = plain_name
+                    break
+            if name is None:
+                return False
+        return name not in catch_names
+
     def walk_stmt(statement, completed):
         if isinstance(statement, (ast.FunctionDef, ast.AsyncFunctionDef)):
             # A nested definition is deferred code. Its body runs
@@ -4590,7 +4693,15 @@ def _fixtures_a_test_loads(
                 scan(statement.exc)
             if statement.cause is not None:
                 scan(statement.cause)
-            completed.append((dict(env), set(loaded), "raise"))
+            raised_end = (dict(env), set(loaded), "raise")
+            completed.append(raised_end)
+            # The plain name the raise stands under travels
+            # with the end, so a try the end is handed to can
+            # judge whether a handler it names could catch
+            # the error, on the terms the try walk states.
+            raise_end_names.append(
+                (raised_end, plain_raise_name(statement.exc))
+            )
             if raised_credits is not None:
                 # A derivation proof counts the paths that end
                 # in a raise beside the paths that complete, so
@@ -4774,24 +4885,45 @@ def _fixtures_a_test_loads(
         if isinstance(statement, try_types):
             pre_env = dict(env)
             pre_loaded = set(loaded)
+            catch_names = plain_catch_names(statement.handlers)
             ends = []
-            for end_env, end_loaded, kind in walk_paths(
-                statement.body, pre_env, pre_loaded
-            ):
+            for end in walk_paths(statement.body, pre_env, pre_loaded):
+                end_env, end_loaded, kind = end
                 if kind == "fall":
                     if statement.orelse:
-                        ends.extend(
-                            walk_paths(statement.orelse, end_env, end_loaded)
-                        )
+                        for else_end in walk_paths(
+                            statement.orelse, end_env, end_loaded
+                        ):
+                            if else_end[2] in (
+                                "raise",
+                                "assert",
+                            ) and raised_end_leaves(else_end, catch_names):
+                                completed.append(else_end)
+                            else:
+                                ends.append(else_end)
                     else:
-                        ends.append((end_env, end_loaded, "fall"))
+                        ends.append(end)
                 elif kind in ("break", "continue"):
-                    ends.append((end_env, end_loaded, kind))
+                    ends.append(end)
+                elif kind in ("raise", "assert") and raised_end_leaves(
+                    end, catch_names
+                ):
+                    # A raised path no handler this try names
+                    # could catch is not carried onward by the
+                    # handlers below, because no handler catches
+                    # it at runtime either, and it leaves the
+                    # try as the raised path it is, for the
+                    # regions outside the try to carry in their
+                    # own terms, exactly as the same end behaves
+                    # standing outside a try. A raised end from
+                    # the else arm leaves on the same terms,
+                    # judged by the same names.
+                    completed.append(end)
                 # An end that returned was frozen toward the
-                # whole test when it ended. An end that raised
-                # is carried onward by the handlers below, and
-                # the statements after the raise in the body
-                # were dead on it.
+                # whole test when it ended. A raised end a
+                # named handler could catch is carried onward
+                # by the handlers below, and the statements
+                # after the raise in the body were dead on it.
             for handler in statement.handlers:
 
                 def prepare(handler=handler):
