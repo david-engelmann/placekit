@@ -3740,8 +3740,14 @@ def _fixtures_a_test_loads(
     exception. A raise nothing catches ends the test in
     failure rather than in completion, so the walk counts
     only the paths that complete. The with model covers
-    abandonment by a raise statement, which is the
-    abandonment the walk can see. An exception raised while
+    abandonment by a raise statement and by an assert
+    statement. An assert raises after its test has
+    evaluated, so the walk ends its failing path where
+    the statement stands, as a raised path of its own
+    kind beside the path where the test holds and the
+    body walks on, and a with resumes the failing path
+    after the block on the same terms as a raise. An
+    exception raised while
     an expression inside a with body evaluates abandons the
     body in the same way at runtime, silently under a
     suppressing manager, and whether such an expression
@@ -4188,7 +4194,8 @@ def _fixtures_a_test_loads(
         loop binds its target and a try handler binds its
         exception name. Each end is the environment, the
         credited set, and the way the path ended, one of falling
-        through, returning, raising, breaking, or continuing,
+        through, returning, raising, failing an assert,
+        breaking, or continuing,
         and a block that meets a statement ending its path
         walks no further statements on it. The state in force
         is restored before returning, so the caller joins the
@@ -4286,6 +4293,13 @@ def _fixtures_a_test_loads(
         that may never run earns nothing, while credit in a
         proven body pass survives the join.
 
+        An end of the assert kind is no body end at all,
+        because the statement abandons the loop on the path
+        it ends, so the walk hands it to the enclosing block
+        unchanged in kind, from a body pass and from the
+        else arm alike, for the regions outside the loop to
+        carry in their own terms.
+
         The environment a body end carries into the join is
         the state the interpreter leaves behind, not the state
         the walked pass ends holding. When the caller supplies
@@ -4325,6 +4339,26 @@ def _fixtures_a_test_loads(
                 }
             return end_env
 
+        def orelse_ends(base_env, base_loaded):
+            """The ends of one walk of the else arm.
+
+            The ends that fall through join the loop join
+            with the body ends, and every other end keeps
+            the treatment the join already gives it. An end
+            of the assert kind abandons the loop from the
+            arm as it does from the body, so it is handed to
+            the enclosing block unchanged in kind instead.
+            """
+            ends = []
+            for end_env, end_loaded, kind in walk_paths(
+                orelse, base_env, base_loaded
+            ):
+                if kind == "assert":
+                    completed.append((end_env, end_loaded, "assert"))
+                else:
+                    ends.append((end_env, end_loaded, kind))
+            return ends
+
         path_ends = []
         for end_env, end_loaded, kind in walk_paths(
             body, pre_env, pre_loaded, prepare
@@ -4332,11 +4366,19 @@ def _fixtures_a_test_loads(
             if kind in ("fall", "continue"):
                 end_env = end_state(end_env)
                 path_ends.append((end_env, end_loaded, "fall"))
-                path_ends.extend(walk_paths(orelse, end_env, end_loaded))
+                path_ends.extend(orelse_ends(end_env, end_loaded))
             elif kind == "break":
                 path_ends.append((end_state(end_env), end_loaded, "fall"))
+            elif kind == "assert":
+                # The statement abandons the loop entirely
+                # rather than ending one pass of it, so the
+                # path is handed to the enclosing block
+                # unchanged in kind, where the regions that
+                # carry a raised path onward can carry it in
+                # their own terms.
+                completed.append((end_state(end_env), end_loaded, "assert"))
         if not guaranteed:
-            path_ends.extend(walk_paths(orelse, pre_env, pre_loaded))
+            path_ends.extend(orelse_ends(pre_env, pre_loaded))
         join_ends(path_ends, completed)
 
     def scan(node):
@@ -4570,10 +4612,32 @@ def _fixtures_a_test_loads(
         if isinstance(statement, ast.Assert):
             # The message of an assert evaluates only on the
             # path where the test fails, so it is scanned with
-            # credit suppressed.
+            # credit suppressed. The statement forks the path
+            # where it stands. The path where the test holds
+            # walks on, and the path where the test fails ends
+            # here holding the state its evaluation left
+            # behind, as a raised path of the assert kind, so
+            # a region that resumes or joins a raised path
+            # treats the failure of an assert in its own
+            # terms, and credit standing after the statement
+            # counts only where every path that reaches it
+            # earns it. A test standing as a true constant
+            # fails on no path, so such a statement forks
+            # nothing and the path walks on whole.
             scan(statement.test)
             if statement.msg is not None:
                 scan_suppressed(statement.msg)
+            if isinstance(statement.test, ast.Constant) and statement.test.value:
+                return
+            completed.append((dict(env), set(loaded), "assert"))
+            if raised_credits is not None:
+                # A derivation proof counts the paths that end
+                # at an assert beside the paths that end in a
+                # raise, on the terms of the raise counting
+                # above, because a caller can suppress the
+                # failure and run on whatever the path loaded
+                # before it ended.
+                raised_credits.append(set(loaded))
             return
         if isinstance(statement, ast.Assign):
             scan(statement.value)
@@ -4685,13 +4749,18 @@ def _fixtures_a_test_loads(
             for end_env, end_loaded, kind in walk_paths(
                 statement.body, base_env, base_loaded
             ):
-                if kind == "raise":
+                if kind in ("raise", "assert"):
                     # A context manager may suppress the
                     # exception, so the abandoned path resumes
                     # after the with holding its state at the
-                    # raise. The statements after the raise
-                    # inside the body are dead on every path,
-                    # which is what the fork buys here.
+                    # raise. The raised path of an assert
+                    # stands in the same seat, because a
+                    # suppressing manager swallows the failure
+                    # of the statement the same way and control
+                    # leaves the body at the same point. The
+                    # statements after the raise inside the
+                    # body are dead on every path, which is
+                    # what the fork buys here.
                     ends.append((end_env, end_loaded, "fall"))
                 else:
                     ends.append((end_env, end_loaded, kind))
