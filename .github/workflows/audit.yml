@@ -38,6 +38,15 @@ jobs:
     name: cargo audit
     runs-on: ubuntu-24.04
     timeout-minutes: 15
+    env:
+      # The audit action builds cargo-audit from source with the
+      # cargo it finds, and the dependencies of that tool need a
+      # newer compiler than the pinned 1.88.0 the library builds
+      # with, so every run so far failed while building the tool
+      # and none ever read the lockfile. This override scopes the
+      # newer toolchain to this job alone. The library pin in
+      # rust-toolchain.toml and every other job stay untouched.
+      RUSTUP_TOOLCHAIN: "1.96.0"
     permissions:
       contents: read
       # The action reports a push or pull request audit as a status
@@ -48,6 +57,8 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
+      - name: Install the toolchain the audit tool build needs
+        run: rustup toolchain install "$RUSTUP_TOOLCHAIN" --profile minimal
       - name: Audit the locked Rust tree
         uses: rustsec/audit-check@69366f33c96575abad1ee0dba8212993eecbe998 # v2.0.0
         with:
