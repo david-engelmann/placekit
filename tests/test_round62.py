@@ -35,6 +35,27 @@ standing as a true constant fails on no path, so such an
 assert forks nothing and the code after it credits as it
 always did. The pins below cover the repaired forms, plus
 the controls that keep the fork honest.
+
+The delta review of the fork found a second seat of the
+same genus standing behind the try join. The join dropped
+a raised path of every kind where it stood and never read
+the errors its handlers named, so an assert or a raise
+standing in a try body or a try else arm, under a handler
+naming a different error, left a loading call after the
+try credited for a fixture it never loads, because the
+error the statement raises is not caught and abandons the
+rest of the with body on its way out. The second repair
+teaches the try walk to read its handler seats where they
+stand as plain names. A raised path whose error no named
+handler could catch leaves the try as the raised path it
+is, for the regions outside to carry in their own terms,
+while a seat that is not a plain name, a bare handler, and
+a seat naming a base error class each keep the shipped
+join whole, and a raise whose expression carries no
+statically plain name keeps it too. The last four pins
+cover the assert form, the raise form, the matching
+handler control, and the non plain seat that fences the
+repair.
 """
 
 from __future__ import annotations
@@ -200,6 +221,110 @@ def test_linkage_call_after_a_true_constant_assert_in_a_with_body_still_credits(
                 assert True
                 result = search(client, raw_response, "{CLAIMED}")
             other = search(client, raw_response, fixture_name)
+        """
+    )
+    assert loaded == {CLAIMED, OTHER}
+
+
+def test_linkage_call_after_an_assert_in_a_try_body_with_a_mismatched_handler_earns_no_credit():
+    # Round 62, delta red team Minor 1, the assert form.
+    # The handler names a different error, so at runtime the
+    # failure of the assert is not caught, and it abandons
+    # the rest of the with body on its way to the manager,
+    # including the call standing after the try. The try walk
+    # reads its handler seats where they stand as plain
+    # names, finds no name among them that could catch the
+    # error the assert raises, and lets the raised path leave
+    # the try as it stands, so the manager resumes it after
+    # the block holding nothing and the join strips the call.
+    loaded = _loads(
+        f"""
+        def test_shape(client, raw_response):
+            from contextlib import suppress
+            fixture_name = "{OTHER}"
+            with suppress(AssertionError):
+                try:
+                    assert False
+                except KeyError:
+                    pass
+                after = search(client, raw_response, "{CLAIMED}")
+            result = search(client, raw_response, fixture_name)
+        """
+    )
+    assert loaded == {OTHER}
+
+
+def test_linkage_call_after_a_raise_in_a_try_body_with_a_mismatched_handler_earns_no_credit():
+    # Round 62, delta red team Minor 1, the raise twin. The
+    # two statements are identical in this seat, because the
+    # shipped join dropped a raised path of every kind where
+    # it stood. The raise stands under the plain name of the
+    # error it constructs, no handler here names that error,
+    # and its path leaves the try on the same terms as the
+    # assert path in the pin above.
+    loaded = _loads(
+        f"""
+        def test_shape(client, raw_response):
+            from contextlib import suppress
+            fixture_name = "{OTHER}"
+            with suppress(AssertionError):
+                try:
+                    raise AssertionError("stop")
+                except KeyError:
+                    pass
+                after = search(client, raw_response, "{CLAIMED}")
+            result = search(client, raw_response, fixture_name)
+        """
+    )
+    assert loaded == {OTHER}
+
+
+def test_linkage_call_after_a_try_with_a_matching_handler_still_credits():
+    # Positive control for the try repair. The handler names
+    # the very error the assert raises, so the failure is
+    # caught at runtime and the call after the try runs on
+    # the paths that reach it exactly as it did before the
+    # repair. The raised path rejoins through the handler,
+    # and its credit is untouched.
+    loaded = _loads(
+        f"""
+        def test_shape(client, raw_response):
+            from contextlib import suppress
+            fixture_name = "{OTHER}"
+            with suppress(AssertionError):
+                try:
+                    assert False
+                except AssertionError:
+                    pass
+                after = search(client, raw_response, "{CLAIMED}")
+            result = search(client, raw_response, fixture_name)
+        """
+    )
+    assert loaded == {CLAIMED, OTHER}
+
+
+def test_linkage_call_after_an_assert_in_a_try_body_with_an_attribute_handler_seat_still_credits():
+    # The fence of the try repair, pinned as it stands. The
+    # handler seat is an attribute form rather than a plain
+    # name, so the question of what it catches is not one a
+    # static reading settles by name, and the try keeps the
+    # shipped join for every raised path it carries, this
+    # evasion included. The pin holds the boundary where the
+    # repair stops, and it fails the day a change carries
+    # the name reading past the seats the ruling names.
+    loaded = _loads(
+        f"""
+        def test_shape(client, raw_response):
+            from contextlib import suppress
+            import builtins
+            fixture_name = "{OTHER}"
+            with suppress(AssertionError):
+                try:
+                    assert False
+                except builtins.KeyError:
+                    pass
+                after = search(client, raw_response, "{CLAIMED}")
+            result = search(client, raw_response, fixture_name)
         """
     )
     assert loaded == {CLAIMED, OTHER}
