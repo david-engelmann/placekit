@@ -444,6 +444,55 @@ mod tests {
     }
 
     #[test]
+    fn construction_grammar_refuses_bytes_outside_the_segment_alphabet() {
+        // The segment alphabet is ASCII letters and digits, and
+        // every other byte is refused in a segment. The refusal
+        // lists above name the space, the comma, the underscore,
+        // the asterisk and the bang and the non ASCII shapes.
+        // This test names the rest of the boundary, so an edit
+        // that admits one more byte to the alphabet fails here
+        // instead of passing both suites in silence. The hyphen
+        // and the tab open the list, in a tail, at the head of a
+        // segment and across segments.
+        for bad in [
+            "places.display-name",
+            "places.-name",
+            "ab.cd-ef",
+            "places.display\tname",
+            "ab.c\td",
+            "places.display+name",
+            "places.display/name",
+        ] {
+            assert!(
+                !valid_path(bad.as_bytes()),
+                "path {bad:?} should be invalid"
+            );
+        }
+        // The remaining printable punctuation, one tail probe
+        // each in a segment that is well formed in every other
+        // respect, so the probed byte alone decides the verdict.
+        for byte in [
+            b'"', b'#', b'$', b'%', b'&', b'\'', b'(', b')', b':', b';', b'<', b'=', b'>', b'?',
+            b'@', b'[', b'\\', b']', b'^', b'`', b'{', b'|', b'}', b'~',
+        ] {
+            let path = [b'a', b'b', byte, b'c', b'd'];
+            assert!(
+                !valid_path(&path),
+                "byte {byte:#04x} should be refused in a segment tail"
+            );
+        }
+        // The control range, the tab inside it, the delete byte
+        // and the whole non ASCII range answer the same way.
+        for byte in (0x00u8..=0x1f).chain([0x7f]).chain(0x80..=0xff) {
+            let path = [b'a', b'b', byte, b'c', b'd'];
+            assert!(
+                !valid_path(&path),
+                "byte {byte:#04x} should be refused in a segment tail"
+            );
+        }
+    }
+
+    #[test]
     fn construction_grammar_accepts_paths_past_the_constructor_caps() {
         // The construction grammar carries no length cap and no
         // segment count cap of its own. The caps live in
