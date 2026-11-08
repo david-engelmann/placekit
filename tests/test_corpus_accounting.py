@@ -3753,20 +3753,43 @@ def _fixtures_a_test_loads(
     enclosing block on the terms their walks state, and
     a raised path of a handler body leaves the try
     statement outright, because no handler of a try
-    catches an error a handler body raises. Inside the
-    body of a try, a nested with whose one manager stands
-    as a suppress call under plain names resolves only
-    the paths whose error it names, and a path whose
-    error it could not suppress leaves the with as the
-    raised path it is for the try to judge. Outside the
-    body of a try those joins keep the treatment the
-    walk has always given them. A raised path of a
-    match arm leaves the match as a raised path of the
-    enclosing block on every seat, inside the body of
-    a try and outside one alike, because the join at
-    the match resolves no raised path in its own terms
-    and the regions outside the statement carry it in
-    theirs. A with
+    catches an error a handler body raises. A with
+    whose one manager stands as a suppress call under
+    plain names resolves only the paths whose error it
+    names, on every seat, inside the body of a try and
+    outside one alike, and a path whose error it could
+    not suppress leaves the with as the raised path it
+    is for the enclosing regions to carry in their own
+    terms, because at runtime such a path resumes only
+    after the region that actually suppresses it, and
+    every manager shape that is not a suppress call
+    under plain names keeps the conversion the with
+    has always given it whole. A path a try has already
+    judged and sent out of itself is read by that name
+    reading where the walk stands inside a try, because
+    an outer try is a judge the path has yet to reach,
+    and keeps the conversion whole outside the body of
+    a try, where no judgement seat stands beyond the
+    with and the conversion seats the path in the join
+    of the block the with stands in. Outside the body of a
+    try the conditional and loop joins keep the
+    treatment the walk has always given them. A raised
+    path of a match arm leaves the match as a raised
+    path of the enclosing block on every seat, inside
+    the body of a try and outside one alike, because
+    the join at the match resolves no raised path in
+    its own terms and the regions outside the statement
+    carry it in theirs. A conditional whose test stands
+    as a constant walks only the arm the constant
+    selects, on the same constant reading the walk
+    gives the test of an assert and the test of a
+    while, because the arm the constant rules out runs
+    on no path at runtime, and a raised path of the
+    selected arm leaves the statement as a raised path
+    of the enclosing block, as one standing in the
+    block itself does, while a test no constant
+    reading settles keeps both arms and their join
+    whole. A with
     body forks like any other region, its raised paths
     resuming after the with holding their state at the
     raise, because a context manager may suppress the
@@ -3808,7 +3831,13 @@ def _fixtures_a_test_loads(
     its assignments stay in the class namespace the
     interpreter gives them, while a loading call written
     in the body still earns credit, because the body runs
-    when the class is defined. Every construct the walk
+    when the class is defined. A raise standing in the
+    body abandons the definition at runtime, so the
+    branch hands the raised path to the enclosing block
+    as the raised path it is, for the regions outside
+    the definition to judge in their own terms, while
+    an assert standing in the body keeps the inert
+    reading the walk has always given it. Every construct the walk
     touches is modelled in these terms or refused, apart
     from the one named residual above, and a shape it
     cannot model resolves to no credit and fails the
@@ -4807,6 +4836,25 @@ def _fixtures_a_test_loads(
                     break
                 walk_stmt(sub, inner_completed)
             raised = any(end[2] == "raise" for end in inner_completed)
+            # A raised path of the body leaves the definition
+            # as a raised path of the enclosing block, on the
+            # same fact of the raise the check above reads, so
+            # a region standing outside the definition judges
+            # the path in its own terms instead of starving
+            # at its join, a try by its seats, a match by
+            # handing it onward with the arm ends, a with by
+            # resuming it after its block. The direct seat
+            # keeps the answer the check gives it, because
+            # the enclosing block there is the block the
+            # definition stands in, whose walk the check ends
+            # below all the same. An end of the assert kind
+            # is not handed on, because the shipped treatment
+            # reads an assert standing in a class body as
+            # inert wherever it stands, and that reading
+            # stands whole.
+            for end in inner_completed:
+                if end[2] == "raise":
+                    completed.append(end)
             env.clear()
             env.update(saved_env)
             # A method of the class can declare a name nonlocal
@@ -4980,31 +5028,62 @@ def _fixtures_a_test_loads(
             scan(statement.test)
             base_env = dict(env)
             base_loaded = set(loaded)
-            ends = walk_paths(statement.body, base_env, base_loaded)
-            ends.extend(walk_paths(statement.orelse, base_env, base_loaded))
+            if isinstance(statement.test, ast.Constant):
+                # A test standing as a constant selects its
+                # arm on every path, on the same constant
+                # reading the walk gives the test of an
+                # assert and the test of a while, so the arm
+                # the constant rules out is no path of the
+                # walk and contributes no ends, and the ends
+                # of the arm the constant selects stand as
+                # the ends of the statement, handed on and
+                # joined below on the same terms as the ends
+                # of any arm. A test no constant reading
+                # settles keeps both arms and their shipped
+                # join whole.
+                selected = (
+                    statement.body
+                    if statement.test.value
+                    else statement.orelse
+                )
+                ends = walk_paths(selected, base_env, base_loaded)
+                constant = True
+            else:
+                ends = walk_paths(statement.body, base_env, base_loaded)
+                ends.extend(
+                    walk_paths(statement.orelse, base_env, base_loaded)
+                )
+                constant = False
             # A raised path of an arm is handed to the
-            # enclosing block before the join on two terms,
-            # and ends at the join on every other. Inside a
-            # try body the path belongs to the try, whose join
-            # cannot judge an end this join drops where it
-            # stands. And a path a try standing inside an arm
-            # has already judged and sent out of itself, read
+            # enclosing block before the join on three terms,
+            # and ends at the join on every other. Where a
+            # constant test selects the arm, the arm is the
+            # statement's only path, so its raised path is
+            # the statement's own raised path and leaves the
+            # statement as a raise or an assert standing in
+            # the block itself does. Inside a try body the
+            # path belongs to the try, whose join cannot
+            # judge an end this join drops where it stands.
+            # And a path a try standing inside an arm has
+            # already judged and sent out of itself, read
             # by the travelled record, was resolved by no
             # mechanism this join carries. A raise or an
             # assert standing in an arm outside those terms
             # keeps the treatment the shipped walk gives it.
             for end in ends:
                 if end[2] in ("raise", "assert") and (
-                    flow["try"] > 0 or end_travelled(end)
+                    constant or flow["try"] > 0 or end_travelled(end)
                 ):
                     completed.append(end)
             # The path ends feeding the join are the ends of
             # the arm the test selects and the ends of the arm
-            # it rejects, with the untouched state standing in
-            # for an else arm the statement does not write.
-            # Only the ends that fell through merge into the
-            # live state, so when both arms end their paths
-            # the code after the conditional is dead.
+            # it rejects, or the ends of the one arm a
+            # constant test selects alone, with the untouched
+            # state standing in for an else arm the statement
+            # does not write. Only the ends that fell through
+            # merge into the live state, so when both arms end
+            # their paths the code after the conditional is
+            # dead.
             join_ends(ends, completed)
             return
         if isinstance(statement, (ast.With, ast.AsyncWith)):
@@ -5014,27 +5093,45 @@ def _fixtures_a_test_loads(
                     bind(item.optional_vars, None)
             base_env = dict(env)
             base_loaded = set(loaded)
-            # Inside a try body the managers of the with are
-            # read by name where they stand as one suppress
-            # call under plain names, on the terms
-            # plain_suppress_names states, because a raised
-            # path the managers could not suppress belongs to
-            # the try and its conversion here would end the
-            # path before the try join can judge it. Outside
-            # a try body no name is read and the conversion
-            # below stands whole.
-            suppress_names = (
-                plain_suppress_names(statement.items)
-                if flow["try"] > 0
-                else None
-            )
+            # The managers of the with are read by name
+            # where they stand as one suppress call under
+            # plain names, on the terms plain_suppress_names
+            # states, on every seat, inside a try body and
+            # outside one alike, because a raised path the
+            # managers could not suppress resumes at runtime
+            # only after the region that actually suppresses
+            # it, and its conversion here would manufacture a
+            # resumed path in the middle of the body the with
+            # stands in, crediting whatever stands after the
+            # with in that body on a path that never reaches
+            # it. Where no name is read, on a manager shape
+            # that is not a suppress call under plain names,
+            # the conversion below stands whole.
+            suppress_names = plain_suppress_names(statement.items)
             ends = []
             for end in walk_paths(statement.body, base_env, base_loaded):
                 end_env, end_loaded, kind = end
                 if kind in ("raise", "assert"):
+                    # The name reading reaches a raised path
+                    # arising in the body of the with, and a
+                    # path a try has already judged and sent
+                    # out of itself where the walk stands
+                    # inside a try, because the try outside
+                    # the with is a judge that path has yet to
+                    # reach and a conversion here would end it
+                    # before that judgement. Such a judged
+                    # path crossing a with outside the body of
+                    # a try keeps the shipped conversion whole,
+                    # because no judgement seat stands outside
+                    # the with for the reading to hand the
+                    # path to, and the conversion is what seats
+                    # the path in the join of the block the
+                    # with stands in, where the paths beside
+                    # it price its credit.
                     name = (
                         raised_end_name(end)
                         if suppress_names is not None
+                        and (flow["try"] > 0 or not end_travelled(end))
                         else None
                     )
                     if name is not None and name not in suppress_names:
@@ -5042,9 +5139,13 @@ def _fixtures_a_test_loads(
                         # not suppress the error this path
                         # raises, so the path is not resumed
                         # here. It leaves the with as the
-                        # raised path it is, for the try whose
-                        # body holds the with to judge in its
-                        # own terms.
+                        # raised path it is, for the enclosing
+                        # regions to carry in their own terms,
+                        # a try to judge it by its seats, the
+                        # joins it crosses to hand it onward on
+                        # the travelled record, and the region
+                        # that does suppress it to resume it
+                        # after its own block.
                         completed.append(end)
                         mark_travelled(end)
                         continue
