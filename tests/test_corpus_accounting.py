@@ -3760,7 +3760,13 @@ def _fixtures_a_test_loads(
     error it could not suppress leaves the with as the
     raised path it is for the try to judge. Outside the
     body of a try those joins keep the treatment the
-    walk has always given them. A with
+    walk has always given them. A raised path of a
+    match arm leaves the match as a raised path of the
+    enclosing block on every seat, inside the body of
+    a try and outside one alike, because the join at
+    the match resolves no raised path in its own terms
+    and the regions outside the statement carry it in
+    theirs. A with
     body forks like any other region, its raised paths
     resuming after the with holding their state at the
     raise, because a context manager may suppress the
@@ -5184,6 +5190,25 @@ def _fixtures_a_test_loads(
                         scan(case.guard)
 
                 ends.extend(walk_paths(case.body, base_env, base_loaded, prepare))
+            # A raised path of an arm is handed to the
+            # enclosing block before the join, on every seat,
+            # because the join at the match resolves no raised
+            # path in its own terms and the path belongs to
+            # the regions outside the statement, for each to
+            # carry in its own terms. A try judges it by its
+            # seats, a with resumes it, a loop and a
+            # conditional pass it on the terms their walks
+            # state, and the raised check of a class body
+            # reads it, exactly as a raise or an assert
+            # standing in the block itself is carried. The
+            # hand on is not read off the standing of the
+            # walk inside a try, the way the hand on at a
+            # conditional is, because the seat is the join
+            # itself and a raised path of an arm outside any
+            # try is the same path standing in the same join.
+            for end in ends:
+                if end[2] in ("raise", "assert"):
+                    completed.append(end)
             # The path ends feeding the join are the state before
             # the match, standing in for the path where no arm
             # fits, beside the ends of each arm.
