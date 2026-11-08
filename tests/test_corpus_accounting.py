@@ -3739,7 +3739,12 @@ def _fixtures_a_test_loads(
     terms the try walk states, and a raised path no named
     handler could catch leaves the try standing as the
     raised path it is, for the regions outside the try to
-    carry in their own terms. A with
+    carry in their own terms. A raised path of the else
+    arm leaves the try on those same outward terms with
+    no name read at all, because the else arm stands
+    outside the region the handlers of its own try guard
+    and no handler of that try can catch an error the
+    else arm raises, whatever the seats name. A with
     body forks like any other region, its raised paths
     resuming after the with holding their state at the
     raise, because a context manager may suppress the
@@ -4894,10 +4899,22 @@ def _fixtures_a_test_loads(
                         for else_end in walk_paths(
                             statement.orelse, end_env, end_loaded
                         ):
-                            if else_end[2] in (
-                                "raise",
-                                "assert",
-                            ) and raised_end_leaves(else_end, catch_names):
+                            if else_end[2] in ("raise", "assert"):
+                                # An error the else arm raises is
+                                # never caught by the handlers of
+                                # its own try, because the else arm
+                                # stands outside the region those
+                                # handlers guard, so a raised end of
+                                # the else arm never rejoins through
+                                # the seats below, whatever names
+                                # they carry, plain or not, and the
+                                # fence of plain seats is never
+                                # reached for such an end. It leaves
+                                # the try as the raised path it is,
+                                # for the regions outside the try to
+                                # carry in their own terms, exactly
+                                # as the same end behaves standing
+                                # outside a try.
                                 completed.append(else_end)
                             else:
                                 ends.append(else_end)
@@ -4915,9 +4932,7 @@ def _fixtures_a_test_loads(
                     # try as the raised path it is, for the
                     # regions outside the try to carry in their
                     # own terms, exactly as the same end behaves
-                    # standing outside a try. A raised end from
-                    # the else arm leaves on the same terms,
-                    # judged by the same names.
+                    # standing outside a try.
                     completed.append(end)
                 # An end that returned was frozen toward the
                 # whole test when it ended. A raised end a

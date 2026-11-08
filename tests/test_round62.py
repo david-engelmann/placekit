@@ -52,10 +52,30 @@ is, for the regions outside to carry in their own terms,
 while a seat that is not a plain name, a bare handler, and
 a seat naming a base error class each keep the shipped
 join whole, and a raise whose expression carries no
-statically plain name keeps it too. The last four pins
+statically plain name keeps it too. Four pins
 cover the assert form, the raise form, the matching
 handler control, and the non plain seat that fences the
 repair.
+
+The delta review of the second repair named one
+remainder standing beyond the ruling that bounded it,
+and the owner overruled that bound. A raised path of a
+try else arm was judged by the same names as a raised
+path of the body, so an assert or a raise standing in
+an else arm under a handler naming its own error kept
+the shipped credit while never loading at runtime,
+because an error raised in an else arm is never caught
+by the handlers of its own try, on any name, the else
+arm standing outside the region those handlers guard.
+The third repair takes the names out of the else arm
+question altogether. A raised path of the else arm
+leaves the try as the raised path it is, on every seat
+plain or not, exactly as the same path behaves standing
+outside a try, and the fence the second repair drew is
+never reached for such a path, because no seat is read
+at all. The last two pins cover the assert form and
+the raise form in that seat, each under a handler
+naming the very error the statement raises.
 """
 
 from __future__ import annotations
@@ -328,3 +348,61 @@ def test_linkage_call_after_an_assert_in_a_try_body_with_an_attribute_handler_se
         """
     )
     assert loaded == {CLAIMED, OTHER}
+
+
+def test_linkage_call_after_an_assert_in_a_try_else_arm_with_a_matching_handler_earns_no_credit():
+    # Round 62, the remainder of the try seat, the assert
+    # form. The handler names the very error the assert
+    # raises, and still the failure is never caught at
+    # runtime, because the else arm stands outside the
+    # region the handlers of its own try guard, so the
+    # error abandons the rest of the with body on its way
+    # to the manager and the call after the try never runs.
+    # The walk reads no handler name for a raised path of
+    # the else arm, so the path leaves the try as it
+    # stands, the manager resumes it after the block
+    # holding nothing, and the join strips the call.
+    loaded = _loads(
+        f"""
+        def test_shape(client, raw_response):
+            from contextlib import suppress
+            fixture_name = "{OTHER}"
+            with suppress(AssertionError):
+                try:
+                    pass
+                except AssertionError:
+                    pass
+                else:
+                    assert False
+                after = search(client, raw_response, "{CLAIMED}")
+            result = search(client, raw_response, fixture_name)
+        """
+    )
+    assert loaded == {OTHER}
+
+
+def test_linkage_call_after_a_raise_in_a_try_else_arm_with_a_matching_handler_earns_no_credit():
+    # Round 62, the remainder of the try seat, the raise
+    # twin. The raise constructs the very error the handler
+    # names, and the seat is identical to the assert form
+    # for the same reason, because no name a seat carries
+    # can catch an error the else arm raises. Its path
+    # leaves the try without a name being read, exactly as
+    # the assert path in the pin above leaves it.
+    loaded = _loads(
+        f"""
+        def test_shape(client, raw_response):
+            from contextlib import suppress
+            fixture_name = "{OTHER}"
+            with suppress(AssertionError):
+                try:
+                    pass
+                except AssertionError:
+                    pass
+                else:
+                    raise AssertionError("stop")
+                after = search(client, raw_response, "{CLAIMED}")
+            result = search(client, raw_response, fixture_name)
+        """
+    )
+    assert loaded == {OTHER}
