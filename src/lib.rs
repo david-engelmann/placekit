@@ -1361,4 +1361,392 @@ mod tests {
             _ => panic!("a core error must pass through as itself"),
         }
     }
+
+    /// One component in the plain form the bindings consume,
+    /// built the way the core test module builds its component
+    /// data, so the bindings tests below drive the same shapes
+    /// the core tests do.
+    fn py_comp(long: Option<&str>, short: Option<&str>, types: &[&str]) -> PyComponent {
+        (
+            long.map(|text| text.as_bytes().to_vec()),
+            short.map(|text| text.as_bytes().to_vec()),
+            types
+                .iter()
+                .map(|name| Some(name.as_bytes().to_vec()))
+                .collect(),
+        )
+    }
+
+    /// One row of the component flags battery below, a
+    /// component set beside the seven slot readings it must
+    /// produce, in the tuple order the flags doc states.
+    type FlagsCase = (Vec<PyComponent>, (bool, bool, bool, bool, bool, bool, bool));
+
+    /// The pin for the city row conversion the Round 63 audit
+    /// named. Three of the six slots carry the same type, an
+    /// optional byte string holding the value, the country code
+    /// and the competing value, and two more carry an optional
+    /// string, so a transposition inside either family compiles
+    /// cleanly and only a test with a distinct sentinel in every
+    /// field catches it. The full shape puts a different value
+    /// in all six fields, the empty shape pins where every
+    /// absence lands, and the asymmetric shape pins the string
+    /// pair when only the competing side is populated.
+    #[test]
+    fn city_to_py_keeps_every_field_in_its_own_slot() {
+        let full = placekit_core::address::CityResolution {
+            value: Some(b"city-value".to_vec()),
+            carrier: Some("carrier-main"),
+            confidence: "confidence-grade",
+            country_code: Some(b"CC".to_vec()),
+            competing_value: Some(b"rival-value".to_vec()),
+            competing_carrier: Some("carrier-rival"),
+        };
+        assert_eq!(
+            city_to_py(full),
+            (
+                Some(b"city-value".to_vec()),
+                Some("carrier-main".to_owned()),
+                "confidence-grade".to_owned(),
+                Some(b"CC".to_vec()),
+                Some(b"rival-value".to_vec()),
+                Some("carrier-rival".to_owned()),
+            )
+        );
+        let empty = placekit_core::address::CityResolution {
+            value: None,
+            carrier: None,
+            confidence: "none",
+            country_code: None,
+            competing_value: None,
+            competing_carrier: None,
+        };
+        assert_eq!(
+            city_to_py(empty),
+            (None, None, "none".to_owned(), None, None, None)
+        );
+        let asymmetric = placekit_core::address::CityResolution {
+            value: None,
+            carrier: None,
+            confidence: "contested",
+            country_code: None,
+            competing_value: Some(b"rival-value".to_vec()),
+            competing_carrier: Some("carrier-rival"),
+        };
+        assert_eq!(
+            city_to_py(asymmetric),
+            (
+                None,
+                None,
+                "contested".to_owned(),
+                None,
+                Some(b"rival-value".to_vec()),
+                Some("carrier-rival".to_owned()),
+            )
+        );
+    }
+
+    /// The pin for the lazy read protocol the Round 63 audit
+    /// named, and for the row shape that travels with it. An
+    /// unread postal locality on a chain that reaches the postal
+    /// carrier answers the needs flag with an empty row list,
+    /// and the flag is the only thing separating that answer
+    /// from a finished chain whose one row is the no city row,
+    /// so both answers are pinned here. The contested British
+    /// set pins the row conversion inside the done arm, two
+    /// rows whose value and competing value trade places.
+    #[test]
+    fn address_city_resolutions_pins_the_lazy_protocol_and_row_order() {
+        // Unread, on the generic chain with nothing read locally.
+        let (needs, rows) = address_city_resolutions(Vec::new(), false, Some(b"US".to_vec()), None);
+        assert!(needs);
+        assert!(rows.is_empty());
+        // Unread on the Emirates chain, which also falls to the
+        // postal carrier when no locality component stands.
+        let (needs, rows) = address_city_resolutions(Vec::new(), false, Some(b"AE".to_vec()), None);
+        assert!(needs);
+        assert!(rows.is_empty());
+        // Read with a value in hand, the done arm carries the
+        // postal reading in its one row, in field order.
+        let (needs, rows) = address_city_resolutions(
+            Vec::new(),
+            true,
+            Some(b"US".to_vec()),
+            Some(b"PostalVille".to_vec()),
+        );
+        assert!(!needs);
+        assert_eq!(
+            rows,
+            vec![(
+                Some(b"PostalVille".to_vec()),
+                Some("postal_address_locality".to_owned()),
+                "heuristic".to_owned(),
+                Some(b"US".to_vec()),
+                None,
+                None,
+            )]
+        );
+        // Read with no value, the done arm carries the no city
+        // row, which the flag alone separates from the unread
+        // answer above.
+        let (needs, rows) = address_city_resolutions(Vec::new(), true, Some(b"US".to_vec()), None);
+        assert!(!needs);
+        assert_eq!(
+            rows,
+            vec![(
+                None,
+                None,
+                "none".to_owned(),
+                Some(b"US".to_vec()),
+                None,
+                None
+            )]
+        );
+        // The contested British set answers done at once, two
+        // rows with the rival text in the competing slot of each.
+        let components = vec![
+            py_comp(Some("AlphaCity"), None, &["locality"]),
+            py_comp(Some("BetaTown"), None, &["postal_town"]),
+        ];
+        let (needs, rows) = address_city_resolutions(components, false, Some(b"GB".to_vec()), None);
+        assert!(!needs);
+        assert_eq!(
+            rows,
+            vec![
+                (
+                    Some(b"AlphaCity".to_vec()),
+                    Some("locality".to_owned()),
+                    "contested".to_owned(),
+                    Some(b"GB".to_vec()),
+                    Some(b"BetaTown".to_vec()),
+                    Some("postal_town".to_owned()),
+                ),
+                (
+                    Some(b"BetaTown".to_vec()),
+                    Some("postal_town".to_owned()),
+                    "contested".to_owned(),
+                    Some(b"GB".to_vec()),
+                    Some(b"AlphaCity".to_vec()),
+                    Some("locality".to_owned()),
+                ),
+            ]
+        );
+    }
+
+    /// The pin for the district tuple the Round 63 audit named.
+    /// The value and the country code are both optional byte
+    /// strings, so the unrouted shape is the sharp one. It
+    /// carries a district shaped component the reading must not
+    /// take, and a transposition of the two byte slots would
+    /// put the country bytes in the value slot of a row that
+    /// should stand empty everywhere but the country slot.
+    #[test]
+    fn address_district_resolution_keeps_value_and_country_apart() {
+        let japan = vec![py_comp(
+            Some("DistrictValue"),
+            None,
+            &["sublocality_level_2"],
+        )];
+        assert_eq!(
+            address_district_resolution(japan, Some(b"JP".to_vec())),
+            (
+                Some(b"DistrictValue".to_vec()),
+                Some("sublocality_level_2".to_owned()),
+                "primary".to_owned(),
+                Some(b"JP".to_vec()),
+            )
+        );
+        let emirates = vec![py_comp(
+            Some("EmirateDistrict"),
+            None,
+            &["sublocality_level_1"],
+        )];
+        assert_eq!(
+            address_district_resolution(emirates, Some(b"AE".to_vec())),
+            (
+                Some(b"EmirateDistrict".to_vec()),
+                Some("sublocality_level_1".to_owned()),
+                "primary".to_owned(),
+                Some(b"AE".to_vec()),
+            )
+        );
+        let unrouted = vec![py_comp(
+            Some("DistrictValue"),
+            None,
+            &["sublocality_level_2"],
+        )];
+        assert_eq!(
+            address_district_resolution(unrouted, Some(b"US".to_vec())),
+            (None, None, "none".to_owned(), Some(b"US".to_vec()))
+        );
+        assert_eq!(
+            address_district_resolution(Vec::new(), Some(b"JP".to_vec())),
+            (None, None, "none".to_owned(), Some(b"JP".to_vec()))
+        );
+    }
+
+    /// The pin for the postal code tuple the Round 63 audit
+    /// named. The function returns the city row type with its
+    /// status standing in the slot the city tuple uses for its
+    /// confidence, so the status word is pinned in that slot on
+    /// every shape, and the component and postal values are
+    /// distinct sentinels no slot shares with another.
+    #[test]
+    fn address_postal_code_result_places_status_in_the_confidence_slot() {
+        // Both carriers, different codes. The component value
+        // headlines and the postal value competes.
+        assert_eq!(
+            address_postal_code_result(
+                Some(b"CC".to_vec()),
+                Some(b"COMP-111".to_vec()),
+                Some(b"POST-222".to_vec()),
+            ),
+            (
+                Some(b"COMP-111".to_vec()),
+                Some("postal_code".to_owned()),
+                "present".to_owned(),
+                Some(b"CC".to_vec()),
+                Some(b"POST-222".to_vec()),
+                Some("postal_address_postal_code".to_owned()),
+            )
+        );
+        // Both carriers, the same code. One value under the
+        // combined carrier and no competing side.
+        assert_eq!(
+            address_postal_code_result(
+                Some(b"CC".to_vec()),
+                Some(b"SAME-9".to_vec()),
+                Some(b"SAME-9".to_vec()),
+            ),
+            (
+                Some(b"SAME-9".to_vec()),
+                Some("both_postal_carriers".to_owned()),
+                "present".to_owned(),
+                Some(b"CC".to_vec()),
+                None,
+                None,
+            )
+        );
+        // The component carrier alone.
+        assert_eq!(
+            address_postal_code_result(Some(b"CC".to_vec()), Some(b"COMP-111".to_vec()), None),
+            (
+                Some(b"COMP-111".to_vec()),
+                Some("postal_code".to_owned()),
+                "present".to_owned(),
+                Some(b"CC".to_vec()),
+                None,
+                None,
+            )
+        );
+        // The postal carrier alone. Its value headlines under
+        // its own carrier name.
+        assert_eq!(
+            address_postal_code_result(Some(b"CC".to_vec()), None, Some(b"POST-222".to_vec())),
+            (
+                Some(b"POST-222".to_vec()),
+                Some("postal_address_postal_code".to_owned()),
+                "present".to_owned(),
+                Some(b"CC".to_vec()),
+                None,
+                None,
+            )
+        );
+        // Neither carrier. The absent status stands in the
+        // status slot and the country code still lands in its
+        // own slot, the shape a transposition of the two byte
+        // slots cannot hide inside.
+        assert_eq!(
+            address_postal_code_result(Some(b"CC".to_vec()), None, None),
+            (
+                None,
+                None,
+                "absent".to_owned(),
+                Some(b"CC".to_vec()),
+                None,
+                None
+            )
+        );
+    }
+
+    /// The pin for the component flags tuple the Round 63 audit
+    /// named, seven booleans in one tuple with no type signal
+    /// anywhere if two of them trade places. The battery gives
+    /// every slot a distinct truth signature across its sets, so
+    /// a transposition of any pair changes at least one expected
+    /// row. The sets also pin the composite rules the tuple
+    /// carries, that a premise counts as premise level only with
+    /// no street number and no route beside it, that spanning
+    /// takes two routes carrying text, and that the empty set
+    /// is the one shape standing with no street level.
+    #[test]
+    fn address_component_flags_keeps_all_seven_slots_in_order() {
+        let cases: Vec<FlagsCase> = vec![
+            // The empty set. No street level is its only truth.
+            (Vec::new(), (false, false, false, false, false, false, true)),
+            // A street number alone.
+            (
+                vec![py_comp(Some("42"), None, &["street_number"])],
+                (true, false, false, false, false, false, false),
+            ),
+            // One route carrying text.
+            (
+                vec![py_comp(Some("RouteText"), None, &["route"])],
+                (false, true, false, false, false, false, false),
+            ),
+            // Two routes carrying text span.
+            (
+                vec![
+                    py_comp(Some("RouteOne"), None, &["route"]),
+                    py_comp(Some("RouteTwo"), None, &["route"]),
+                ],
+                (false, true, false, false, false, true, false),
+            ),
+            // Two routes where one carries no text do not span.
+            (
+                vec![
+                    py_comp(Some("RouteOne"), None, &["route"]),
+                    py_comp(None, None, &["route"]),
+                ],
+                (false, true, false, false, false, false, false),
+            ),
+            // A premise alone is premise level.
+            (
+                vec![py_comp(Some("PremiseText"), None, &["premise"])],
+                (false, false, true, false, true, false, false),
+            ),
+            // A subpremise alone.
+            (
+                vec![py_comp(Some("SubText"), None, &["subpremise"])],
+                (false, false, false, true, false, false, false),
+            ),
+            // A premise with a street number is not premise level.
+            (
+                vec![
+                    py_comp(Some("PremiseText"), None, &["premise"]),
+                    py_comp(Some("42"), None, &["street_number"]),
+                ],
+                (true, false, true, false, false, false, false),
+            ),
+            // A premise with a route is not premise level.
+            (
+                vec![
+                    py_comp(Some("PremiseText"), None, &["premise"]),
+                    py_comp(Some("RouteText"), None, &["route"]),
+                ],
+                (false, true, true, false, false, false, false),
+            ),
+            // A street number with a subpremise.
+            (
+                vec![
+                    py_comp(Some("42"), None, &["street_number"]),
+                    py_comp(Some("SubText"), None, &["subpremise"]),
+                ],
+                (true, false, false, true, false, false, false),
+            ),
+        ];
+        for (components, expected) in cases {
+            assert_eq!(address_component_flags(components), expected);
+        }
+    }
 }
