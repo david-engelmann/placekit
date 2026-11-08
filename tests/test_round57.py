@@ -7,8 +7,10 @@ shape stated nowhere in the document. These pins hold both
 repairs. The keyword sets are derived from the client signatures
 with inspect, never pasted into this file, so a keyword added to
 a call and left untaught fails here. The price level pin reads
-the values the README itself spells and drives them through a
-call against the offline stub, proving the client takes them.
+the values the README itself spells, checks them against the
+five value vocabulary held in this file as an oracle, and
+drives them through a call against the offline stub, proving
+the client takes them.
 
 The spelling guard covers the four read calls whose keyword
 surface the endpoints passage and its neighbouring passages
@@ -31,6 +33,26 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 
 READ_CALLS = ("text_search", "nearby_search", "place_details", "autocomplete")
 ALL_CALLS = READ_CALLS + ("place_photo",)
+
+#: The full price level vocabulary the API defines, held in
+#: this file as the oracle for the price level pin. The shipped
+#: Python surface states no price level constants family, in
+#: the fields module or the types module or anywhere else, so
+#: the set cannot be derived by import, and the README under
+#: test cannot be its own oracle. The vocabulary is closed at
+#: these five values under the Round 7 settlement, and the
+#: constants census pattern of holding the expected truth in
+#: the test is the house shape for a closed set. The sixth
+#: enum name, PRICE_LEVEL_UNSPECIFIED, is the unset sentinel
+#: for a place with no level rather than a value a filter can
+#: select, so it stands outside the taught set.
+PRICE_LEVEL_VALUES = (
+    "PRICE_LEVEL_FREE",
+    "PRICE_LEVEL_INEXPENSIVE",
+    "PRICE_LEVEL_MODERATE",
+    "PRICE_LEVEL_EXPENSIVE",
+    "PRICE_LEVEL_VERY_EXPENSIVE",
+)
 
 
 @pytest.fixture()
@@ -80,13 +102,19 @@ def test_readme_spells_every_keyword_of_the_read_calls(method_name):
 
 
 def test_readme_price_level_values_reach_the_wire(client, stub_server):
-    # The values are read out of the README itself, so the pin
-    # holds whatever the document teaches, and the recorded
-    # request body proves the client accepts each taught value
-    # and sends it under the wire name.
+    # The values are read out of the README itself, and the
+    # recorded request body proves the client accepts each taught
+    # value and sends it under the wire name. The taught set is
+    # first checked against the oracle, because the client passes
+    # price values through unvalidated by design, so a corrupted
+    # teaching would otherwise reach the wire under a green suite.
     readme = (REPO_ROOT / "README.md").read_text()
     taught = sorted(set(re.findall(r"PRICE_LEVEL_[A-Z_]+", readme)))
     assert taught, "the README spells no price level values"
+    assert taught == sorted(PRICE_LEVEL_VALUES), (
+        f"the README teaches {taught} and the price level "
+        f"vocabulary is {sorted(PRICE_LEVEL_VALUES)}"
+    )
     client.text_search("cafes in Sydney", price_levels=taught)
     body = json.loads(stub_server.last_request["body"])
     assert body["priceLevels"] == taught
