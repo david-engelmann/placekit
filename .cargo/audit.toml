@@ -1,0 +1,25 @@
+# Advisory dispositions for cargo audit. Each ignored advisory
+# below names a function in the locked PyO3 0.23.5 that no code
+# in this workspace calls, so the vulnerable path is present in
+# the compiled dependency and unreachable from anything this
+# project ships. The Round 58 audit verified the reach by
+# direct search of the workspace sources and of pythonize
+# 0.23.0, the only other PyO3 consumer in the lock. An entry
+# stands only while that reach statement stays true, and any
+# advisory not named here still fails the audit.
+
+[advisories]
+ignore = [
+    # RUSTSEC-2025-0020. Risk of buffer overflow in PyString
+    # from_object and its bound variant. No caller of either
+    # function exists in the workspace sources, and PyString
+    # itself is unused there. pythonize 0.23.0 calls from_object
+    # only on its own Depythonizer type and on PyIterator,
+    # never on PyString.
+    "RUSTSEC-2025-0020",
+    # RUSTSEC-2026-0177. Missing Sync bound on closures handed
+    # to PyCFunction new_closure. No caller of new_closure
+    # exists in the workspace sources or in pythonize 0.23.0,
+    # and PyCFunction is unused in both.
+    "RUSTSEC-2026-0177",
+]
