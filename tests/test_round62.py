@@ -128,11 +128,46 @@ body by reading it. The hand on stands at the join
 itself and is not read off the standing of the walk
 inside a try, because the seat is the join and the
 path outside any try is the same path in the same
-join. The last five pins cover the assert form in a
+join. Five pins cover the assert form in a
 try body, the raise twin in the same seat, the
 assert form outside any try, the raise form in a
 later arm, and the control whose handler names the
 error the arm raises.
+
+The completeness census of the fifth repair read the
+statement walk whole and found the genus standing at
+three more seats, each decidable from the shape alone
+and each latent in the shipped corpus. A with whose
+manager plainly could not suppress the raised error
+still manufactured a resumed path wherever the with
+stood outside a try, because the name reading the
+fourth repair built reached only inside a try body.
+A conditional on a constant test dropped the raised
+path of the arm the constant selects at its join,
+because the walk never evaluated the test, though it
+reads constant tests at an assert and at a while. And
+a class body raise ended the enclosing path at the
+branch check while emitting no path for an enclosing
+region to judge, so inside a try the handler paths
+carried the credit for an error no handler catches,
+and inside a match the path where no arm fits carried
+it. The sixth repair closes the three seats at their
+roots. The managers of a with are read by name on
+every seat, so a path the one manager could not
+suppress leaves the with as the raised path it is
+for the enclosing regions to carry in their own
+terms, while a path a try has already judged keeps
+the conversion outside a try, where no judgement
+seat stands beyond the with. A conditional whose
+test stands as a constant walks only the arm the
+constant selects. And the class branch hands a
+raised path of its body to the enclosing block, for
+a try to judge by its seats and a match to hand
+onward with its arm paths. The last six pins cover
+the nested with in its raise and assert forms
+standing alone outside a try, the resolving nested
+with as a control, the constant conditional in both
+directions, and the class body raise inside a try.
 """
 
 from __future__ import annotations
@@ -789,3 +824,165 @@ def test_linkage_call_after_a_raise_in_a_match_arm_under_a_handler_naming_it_sti
         """
     )
     assert loaded == {CLAIMED, OTHER}
+
+
+def test_linkage_call_after_a_raise_under_an_inner_with_suppressing_another_error_outside_a_try_earns_no_credit():
+    # Round 62, completeness census, the first finding,
+    # the raise form standing alone. The inner manager
+    # names KeyError and the path raises ValueError, so
+    # at runtime the path leaves the inner with and
+    # resumes only after the outer with, and the call
+    # standing after the inner with in the outer body
+    # never runs. The walk read no name at a with
+    # outside a try, so the inner with manufactured a
+    # resumed path holding its state at the raise and
+    # the call credited on it. The managers of a with
+    # are now read by name on every seat, so the path
+    # leaves the inner with as the raised path it is,
+    # and the outer manager resumes it after its own
+    # block holding nothing for the call.
+    loaded = _loads(
+        f"""
+        def test_shape(client, raw_response):
+            from contextlib import suppress
+            fixture_name = "{OTHER}"
+            with suppress(ValueError):
+                with suppress(KeyError):
+                    raise ValueError("stop")
+                after = search(client, raw_response, "{CLAIMED}")
+            result = search(client, raw_response, fixture_name)
+        """
+    )
+    assert loaded == {OTHER}
+
+
+def test_linkage_call_after_an_assert_under_an_inner_with_suppressing_another_error_outside_a_try_earns_no_credit():
+    # Round 62, completeness census, the first finding,
+    # the assert twin. The two statements stand in the
+    # same seat, because the conversion the shipped walk
+    # gave a raised path outside a try read no name for
+    # either kind. The assert path now leaves the inner
+    # with on the same terms as the raise path in the
+    # pin above, under the name every assert shares.
+    loaded = _loads(
+        f"""
+        def test_shape(client, raw_response):
+            from contextlib import suppress
+            fixture_name = "{OTHER}"
+            with suppress(AssertionError):
+                with suppress(KeyError):
+                    assert False
+                after = search(client, raw_response, "{CLAIMED}")
+            result = search(client, raw_response, fixture_name)
+        """
+    )
+    assert loaded == {OTHER}
+
+
+def test_linkage_call_after_a_raise_under_an_inner_with_suppressing_its_own_error_outside_a_try_still_credits():
+    # Positive control for the name reading on every
+    # seat. The inner manager names the very error the
+    # path raises, so it suppresses the failure inside
+    # the body at runtime and the call after the inner
+    # with truly runs. The path the manager names is
+    # resolved at the with exactly as it was before, so
+    # the credit is untouched, and the pin fails the
+    # day the reading starts refusing paths a named
+    # manager genuinely suppresses.
+    loaded = _loads(
+        f"""
+        def test_shape(client, raw_response):
+            from contextlib import suppress
+            fixture_name = "{OTHER}"
+            with suppress(ValueError):
+                with suppress(ValueError):
+                    raise ValueError("stop")
+                after = search(client, raw_response, "{CLAIMED}")
+            result = search(client, raw_response, fixture_name)
+        """
+    )
+    assert loaded == {CLAIMED, OTHER}
+
+
+def test_linkage_call_after_a_raise_in_the_arm_a_true_constant_selects_earns_no_credit():
+    # Round 62, completeness census, the second finding,
+    # the true constant direction. The test selects its
+    # arm on every path, so the raise ends the with body
+    # at runtime and the call after the conditional
+    # never runs. The walk never evaluated the test, so
+    # it dropped the raised path at the join and the
+    # arm it rules out carried the call. A test standing
+    # as a constant is now read the way the walk reads
+    # the test of an assert and the test of a while, and
+    # only the arm the constant selects is walked.
+    loaded = _loads(
+        f"""
+        def test_shape(client, raw_response):
+            from contextlib import suppress
+            fixture_name = "{OTHER}"
+            with suppress(RuntimeError):
+                if True:
+                    raise RuntimeError("stop")
+                after = search(client, raw_response, "{CLAIMED}")
+            result = search(client, raw_response, fixture_name)
+        """
+    )
+    assert loaded == {OTHER}
+
+
+def test_linkage_call_after_a_raise_in_the_else_arm_a_false_constant_selects_earns_no_credit():
+    # Round 62, completeness census, the second finding,
+    # the false constant direction. The raising arm is
+    # the else arm here, and the constant rules the
+    # written arm out instead. The seat is the reading
+    # and not the arm that carries the statement, so
+    # this pin fails the day the walk goes back to
+    # walking both arms of a constant test or narrows
+    # the reading to the written arm alone.
+    loaded = _loads(
+        f"""
+        def test_shape(client, raw_response):
+            from contextlib import suppress
+            fixture_name = "{OTHER}"
+            with suppress(RuntimeError):
+                if False:
+                    pass
+                else:
+                    raise RuntimeError("stop")
+                after = search(client, raw_response, "{CLAIMED}")
+            result = search(client, raw_response, fixture_name)
+        """
+    )
+    assert loaded == {OTHER}
+
+
+def test_linkage_call_after_a_class_body_raise_in_a_try_under_a_mismatched_handler_earns_no_credit():
+    # Round 62, completeness census, the third finding.
+    # The raise stands in a class body inside the body
+    # of a try whose handler names a different error, so
+    # at runtime the error leaves the definition, passes
+    # the handlers by, and abandons the rest of the with
+    # body on its way to the manager. The class branch
+    # ended the enclosing path at its own check and
+    # emitted no path, so the handler paths carried the
+    # call after the try for an error they never catch.
+    # The branch now hands the raised path of its body
+    # to the enclosing block, the try judges it by its
+    # seats and lets it leave, and the manager resumes
+    # it after the block holding nothing for the call.
+    loaded = _loads(
+        f"""
+        def test_shape(client, raw_response):
+            from contextlib import suppress
+            fixture_name = "{OTHER}"
+            with suppress(RuntimeError):
+                try:
+                    class Box:
+                        raise RuntimeError("stop")
+                except KeyError:
+                    pass
+                after = search(client, raw_response, "{CLAIMED}")
+            result = search(client, raw_response, fixture_name)
+        """
+    )
+    assert loaded == {OTHER}
