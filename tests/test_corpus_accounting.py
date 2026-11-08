@@ -3744,7 +3744,23 @@ def _fixtures_a_test_loads(
     no name read at all, because the else arm stands
     outside the region the handlers of its own try guard
     and no handler of that try can catch an error the
-    else arm raises, whatever the seats name. A with
+    else arm raises, whatever the seats name. A raised
+    path arising inside the body of a try reaches that
+    judgement whole, because the joins it meets inside
+    the body hand it onward rather than ending it where
+    they stand. A conditional arm, a loop body and its
+    else arm, and a nested with each pass the path to the
+    enclosing block on the terms their walks state, and
+    a raised path of a handler body leaves the try
+    statement outright, because no handler of a try
+    catches an error a handler body raises. Inside the
+    body of a try, a nested with whose one manager stands
+    as a suppress call under plain names resolves only
+    the paths whose error it names, and a path whose
+    error it could not suppress leaves the with as the
+    raised path it is for the try to judge. Outside the
+    body of a try those joins keep the treatment the
+    walk has always given them. A with
     body forks like any other region, its raised paths
     resuming after the with holding their state at the
     raise, because a context manager may suppress the
@@ -3833,9 +3849,10 @@ def _fixtures_a_test_loads(
     unbound = object()
     # The walk state record holds whether the path being
     # walked is still alive, the credit frozen by the paths
-    # that have already returned, and the depth of credit
-    # suppression in force, one record every branch shares.
-    flow = {"alive": True, "finished": None, "suppress": 0}
+    # that have already returned, the depth of credit
+    # suppression in force, and the depth of try regions the
+    # walk stands inside, one record every branch shares.
+    flow = {"alive": True, "finished": None, "suppress": 0, "try": 0}
     # The statically plain name each raised path end stands
     # under, where its raise expression carries one, recorded
     # beside the end itself as the walk creates it, so a try
@@ -3845,6 +3862,14 @@ def _fixtures_a_test_loads(
     # raise expression carries no plain name stands here with
     # None in its place.
     raise_end_names = []
+    # The raised path ends a try has already judged and sent
+    # out of itself, recorded by the end itself as the walk
+    # hands it onward. A region the end crosses on its way
+    # out reads the end here and hands it onward in its turn
+    # where its own join would otherwise end it, because no
+    # region between the try and the block that carries the
+    # end in its own terms has a mechanism that resolves it.
+    travelled_ends = []
     try_types = (ast.Try,)
     if hasattr(ast, "TryStar"):
         try_types = try_types + (ast.TryStar,)
@@ -4320,6 +4345,21 @@ def _fixtures_a_test_loads(
         else arm alike, for the regions outside the loop to
         carry in their own terms.
 
+        An end of the raise kind is handed onward on two
+        further terms and ends at this join on every other.
+        A raise standing inside a try body belongs to that
+        try, whose join judges the ends its body hands it,
+        so the loop hands the end to the enclosing block
+        rather than dropping it before the try can judge it.
+        And a raise a try standing inside the body has
+        already judged and sent out of itself, read by the
+        travelled record the walk keeps, was resolved by no
+        mechanism this join carries, so it crosses the loop
+        the same way. The hand on is from a body pass and
+        from the else arm alike, with the loop end state
+        applied to a body end as the assert hand on applies
+        it.
+
         The environment a body end carries into the join is
         the state the interpreter leaves behind, not the state
         the walked pass ends holding. When the caller supplies
@@ -4368,21 +4408,26 @@ def _fixtures_a_test_loads(
             of the assert kind abandons the loop from the
             arm as it does from the body, so it is handed to
             the enclosing block unchanged in kind instead.
+            An end of the raise kind the walk carries onward,
+            on the terms the body hand on states, leaves
+            the arm the same way.
             """
             ends = []
-            for end_env, end_loaded, kind in walk_paths(
-                orelse, base_env, base_loaded
-            ):
-                if kind == "assert":
-                    completed.append((end_env, end_loaded, "assert"))
+            for end in walk_paths(orelse, base_env, base_loaded):
+                if end[2] == "assert":
+                    completed.append(end)
+                elif end[2] == "raise" and (
+                    flow["try"] > 0 or end_travelled(end)
+                ):
+                    completed.append(end)
+                    mark_travelled(end)
                 else:
-                    ends.append((end_env, end_loaded, kind))
+                    ends.append(end)
             return ends
 
         path_ends = []
-        for end_env, end_loaded, kind in walk_paths(
-            body, pre_env, pre_loaded, prepare
-        ):
+        for end in walk_paths(body, pre_env, pre_loaded, prepare):
+            end_env, end_loaded, kind = end
             if kind in ("fall", "continue"):
                 end_env = end_state(end_env)
                 path_ends.append((end_env, end_loaded, "fall"))
@@ -4397,6 +4442,30 @@ def _fixtures_a_test_loads(
                 # carry a raised path onward can carry it in
                 # their own terms.
                 completed.append((end_state(end_env), end_loaded, "assert"))
+            elif kind == "raise" and (
+                flow["try"] > 0 or end_travelled(end)
+            ):
+                # A raised path the loop hands onward rather
+                # than ends, on the terms the walk above
+                # states. Inside a try body the path belongs
+                # to the try, whose join cannot judge an end
+                # this join drops where it stands, and a path
+                # a try inside the body has already sent out
+                # of itself was resolved by nothing the loop
+                # carries. Outside those terms a raise ending
+                # in the body keeps the treatment the shipped
+                # walk gives it and ends at this join. The
+                # handed end takes the loop end state, so it
+                # is a new end, and the plain name the path
+                # stands under is recorded beside it afresh,
+                # because the name travels with the path and
+                # the regions outside read it from the end.
+                handed = (end_state(end_env), end_loaded, "raise")
+                completed.append(handed)
+                mark_travelled(handed)
+                plain_name = raised_end_name(end)
+                if plain_name is not None:
+                    raise_end_names.append((handed, plain_name))
         if not guaranteed:
             path_ends.extend(orelse_ends(pre_env, pre_loaded))
         join_ends(path_ends, completed)
@@ -4592,18 +4661,87 @@ def _fixtures_a_test_loads(
                 names.add(name)
         return frozenset(names)
 
+    def raised_end_name(end):
+        """The plain error name a raised path end stands under.
+
+        An end of the assert kind raises the error of the
+        assert statement, whose name every assert shares. An
+        end of the raise kind raises the error its raise
+        expression stands under, recorded beside the end when
+        the walk created it. An end whose expression carried
+        no plain name stands under None, because no static
+        reading can name the error it raises.
+        """
+        if end[2] == "assert":
+            return "AssertionError"
+        for raised_end, plain_name in raise_end_names:
+            if raised_end is end:
+                return plain_name
+        return None
+
+    def mark_travelled(end):
+        """Record a raised path end a try has sent out of itself."""
+        travelled_ends.append(end)
+
+    def end_travelled(end):
+        """Whether a try has already judged this raised path end."""
+        return any(travelled is end for travelled in travelled_ends)
+
+    def plain_suppress_names(items):
+        """The error names a with its managers could suppress, read by name.
+
+        The result is the set of names the managers name when
+        the with carries exactly one item and that item calls
+        the suppress manager by its bare name with only plain
+        names, or tuples of plain names, standing as its
+        arguments, and None on every other shape, a second
+        item standing beside the first, a manager reached by
+        an attribute or built by a call, an argument that is
+        not a plain name, a keyword argument, or a named class
+        that is one of the base error classes. On a None result
+        the question of what the managers suppress is not one
+        a static reading can settle by name, so the with keeps
+        the shipped conversion for every raised path it
+        carries.
+        """
+        if len(items) != 1:
+            return None
+        expression = items[0].context_expr
+        if not isinstance(expression, ast.Call):
+            return None
+        if not (
+            isinstance(expression.func, ast.Name)
+            and expression.func.id == "suppress"
+        ):
+            return None
+        if expression.keywords:
+            return None
+        names = set()
+        for argument in expression.args:
+            if isinstance(argument, ast.Name):
+                named = (argument.id,)
+            elif isinstance(argument, ast.Tuple):
+                named = []
+                for element in argument.elts:
+                    if not isinstance(element, ast.Name):
+                        return None
+                    named.append(element.id)
+            else:
+                return None
+            for name in named:
+                if name in ("Exception", "BaseException"):
+                    return None
+                names.add(name)
+        return frozenset(names)
+
     def raised_end_leaves(end, catch_names):
         """Whether a raised path end leaves a try instead of rejoining it.
 
         The end leaves when the handlers of the try all stand
         under plain names, read by plain_catch_names, and no
-        name among them could catch the error the end raises.
-        An end of the assert kind raises the error of the
-        assert statement, whose name every assert shares. An
-        end of the raise kind raises the error its raise
-        expression stands under, recorded beside the end when
-        the walk created it, and an end whose expression
-        carried no plain name never leaves, because the
+        name among them could catch the error the end raises,
+        read from the end by raised_end_name. An end whose
+        error carries no plain name never leaves, because the
         shipped join is the only treatment a static reading
         can give it. A try whose seats are not all plain, where
         catch_names reads None, lets no end leave either, so
@@ -4612,16 +4750,9 @@ def _fixtures_a_test_loads(
         """
         if catch_names is None:
             return False
-        if end[2] == "assert":
-            name = "AssertionError"
-        else:
-            name = None
-            for raised_end, plain_name in raise_end_names:
-                if raised_end is end:
-                    name = plain_name
-                    break
-            if name is None:
-                return False
+        name = raised_end_name(end)
+        if name is None:
+            return False
         return name not in catch_names
 
     def walk_stmt(statement, completed):
@@ -4845,6 +4976,22 @@ def _fixtures_a_test_loads(
             base_loaded = set(loaded)
             ends = walk_paths(statement.body, base_env, base_loaded)
             ends.extend(walk_paths(statement.orelse, base_env, base_loaded))
+            # A raised path of an arm is handed to the
+            # enclosing block before the join on two terms,
+            # and ends at the join on every other. Inside a
+            # try body the path belongs to the try, whose join
+            # cannot judge an end this join drops where it
+            # stands. And a path a try standing inside an arm
+            # has already judged and sent out of itself, read
+            # by the travelled record, was resolved by no
+            # mechanism this join carries. A raise or an
+            # assert standing in an arm outside those terms
+            # keeps the treatment the shipped walk gives it.
+            for end in ends:
+                if end[2] in ("raise", "assert") and (
+                    flow["try"] > 0 or end_travelled(end)
+                ):
+                    completed.append(end)
             # The path ends feeding the join are the ends of
             # the arm the test selects and the ends of the arm
             # it rejects, with the untouched state standing in
@@ -4861,11 +5008,40 @@ def _fixtures_a_test_loads(
                     bind(item.optional_vars, None)
             base_env = dict(env)
             base_loaded = set(loaded)
+            # Inside a try body the managers of the with are
+            # read by name where they stand as one suppress
+            # call under plain names, on the terms
+            # plain_suppress_names states, because a raised
+            # path the managers could not suppress belongs to
+            # the try and its conversion here would end the
+            # path before the try join can judge it. Outside
+            # a try body no name is read and the conversion
+            # below stands whole.
+            suppress_names = (
+                plain_suppress_names(statement.items)
+                if flow["try"] > 0
+                else None
+            )
             ends = []
-            for end_env, end_loaded, kind in walk_paths(
-                statement.body, base_env, base_loaded
-            ):
+            for end in walk_paths(statement.body, base_env, base_loaded):
+                end_env, end_loaded, kind = end
                 if kind in ("raise", "assert"):
+                    name = (
+                        raised_end_name(end)
+                        if suppress_names is not None
+                        else None
+                    )
+                    if name is not None and name not in suppress_names:
+                        # The one manager, read by name, could
+                        # not suppress the error this path
+                        # raises, so the path is not resumed
+                        # here. It leaves the with as the
+                        # raised path it is, for the try whose
+                        # body holds the with to judge in its
+                        # own terms.
+                        completed.append(end)
+                        mark_travelled(end)
+                        continue
                     # A context manager may suppress the
                     # exception, so the abandoned path resumes
                     # after the with holding its state at the
@@ -4892,67 +5068,101 @@ def _fixtures_a_test_loads(
             pre_loaded = set(loaded)
             catch_names = plain_catch_names(statement.handlers)
             ends = []
-            for end in walk_paths(statement.body, pre_env, pre_loaded):
-                end_env, end_loaded, kind = end
-                if kind == "fall":
-                    if statement.orelse:
-                        for else_end in walk_paths(
-                            statement.orelse, end_env, end_loaded
-                        ):
-                            if else_end[2] in ("raise", "assert"):
-                                # An error the else arm raises is
-                                # never caught by the handlers of
-                                # its own try, because the else arm
-                                # stands outside the region those
-                                # handlers guard, so a raised end of
-                                # the else arm never rejoins through
-                                # the seats below, whatever names
-                                # they carry, plain or not, and the
-                                # fence of plain seats is never
-                                # reached for such an end. It leaves
-                                # the try as the raised path it is,
-                                # for the regions outside the try to
-                                # carry in their own terms, exactly
-                                # as the same end behaves standing
-                                # outside a try.
-                                completed.append(else_end)
-                            else:
-                                ends.append(else_end)
-                    else:
+            # The body, its else arm and the handlers walk
+            # inside the try, and the joins they meet on the
+            # way read that standing from the walk record, so
+            # a raised path arising in any of them is handed
+            # onward to this join instead of ending at an
+            # inner join the try never sees. The finally arm
+            # walks outside the standing, from the joined
+            # state, as it always has.
+            flow["try"] += 1
+            try:
+                for end in walk_paths(statement.body, pre_env, pre_loaded):
+                    end_env, end_loaded, kind = end
+                    if kind == "fall":
+                        if statement.orelse:
+                            for else_end in walk_paths(
+                                statement.orelse, end_env, end_loaded
+                            ):
+                                if else_end[2] in ("raise", "assert"):
+                                    # An error the else arm raises is
+                                    # never caught by the handlers of
+                                    # its own try, because the else arm
+                                    # stands outside the region those
+                                    # handlers guard, so a raised end of
+                                    # the else arm never rejoins through
+                                    # the seats below, whatever names
+                                    # they carry, plain or not, and the
+                                    # fence of plain seats is never
+                                    # reached for such an end. It leaves
+                                    # the try as the raised path it is,
+                                    # for the regions outside the try to
+                                    # carry in their own terms, exactly
+                                    # as the same end behaves standing
+                                    # outside a try.
+                                    completed.append(else_end)
+                                    mark_travelled(else_end)
+                                else:
+                                    ends.append(else_end)
+                        else:
+                            ends.append(end)
+                    elif kind in ("break", "continue"):
                         ends.append(end)
-                elif kind in ("break", "continue"):
-                    ends.append(end)
-                elif kind in ("raise", "assert") and raised_end_leaves(
-                    end, catch_names
-                ):
-                    # A raised path no handler this try names
-                    # could catch is not carried onward by the
-                    # handlers below, because no handler catches
-                    # it at runtime either, and it leaves the
-                    # try as the raised path it is, for the
-                    # regions outside the try to carry in their
-                    # own terms, exactly as the same end behaves
-                    # standing outside a try.
-                    completed.append(end)
-                # An end that returned was frozen toward the
-                # whole test when it ended. A raised end a
-                # named handler could catch is carried onward
-                # by the handlers below, and the statements
-                # after the raise in the body were dead on it.
-            for handler in statement.handlers:
+                    elif kind in ("raise", "assert") and raised_end_leaves(
+                        end, catch_names
+                    ):
+                        # A raised path no handler this try names
+                        # could catch is not carried onward by the
+                        # handlers below, because no handler catches
+                        # it at runtime either, and it leaves the
+                        # try as the raised path it is, for the
+                        # regions outside the try to carry in their
+                        # own terms, exactly as the same end behaves
+                        # standing outside a try.
+                        completed.append(end)
+                        mark_travelled(end)
+                    # An end that returned was frozen toward the
+                    # whole test when it ended. A raised end a
+                    # named handler could catch is carried onward
+                    # by the handlers below, and the statements
+                    # after the raise in the body were dead on it.
+                for handler in statement.handlers:
 
-                def prepare(handler=handler):
-                    if handler.type is not None:
-                        scan(handler.type)
-                    if handler.name is not None:
-                        env[handler.name] = None
+                    def prepare(handler=handler):
+                        if handler.type is not None:
+                            scan(handler.type)
+                        if handler.name is not None:
+                            env[handler.name] = None
 
-                ends.extend(walk_paths(handler.body, pre_env, pre_loaded, prepare))
+                    for end in walk_paths(
+                        handler.body, pre_env, pre_loaded, prepare
+                    ):
+                        if end[2] in ("raise", "assert"):
+                            # A handler never catches an error
+                            # its own body raises, and no handler
+                            # standing beside it does either, so
+                            # a raised path of a handler body is
+                            # no path of this try at all. It leaves
+                            # the try statement where it stands,
+                            # as the raised path it is, for the
+                            # regions outside the try to carry in
+                            # their own terms, and it never reaches
+                            # the join below, whose fall paths would
+                            # otherwise carry the code after the
+                            # try on a path that never reaches it.
+                            completed.append(end)
+                            mark_travelled(end)
+                        else:
+                            ends.append(end)
+            finally:
+                flow["try"] -= 1
             # The path ends feeding the join are the ends of
             # the try body that fell through, or of its else
             # arm, which runs from a body end, beside the ends
-            # of each handler, and each handler is walked from
-            # the state before the try.
+            # of each handler that did not itself raise, and
+            # each handler is walked from the state before
+            # the try.
             join_ends(ends, completed)
             for sub in statement.finalbody:
                 if not flow["alive"]:
