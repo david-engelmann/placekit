@@ -102,10 +102,37 @@ outright, because no handler of a try catches an
 error a handler body raises. Outside the body of a
 try every join keeps the treatment the shipped walk
 gives it, and the seats the earlier repairs fenced
-keep their answers whole. The last six pins cover
+keep their answers whole. Six pins cover
 the conditional arm, the loop in the body, the try
 in a loop, the nested with in its refusing form and
 in its resolving control form, and the handler body.
+
+The third delta review of the try repairs attacked
+the one join the fourth repair read and left
+untouched, and found the genus standing there live.
+A raised path arising in a match arm died at the
+match join, inside the body of a try and outside
+any try alike, so a loading call after the match or
+after the try stood credited while never loading at
+runtime, decidable from the shape alone, a constant
+subject and the raising arm the runtime always
+takes. The fifth repair teaches the match join the
+same hand on the other joins carry. A raised path
+of an arm leaves the match as a raised path of the
+enclosing block, its plain name travelling with it,
+for the regions outside the statement to judge in
+their own terms, a try by its seats, a with by
+resuming it, a loop and a conditional on the terms
+their walks state, and the raised check of a class
+body by reading it. The hand on stands at the join
+itself and is not read off the standing of the walk
+inside a try, because the seat is the join and the
+path outside any try is the same path in the same
+join. The last five pins cover the assert form in a
+try body, the raise twin in the same seat, the
+assert form outside any try, the raise form in a
+later arm, and the control whose handler names the
+error the arm raises.
 """
 
 from __future__ import annotations
@@ -614,3 +641,151 @@ def test_linkage_call_after_an_assert_in_a_handler_body_earns_no_credit():
         """
     )
     assert loaded == {OTHER}
+
+
+def test_linkage_call_after_an_assert_in_a_match_arm_in_a_try_body_earns_no_credit():
+    # Round 62, third delta red team Minor 1, the assert
+    # form. The assert stands in the arm of a match inside
+    # the body of a try whose handler names a different
+    # error. The match join dropped its raised path where
+    # it stood, so the try join never judged it, and the
+    # fall path beside it, the path where no arm fits,
+    # carried the call after the try. The join at the
+    # match now hands the raised path of an arm to the
+    # enclosing block, the try judges it by its seats and
+    # lets it leave, and the manager resumes it after the
+    # block holding nothing, so the join strips the call.
+    loaded = _loads(
+        f"""
+        def test_shape(client, raw_response):
+            from contextlib import suppress
+            fixture_name = "{OTHER}"
+            with suppress(AssertionError):
+                try:
+                    match 1:
+                        case _:
+                            assert False
+                except KeyError:
+                    pass
+                after = search(client, raw_response, "{CLAIMED}")
+            result = search(client, raw_response, fixture_name)
+        """
+    )
+    assert loaded == {OTHER}
+
+
+def test_linkage_call_after_a_raise_in_a_match_arm_in_a_try_body_earns_no_credit():
+    # Round 62, third delta red team Minor 1, the raise
+    # twin. The two statements are identical in this seat,
+    # because the match join dropped a raised path of
+    # every kind where it stood. The raise stands under
+    # the plain name of the error it constructs, the name
+    # travels with its path across the match join, no
+    # handler here names that error, and its path leaves
+    # the try on the same terms as the assert path in the
+    # pin above.
+    loaded = _loads(
+        f"""
+        def test_shape(client, raw_response):
+            from contextlib import suppress
+            fixture_name = "{OTHER}"
+            with suppress(AssertionError):
+                try:
+                    match 1:
+                        case _:
+                            raise AssertionError("arm")
+                except KeyError:
+                    pass
+                after = search(client, raw_response, "{CLAIMED}")
+            result = search(client, raw_response, fixture_name)
+        """
+    )
+    assert loaded == {OTHER}
+
+
+def test_linkage_call_after_an_assert_in_a_match_arm_outside_any_try_earns_no_credit():
+    # Round 62, third delta red team Minor 1, the seat
+    # outside any try. The assert stands in a match arm
+    # in the body of the suppressing with itself, with
+    # the credited call after the match. The hand on at
+    # the match join stands at the join itself and is not
+    # read off the standing of the walk inside a try, so
+    # this path leaves the match on the same terms as the
+    # paths in the pins above, the manager resumes it
+    # after the block holding nothing, and the join
+    # strips the call after the match.
+    loaded = _loads(
+        f"""
+        def test_shape(client, raw_response):
+            from contextlib import suppress
+            fixture_name = "{OTHER}"
+            with suppress(AssertionError):
+                match 1:
+                    case _:
+                        assert False
+                after = search(client, raw_response, "{CLAIMED}")
+            result = search(client, raw_response, fixture_name)
+        """
+    )
+    assert loaded == {OTHER}
+
+
+def test_linkage_call_after_a_raise_in_a_later_match_arm_earns_no_credit():
+    # Round 62, build pass 5 width sweep, the later arm
+    # form. The raising arm stands second, behind an arm
+    # the subject never takes and ahead of the wildcard
+    # arm, and the credited call stands after the match.
+    # The seat is the join and not the arm that carries
+    # the statement, so a raised path of any arm leaves
+    # the match on the same terms, and this pin fails the
+    # day the hand on narrows to the first arm or to the
+    # wildcard arm alone.
+    loaded = _loads(
+        f"""
+        def test_shape(client, raw_response):
+            from contextlib import suppress
+            fixture_name = "{OTHER}"
+            with suppress(AssertionError):
+                match 1:
+                    case 2:
+                        pass
+                    case 1:
+                        raise AssertionError("arm")
+                    case _:
+                        pass
+                after = search(client, raw_response, "{CLAIMED}")
+            result = search(client, raw_response, fixture_name)
+        """
+    )
+    assert loaded == {OTHER}
+
+
+def test_linkage_call_after_a_raise_in_a_match_arm_under_a_handler_naming_it_still_credits():
+    # Positive control for the match hand on. The handler
+    # names the very error the arm raises, so it catches
+    # the failure inside the body at runtime and the call
+    # after the try truly runs. The raised path now
+    # reaches the try join and is judged there, the name
+    # it stands under stands among the names the handler
+    # names, and the handlers carry it onward exactly as
+    # they carry a raise standing in the body itself, so
+    # the credit is untouched. The pin fails the day the
+    # hand on starts refusing paths a named handler
+    # genuinely catches.
+    loaded = _loads(
+        f"""
+        def test_shape(client, raw_response):
+            from contextlib import suppress
+            fixture_name = "{OTHER}"
+            with suppress(AssertionError):
+                try:
+                    match 1:
+                        case _:
+                            raise AssertionError("arm")
+                except AssertionError:
+                    pass
+                after = search(client, raw_response, "{CLAIMED}")
+            result = search(client, raw_response, fixture_name)
+        """
+    )
+    assert loaded == {CLAIMED, OTHER}
