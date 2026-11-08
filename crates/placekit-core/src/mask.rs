@@ -404,6 +404,62 @@ mod tests {
     }
 
     #[test]
+    fn construction_grammar_first_byte_rule_and_tail_digits() {
+        // The first byte of a segment must be an ASCII letter, a
+        // rule the all bytes alphanumeric test behind it cannot
+        // state on its own. A digit led segment is long enough
+        // and alphanumeric throughout and still refused, in the
+        // first segment and in later segments alike, and a
+        // segment opening on a multibyte character is refused at
+        // the same test. Digits are free in every later position,
+        // down to the two byte floor.
+        for bad in ["1a", "9abc", "ab.1c", "ab.cd.2e"] {
+            assert!(
+                !valid_path(bad.as_bytes()),
+                "path {bad:?} should be invalid"
+            );
+        }
+        assert!(!valid_path(b"\xc3\xa9b.cd"));
+        for good in ["a1", "Z9", "ab.c2"] {
+            assert!(valid_path(good.as_bytes()), "path {good:?} should be valid");
+        }
+    }
+
+    #[test]
+    fn construction_grammar_refuses_separator_made_empty_segments() {
+        // The split hands the length floor one empty segment for
+        // every separator standing at an edge or doubled, and
+        // the floor refuses each before the first byte index the
+        // census names runs, which is why these shapes answer
+        // false rather than panicking. A path of separators
+        // alone carries no other content, and doubled separators
+        // at the start, the end and the middle each leave their
+        // empty segment behind.
+        for bad in [".", "..", "...", "..ab", "ab..", "ab...cd", "ab.cd.."] {
+            assert!(
+                !valid_path(bad.as_bytes()),
+                "path {bad:?} should be invalid"
+            );
+        }
+    }
+
+    #[test]
+    fn construction_grammar_accepts_paths_past_the_constructor_caps() {
+        // The construction grammar carries no length cap and no
+        // segment count cap of its own. The caps live in
+        // FieldMask::new, on the joined header value and on the
+        // path count of one mask, and the module doc warns the
+        // two rule sets are not interchangeable. A single
+        // segment far past the header cap and a path holding
+        // more segments than the constructor allows in one mask
+        // are both well formed here.
+        let long_segment = vec![b'a'; 5000];
+        assert!(valid_path(&long_segment));
+        let many_segments = (0..150).map(|_| "ab").collect::<Vec<_>>().join(".");
+        assert!(valid_path(many_segments.as_bytes()));
+    }
+
+    #[test]
     fn unique_indices_keeps_first_seen_order() {
         // Mirrors the dedupe half of the Python test
         // test_field_mask_deduplicates_and_set_input_is_deterministic
