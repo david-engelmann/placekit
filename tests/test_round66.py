@@ -41,7 +41,15 @@ cargo's own package listing carries tracked dot path files
 whether or not the include entry stands, so a build there
 cannot see the entry dropped. A plain tree is also the shape
 the round's artifact drives build from, and the shape a
-tarball consumer builds from.
+tarball consumer builds from. The staged copy is the whole
+working tree minus the five names the stage ignore set
+names, and it includes untracked files, because the copy is
+made without reading version control state. What the built
+archive carries is then decided by the build's own include
+rules, not by what the copy staged. The member count floor
+below is therefore a clean tree figure, and a dirty local
+tree can only raise the count above that figure, by the
+number of its untracked files the build's rules carry.
 """
 
 from __future__ import annotations
@@ -296,11 +304,17 @@ def read_sdist_members(archive_path: Path) -> dict[str, bytes]:
 def ignore_stage_noise(directory: str, names: list[str]) -> list[str]:
     """The copy exclusions for the staged tree.
 
-    The version control entry goes so the staged tree is a plain
-    tree, the shape whose build the include entry decides. Build
-    output, caches, and a virtual environment go because the sdist
-    never carries them and copying a target directory could dwarf
-    the tree itself.
+    The exclusions are exactly the five names in
+    STAGE_IGNORE_NAMES. The .git entry goes so the staged tree
+    is a plain tree, the shape whose build the include entry
+    decides. The target directory, the .pytest_cache and
+    __pycache__ caches, and the .venv virtual environment go
+    because the sdist never carries them and copying a target
+    directory could dwarf the tree itself. No other name is
+    excluded here. Other noise directories such as .mypy_cache,
+    .ruff_cache, dist, and build, and virtual environments
+    under other names, may therefore be staged, but the build
+    does not carry them into the sdist.
     """
     return [name for name in names if name in STAGE_IGNORE_NAMES]
 
@@ -313,7 +327,11 @@ def built_sdist_members(tmp_path_factory) -> dict[str, bytes]:
     and the module, so parallel workers never share an output path,
     and it assembles files only, with no compilation. It builds
     from a plain copy of the repository tree staged in that
-    directory, never from the checkout itself.
+    directory, never from the checkout itself. The staged copy
+    is the whole working tree minus the five names in
+    STAGE_IGNORE_NAMES, untracked files included, and the
+    build's own include rules decide which of the staged files
+    the archive carries.
     """
     base = tmp_path_factory.mktemp("round66-sdist")
     stage = base / "tree"
