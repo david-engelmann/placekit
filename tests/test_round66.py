@@ -215,7 +215,31 @@ STANDING_SDIST_MEMBERS = (
     "Cargo.toml",
     "Cargo.lock",
     "pyproject.toml",
+    "src/lib.rs",
+    "crates/placekit-core/Cargo.toml",
+    "crates/placekit-core/src/lib.rs",
+    "python/placekit/client.py",
+    "python/placekit/models.py",
+    "python/placekit/_placekit.pyi",
+    "python/placekit/py.typed",
+    "README.md",
+    "LICENSE",
+    "CHANGELOG.md",
+    "rust-toolchain.toml",
+    "scripts/check_version.py",
+    "tests/test_client.py",
 )
+
+# The standing members name one carrier per family the sdist
+# holds, so an archive that dropped a whole family fails on the
+# missing name. The floor below watches the bulk the names cannot
+# reach. The census at the head this guard landed with counted
+# 138 file members, and the floor sits at 130, under that count
+# with headroom for small removals a later round might make on
+# purpose, and far above the handful of members a hollow archive
+# carries. An exact member list would rot instead, because rounds
+# add test modules and documents as a matter of course.
+SDIST_MEMBER_COUNT_FLOOR = 130
 
 
 def find_maturin() -> Path:
@@ -289,3 +313,12 @@ def test_built_sdist_audit_record_matches_the_repository_record(
 def test_built_sdist_carries_the_standing_members(built_sdist_members) -> None:
     for name in STANDING_SDIST_MEMBERS:
         assert name in built_sdist_members, f"standing sdist member missing, {name}"
+
+
+def test_built_sdist_carries_at_least_the_member_count_floor(
+    built_sdist_members,
+) -> None:
+    assert len(built_sdist_members) >= SDIST_MEMBER_COUNT_FLOOR, (
+        f"sdist carries {len(built_sdist_members)} file members, "
+        f"under the floor of {SDIST_MEMBER_COUNT_FLOOR}"
+    )
