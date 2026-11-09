@@ -264,6 +264,35 @@ STAGE_IGNORE_NAMES = frozenset(
 )
 
 
+def read_sdist_members(archive_path: Path) -> dict[str, bytes]:
+    """Member bytes of one sdist, keyed by path under its package root.
+
+    The keying keeps the structure an artifact assertion exists to
+    examine. Every file member must stand under the one package
+    root, the first path segment shared by all of them, and no two
+    file members may key to the same stripped path, so a second
+    root or a duplicated member fails loudly here instead of
+    collapsing into one entry whose bytes depend on archive order.
+    """
+    members: dict[str, bytes] = {}
+    roots: set[str] = set()
+    with tarfile.open(archive_path) as archive:
+        for member in archive.getmembers():
+            if not member.isfile():
+                continue
+            parts = member.name.split("/", 1)
+            assert len(parts) == 2, f"sdist member outside a package root, {member.name}"
+            roots.add(parts[0])
+            assert parts[1] not in members, f"duplicate sdist member, {member.name}"
+            handle = archive.extractfile(member)
+            assert handle is not None
+            members[parts[1]] = handle.read()
+    assert len(roots) == 1, (
+        f"sdist file members do not share exactly one package root, {sorted(roots)}"
+    )
+    return members
+
+
 def ignore_stage_noise(directory: str, names: list[str]) -> list[str]:
     """The copy exclusions for the staged tree.
 
@@ -317,17 +346,7 @@ def built_sdist_members(tmp_path_factory) -> dict[str, bytes]:
     assert result.returncode == 0, result.stdout + result.stderr
     archives = sorted(out.glob("*.tar.gz"))
     assert len(archives) == 1, f"expected one sdist in {out}, found {archives}"
-    members: dict[str, bytes] = {}
-    with tarfile.open(archives[0]) as archive:
-        for member in archive.getmembers():
-            if not member.isfile():
-                continue
-            parts = member.name.split("/", 1)
-            assert len(parts) == 2, f"sdist member outside a package root, {member.name}"
-            handle = archive.extractfile(member)
-            assert handle is not None
-            members[parts[1]] = handle.read()
-    return members
+    return read_sdist_members(archives[0])
 
 
 def test_built_sdist_carries_the_audit_record(built_sdist_members) -> None:
