@@ -264,12 +264,18 @@ class PlacesError(Exception):
         break the repr of its own instances. Where the name
         reads as a plain string it stands unchanged, and where
         it cannot be read as one the fixed unrepresentable form
-        stands in its place.
+        stands in its place. The string form renders through
+        the guarded repr reading on the same terms. The string
+        conversion with no context parts returns a stored
+        string message itself, and a string subclass whose own
+        repr raises would otherwise detonate the repr that
+        formats it, where an ordinary string renders exactly
+        as the plain repr renders it.
         """
         name = _safe_type_name(self)
         if name is None:
             name = "<unrepresentable value>"
-        return f"{name}({str(self)!r})"
+        return f"{name}({_safe_repr(str(self))})"
 
 
 class AuthenticationError(PlacesError):
