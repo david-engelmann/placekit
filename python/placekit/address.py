@@ -238,7 +238,9 @@ def _entry_guard(fn):
     public name when the error carries none yet (Round 25,
     Minor 4), so an address failure names the helper that
     raised it in the attribute callers log, the way a client
-    failure names its method.
+    failure names its method. The caught exception is named
+    through the safe repr, so an exception whose own repr
+    raises cannot break the guard itself (Round 65).
     """
 
     @functools.wraps(fn)
@@ -252,7 +254,7 @@ def _entry_guard(fn):
         except Exception as exc:
             raise ConfigError(
                 f"an argument for {fn.__name__} raised while it "
-                f"was being read: {exc!r}",
+                f"was being read: {_safe_repr(exc)}",
                 context=fn.__name__,
             ) from exc
 
