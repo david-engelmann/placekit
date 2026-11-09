@@ -295,9 +295,12 @@ jobs:
         run: python -c "import placekit; client = placekit.Client('test-key'); print(placekit.__version__)"
       - name: Run the offline test suite
         if: ${{ matrix.suite }}
-        # Pinned to the exact pytest version the dev environment
-        # carries, so this leg never fetches a floating test tool.
+        # Pinned to the exact pytest and maturin versions the dev
+        # environment carries, so this leg never fetches floating
+        # tools. The maturin install feeds the Round 66 artifact
+        # guard in the suite, which builds the sdist itself.
         run: |
+          pip install "maturin==1.15.0"
           pip install "pytest==9.2.0"
           python -m pytest tests -q
 
