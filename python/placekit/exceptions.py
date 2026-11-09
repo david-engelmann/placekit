@@ -257,7 +257,19 @@ class PlacesError(Exception):
         return f"{_safe_text(self.message)} ({', '.join(parts)})"
 
     def __repr__(self) -> str:
-        return f"{type(self).__name__}({str(self)!r})"
+        """The class name beside the repr of the string form.
+
+        The name reads through the guarded name reading, so a
+        subclass whose metaclass breaks the name read cannot
+        break the repr of its own instances. Where the name
+        reads as a plain string it stands unchanged, and where
+        it cannot be read as one the fixed unrepresentable form
+        stands in its place.
+        """
+        name = _safe_type_name(self)
+        if name is None:
+            name = "<unrepresentable value>"
+        return f"{name}({str(self)!r})"
 
 
 class AuthenticationError(PlacesError):
