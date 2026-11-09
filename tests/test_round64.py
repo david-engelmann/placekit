@@ -10,7 +10,9 @@ carries the widths as prose beside the two declarations, and
 these pins hold the runtime to the stated boundaries. A value
 at the top of a width is accepted and judged, and a value one
 past the width or below zero raises OverflowError before any
-judgement happens.
+judgement happens. The Python layer itself only ever mints 0
+and 1 at the rank and kind slots, and the prose states that
+beside the widths.
 """
 
 from __future__ import annotations

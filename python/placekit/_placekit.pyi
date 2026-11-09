@@ -95,11 +95,15 @@ def address_split_compound_code(
 def mask_valid_path(path: bytes) -> bool: ...
 def mask_unique_indices(paths: list[bytes]) -> list[int]: ...
 # The rank in each key is read as an unsigned 8 bit value. A rank
-# outside 0 to 255 raises OverflowError instead of sorting.
+# outside 0 to 255 raises OverflowError instead of sorting. The
+# Python layer itself only ever mints the ranks 0 and 1, for a
+# string member and for every other member.
 def mask_sorted_order(keys: list[tuple[int, bytes]]) -> list[int]: ...
 # Each trace pair carries a kind tag read as an unsigned 8 bit value
 # and a depth read as an unsigned 32 bit value. A kind outside 0 to
-# 255 or a depth outside 0 to 4294967295 raises OverflowError.
+# 255 or a depth outside 0 to 4294967295 raises OverflowError. The
+# Python layer itself only ever mints the kind tags 0 and 1, for a
+# mapping visit and for a sequence visit.
 def models_payload_depth_within_limit(trace: list[tuple[int, int]]) -> bool: ...
 
 @final
