@@ -34,7 +34,14 @@ package root, compares that member byte for byte with the
 record in the repository, and names the standing members a
 sound sdist carries, so a build that stopped honouring the
 include entry, or one that produced a hollow archive, fails
-in the suite instead of waiting for a manual census.
+in the suite instead of waiting for a manual census. The
+guard builds from a plain copy of the tree, with no version
+control state in it, for a measured reason. In a checkout,
+cargo's own package listing carries tracked dot path files
+whether or not the include entry stands, so a build there
+cannot see the entry dropped. A plain tree is also the shape
+the round's artifact drives build from, and the shape a
+tarball consumer builds from.
 """
 
 from __future__ import annotations
@@ -252,15 +259,38 @@ def find_maturin() -> Path:
     return Path(found)
 
 
+STAGE_IGNORE_NAMES = frozenset(
+    {".git", ".venv", ".pytest_cache", "__pycache__", "target"}
+)
+
+
+def ignore_stage_noise(directory: str, names: list[str]) -> list[str]:
+    """The copy exclusions for the staged tree.
+
+    The version control entry goes so the staged tree is a plain
+    tree, the shape whose build the include entry decides. Build
+    output, caches, and a virtual environment go because the sdist
+    never carries them and copying a target directory could dwarf
+    the tree itself.
+    """
+    return [name for name in names if name in STAGE_IGNORE_NAMES]
+
+
 @pytest.fixture(scope="module")
 def built_sdist_members(tmp_path_factory) -> dict[str, bytes]:
     """The real sdist, built once, as member bytes keyed by relative path.
 
     The build runs in a factory temp directory unique to the worker
     and the module, so parallel workers never share an output path,
-    and it assembles files only, with no compilation.
+    and it assembles files only, with no compilation. It builds
+    from a plain copy of the repository tree staged in that
+    directory, never from the checkout itself.
     """
-    out = tmp_path_factory.mktemp("round66-sdist")
+    base = tmp_path_factory.mktemp("round66-sdist")
+    stage = base / "tree"
+    shutil.copytree(ROOT, stage, ignore=ignore_stage_noise)
+    out = base / "dist"
+    out.mkdir()
     env = dict(os.environ)
     if shutil.which("cargo") is None:
         # Maturin reads cargo metadata even for a pure assembly build.
@@ -274,11 +304,11 @@ def built_sdist_members(tmp_path_factory) -> dict[str, bytes]:
             str(find_maturin()),
             "sdist",
             "--manifest-path",
-            str(ROOT / "Cargo.toml"),
+            str(stage / "Cargo.toml"),
             "--out",
             str(out),
         ],
-        cwd=ROOT,
+        cwd=stage,
         capture_output=True,
         text=True,
         timeout=600,
