@@ -9,7 +9,11 @@ and escaped bare through the exception constructor, the field
 mask builder, the client argument wrap, the address entry guard
 and the exception string conversion itself. The class name the
 exception repr reads stood outside that repair and fell to the
-build red team, and its pins close this file. The seats now render
+build red team, and the message half of the same repr fell to
+the delta red team after it, the string conversion with no
+context parts returning a stored string message itself into
+the one formatting call that could still detonate on it. The
+seats now render
 through a guarded path on the models pattern. The ordinary
 rendering is tried first, a failure falls back to a form naming
 the type through a guarded name reading, and where the name
@@ -547,3 +551,39 @@ def test_repr_non_string_class_name_renders_fixed_form():
 def test_repr_raising_class_name_renders_fixed_form():
     rendered = repr(RaisingNameError("m"))
     assert rendered == "<unrepresentable value>('m')"
+
+
+# --- The exception repr message half -------------------------------------
+
+
+class ReprBombStr(str):
+    """A string subclass whose own repr raises a plain RuntimeError."""
+
+    def __repr__(self):
+        raise RuntimeError("repr detonated")
+
+
+def test_repr_message_repr_bomb_no_parts_renders_fixed_form():
+    rendered = repr(PlacesError(ReprBombStr("m")))
+    assert rendered == "PlacesError(<unrepresentable ReprBombStr>)"
+
+
+def test_repr_message_repr_bomb_with_context_control():
+    err = PlacesError(ReprBombStr("m"), context="some call")
+    rendered = repr(err)
+    assert rendered == "PlacesError('m (context=some call)')"
+
+
+def test_repr_ordinary_with_parts_control():
+    err = PlacesError(
+        "quota",
+        status_code=429,
+        google_status="RESOURCE_EXHAUSTED",
+        retry_after=2.5,
+        context="text_search",
+    )
+    rendered = repr(err)
+    assert rendered == (
+        "PlacesError('quota (context=text_search, status_code=429, "
+        "google_status=RESOURCE_EXHAUSTED, retry_after=2.5)')"
+    )
