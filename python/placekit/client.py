@@ -251,17 +251,32 @@ def _mapping_copy(name: str, value: Mapping) -> dict[str, Any]:
     grows the result, and anything the mapping raises while being
     read surfaces as a ConfigError with the original exception
     chained (R20-F01 and F11).
+
+    The items call itself runs inside the stream the bounded
+    read consumes, not ahead of it. A generator expression over
+    the items call evaluates that call when the expression is
+    created, outside the bounded read, so a mapping whose items
+    method itself raised escaped ahead of every formatting seat
+    and reached the caller unconverted. Inside the stream the
+    raise lands on the bounded read like any other, and every
+    formatting seat here names the caught exception through the
+    safe repr, so an exception whose own repr raises cannot
+    break the refusal either (Round 65).
     """
+
+    def item_stream():
+        yield from value.items()
+
     entries = _materialize_bounded(
         name,
-        (pair for pair in value.items()),
+        item_stream(),
         MAX_MATERIALIZED_ITEMS,
     )
     try:
         return dict(entries)
     except Exception as exc:
         raise ConfigError(
-            f"{name} raised while being read: {exc!r}"
+            f"{name} raised while being read: {_safe_repr(exc)}"
         ) from exc
 
 
@@ -568,10 +583,17 @@ class _Base:
         has one documented type, so the failure surfaces as a
         ConfigError with the original exception chained (R20-F11,
         F16 and F17).
+
+        The caught exception is named through the safe repr. This
+        wrap is the containment layer for the whole argument
+        phase, and an exception whose own repr raises reached it
+        unformatted from the validators that format nothing, so
+        the wrap itself detonated on the very shape it exists to
+        contain (Round 65).
         """
         return ConfigError(
             f"an argument for {context} raised while it was being "
-            f"validated: {exc!r}",
+            f"validated: {_safe_repr(exc)}",
             context=context,
         )
 
