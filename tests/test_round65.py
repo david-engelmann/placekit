@@ -7,7 +7,9 @@ into a chained ConfigError or rendering an exception safely. A
 crafted exception whose own repr raises detonated those seats
 and escaped bare through the exception constructor, the field
 mask builder, the client argument wrap, the address entry guard
-and the exception string conversion itself. The seats now render
+and the exception string conversion itself. The class name the
+exception repr reads stood outside that repair and fell to the
+build red team, and its pins close this file. The seats now render
 through a guarded path on the models pattern. The ordinary
 rendering is tried first, a failure falls back to a form naming
 the type through a guarded name reading, and where the name
@@ -512,3 +514,36 @@ def test_str_int_message_with_parts_control():
 
 def test_repr_ordinary_control():
     assert repr(PlacesError("plain")) == "PlacesError('plain')"
+
+
+# --- The exception repr class name ---------------------------------------
+
+
+class NonStrNameMeta(type):
+    @property
+    def __name__(cls):
+        return 42
+
+
+class RaisingNameMeta(type):
+    @property
+    def __name__(cls):
+        raise RuntimeError("name detonated")
+
+
+class NonStrNameError(PlacesError, metaclass=NonStrNameMeta):
+    pass
+
+
+class RaisingNameError(PlacesError, metaclass=RaisingNameMeta):
+    pass
+
+
+def test_repr_non_string_class_name_renders_fixed_form():
+    rendered = repr(NonStrNameError("m"))
+    assert rendered == "<unrepresentable value>('m')"
+
+
+def test_repr_raising_class_name_renders_fixed_form():
+    rendered = repr(RaisingNameError("m"))
+    assert rendered == "<unrepresentable value>('m')"
