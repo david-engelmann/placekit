@@ -42,6 +42,11 @@ dev = ["pytest==9.2.0", "mypy==2.4.1", "maturin==1.15.0"]
 python-source = "python"
 module-name = "placekit._placekit"
 features = ["pyo3/extension-module"]
+# The sdist carries the cargo audit disposition record beside the
+# sources it dispositions, so an audit run from the sdist reaches
+# the same posture as one run in the repository. The build tool's
+# dot path rule would otherwise leave the file out.
+include = [{ path = ".cargo/audit.toml", format = "sdist" }]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
