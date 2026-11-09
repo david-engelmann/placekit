@@ -11,6 +11,72 @@ from __future__ import annotations
 from typing import Any, NoReturn, Optional
 
 
+def _safe_type_name(value: Any) -> Optional[str]:
+    """The type name of a caller supplied value, safe to name in
+    a refusal.
+
+    Refusals name the values they refuse by type as well as by
+    repr, and a class can answer its name through a property
+    that raises or with something that is not a plain string,
+    so a refusal interpolating the raw name would break on the
+    name itself and escape bare. Where the name reads as a
+    plain string it is returned unchanged, so no honest refusal
+    message moves. Where it cannot be read as one, None stands
+    in and the caller names the value by the fixed
+    unrepresentable form instead. This is the one guarded name
+    reading in the module, on the pattern the models module
+    settled, and every site here that names a type reads
+    through it.
+    """
+    try:
+        name = type(value).__name__
+    except Exception:
+        return None
+    if type(name) is str:
+        return name
+    return None
+
+
+def _safe_repr(value: Any) -> str:
+    """The repr of a caller supplied value or a caught
+    exception, safe to name in a refusal.
+
+    Refusals and wraps interpolate the exception a caller value
+    raised, and an exception whose own repr raises would break
+    the refusal itself and escape bare. Where repr works its
+    answer is returned unchanged, so no honest refusal message
+    moves. Where it raises, the value is named by its type
+    instead, through the guarded name reading, and where the
+    name cannot be read as a plain string a fixed form stands
+    in its place.
+    """
+    try:
+        return repr(value)
+    except Exception:
+        pass
+    name = _safe_type_name(value)
+    if name is not None:
+        return f"<unrepresentable {name}>"
+    return "<unrepresentable value>"
+
+
+def _safe_text(value: Any) -> str:
+    """The text form of a stored value, safe to render.
+
+    The exception string conversion formats the message and
+    the context values it collects, and a value whose own
+    formatting raises would break the conversion itself and
+    escape bare. Where the value formats its answer is
+    returned unchanged, so no honest rendering moves a byte.
+    Where formatting raises, the value is named through the
+    safe repr instead.
+    """
+    try:
+        return f"{value}"
+    except Exception:
+        return _safe_repr(value)
+
+
 def _copy_list_argument(name: str, value: Optional[list[Any]]) -> list[Any]:
     """Copy one list argument of the exception constructor.
 
@@ -158,19 +224,37 @@ class PlacesError(Exception):
 
     def __str__(self) -> str:
         """The message plus the context the type collects, so logging
-        an exception shows why it was raised, not just its text."""
+        an exception shows why it was raised, not just its text.
+
+        Every stored value renders through a guarded conversion.
+        The constructor stores the message and the context values
+        with no type discipline at most seats, and a value whose
+        own formatting raises used to break the conversion itself
+        and escape bare, through the operation a caller performs
+        on an exception more than any other. A non string message
+        with nothing beside it used to return the object itself,
+        so the conversion raised a bare TypeError. An ordinary
+        value renders exactly as it always has, a non string
+        message renders as its guarded text, and a value that
+        cannot be formatted renders in the fixed unrepresentable
+        form the safe repr uses.
+        """
         parts = []
         if self.context is not None:
-            parts.append(f"context={self.context}")
+            parts.append(f"context={_safe_text(self.context)}")
         if self.status_code is not None:
-            parts.append(f"status_code={self.status_code}")
+            parts.append(f"status_code={_safe_text(self.status_code)}")
         if self.google_status is not None:
-            parts.append(f"google_status={self.google_status}")
+            parts.append(
+                f"google_status={_safe_text(self.google_status)}"
+            )
         if self.retry_after is not None:
-            parts.append(f"retry_after={self.retry_after}")
+            parts.append(f"retry_after={_safe_text(self.retry_after)}")
         if not parts:
-            return self.message
-        return f"{self.message} ({', '.join(parts)})"
+            if isinstance(self.message, str):
+                return self.message
+            return _safe_text(self.message)
+        return f"{_safe_text(self.message)} ({', '.join(parts)})"
 
     def __repr__(self) -> str:
         return f"{type(self).__name__}({str(self)!r})"
