@@ -26,14 +26,27 @@ advisories, so a record emptied to zero bytes fails the pin
 the same way a missing one does. The mutation and spelling
 cases beside the control case hold the pins to those
 decisions, so they cannot pass on a manifest that merely
-mentions the file. The pins stay static and build nothing.
-The census evidence that the built sdist carries the file
-lives in the round audit.
+mentions the file. The pins stay static. The guard at the
+end of this module goes one step further and builds the
+real source distribution with maturin, then asserts on the
+artifact itself. It names the audit record member under the
+package root, compares that member byte for byte with the
+record in the repository, and names the standing members a
+sound sdist carries, so a build that stopped honouring the
+include entry, or one that produced a hollow archive, fails
+in the suite instead of waiting for a manual census.
 """
 
 from __future__ import annotations
 
+import os
+import shutil
+import subprocess
+import sys
+import tarfile
 from pathlib import Path
+
+import pytest
 
 try:
     import tomllib
@@ -188,3 +201,91 @@ def test_pin_fails_with_an_extra_advisory_in_the_record() -> None:
     )
     assert mutated != text
     assert not audit_record_names_the_recorded_advisories(mutated)
+
+
+# The artifact guard. The pins above decide the manifest and the
+# record as data. The tests below decide the built artifact itself,
+# because a build tool change could stop honouring the include
+# entry while the manifest still reads sound. The expected members
+# are literals here, independent of the configuration under test,
+# so the guard never certifies the configuration against itself.
+
+STANDING_SDIST_MEMBERS = (
+    "python/placekit/__init__.py",
+    "Cargo.toml",
+    "Cargo.lock",
+    "pyproject.toml",
+)
+
+
+def find_maturin() -> Path:
+    """The maturin beside the running interpreter, else the one on PATH."""
+    sibling = Path(sys.executable).parent / "maturin"
+    if sibling.is_file():
+        return sibling
+    found = shutil.which("maturin")
+    assert found is not None, "no maturin beside the interpreter or on PATH"
+    return Path(found)
+
+
+@pytest.fixture(scope="module")
+def built_sdist_members(tmp_path_factory) -> dict[str, bytes]:
+    """The real sdist, built once, as member bytes keyed by relative path.
+
+    The build runs in a factory temp directory unique to the worker
+    and the module, so parallel workers never share an output path,
+    and it assembles files only, with no compilation.
+    """
+    out = tmp_path_factory.mktemp("round66-sdist")
+    env = dict(os.environ)
+    if shutil.which("cargo") is None:
+        # Maturin reads cargo metadata even for a pure assembly build.
+        # Fall back to the standard rustup location so the guard does
+        # not depend on the caller's PATH carrying it.
+        cargo_bin = Path.home() / ".cargo" / "bin"
+        if (cargo_bin / "cargo").is_file():
+            env["PATH"] = str(cargo_bin) + os.pathsep + env.get("PATH", "")
+    result = subprocess.run(
+        [
+            str(find_maturin()),
+            "sdist",
+            "--manifest-path",
+            str(ROOT / "Cargo.toml"),
+            "--out",
+            str(out),
+        ],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        timeout=600,
+        env=env,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    archives = sorted(out.glob("*.tar.gz"))
+    assert len(archives) == 1, f"expected one sdist in {out}, found {archives}"
+    members: dict[str, bytes] = {}
+    with tarfile.open(archives[0]) as archive:
+        for member in archive.getmembers():
+            if not member.isfile():
+                continue
+            parts = member.name.split("/", 1)
+            assert len(parts) == 2, f"sdist member outside a package root, {member.name}"
+            handle = archive.extractfile(member)
+            assert handle is not None
+            members[parts[1]] = handle.read()
+    return members
+
+
+def test_built_sdist_carries_the_audit_record(built_sdist_members) -> None:
+    assert AUDIT_PATH in built_sdist_members
+
+
+def test_built_sdist_audit_record_matches_the_repository_record(
+    built_sdist_members,
+) -> None:
+    assert built_sdist_members[AUDIT_PATH] == AUDIT_RECORD.read_bytes()
+
+
+def test_built_sdist_carries_the_standing_members(built_sdist_members) -> None:
+    for name in STANDING_SDIST_MEMBERS:
+        assert name in built_sdist_members, f"standing sdist member missing, {name}"
