@@ -47,9 +47,10 @@ names, and it includes untracked files, because the copy is
 made without reading version control state. What the built
 archive carries is then decided by the build's own include
 rules, not by what the copy staged. The member count floor
-below is therefore a clean tree figure, and a dirty local
-tree can only raise the count above that figure, by the
-number of its untracked files the build's rules carry.
+below is therefore a clean tree figure, and untracked
+files in a dirty local tree can only raise the count
+above that figure, by the number of them the build's
+rules carry.
 """
 
 from __future__ import annotations
@@ -311,10 +312,19 @@ def ignore_stage_noise(directory: str, names: list[str]) -> list[str]:
     __pycache__ caches, and the .venv virtual environment go
     because the sdist never carries them and copying a target
     directory could dwarf the tree itself. No other name is
-    excluded here. Other noise directories such as .mypy_cache,
-    .ruff_cache, dist, and build, and virtual environments
-    under other names, may therefore be staged, but the build
-    does not carry them into the sdist.
+    excluded here. Every other name in the working tree is
+    staged, dist and build directories and virtual
+    environments under names outside the five included, and
+    the build carries from the staged tree whatever its own
+    include rules take, so noise of that kind that reaches
+    the archive only raises the member count, the direction
+    the count floor tolerates. The hidden cache directories,
+    .mypy_cache and .ruff_cache, are staged as well and
+    stay out of the archive, because the build walk skips
+    hidden names, the same rule that keeps .gitignore out
+    of the member list. Hidden names are carried only on
+    an explicit include entry, which is how .cargo reaches
+    the archive.
     """
     return [name for name in names if name in STAGE_IGNORE_NAMES]
 
