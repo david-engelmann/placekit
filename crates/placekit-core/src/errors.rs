@@ -346,9 +346,10 @@ impl Error {
     ///    present and rightly typed is used, a mistyped field is
     ///    skipped, and the rest of the envelope still counts. Only a
     ///    body with no usable envelope field at all falls back to the
-    ///    bare HTTP classification, and its message reports the body's
-    ///    size, or the read cap when the read stopped there, never the
-    ///    body itself (R18-A6).
+    ///    bare HTTP classification, and its message renders a body
+    ///    carrying no content as no error body, while a body carrying
+    ///    content reports its size, or the read cap when the read
+    ///    stopped there, never the body itself (R18-A6).
     /// 2. A Google status string decides the class first:
     ///    `UNAUTHENTICATED` and `PERMISSION_DENIED` are auth errors,
     ///    `RESOURCE_EXHAUSTED` is a rate limit, `NOT_FOUND` is not
