@@ -19,10 +19,13 @@ nothing wider. For the calls, it covers the keyword-only
 parameters of all five client calls, the four read calls and
 place_photo alike, on the settlement Round 67 revises, where
 Round 57 had held the place_photo keywords outside the promise.
-For the helper, it covers the public members of FieldMask, each
-spelled in the README in its FieldMask.<member> form. Model
-members and the rest of the public surface stand outside this
-guard, and no claim here certifies them.
+For the helper, it covers the public members of FieldMask
+other than its stored paths field, which the README does not
+teach because it teaches construction and the header form
+instead, each covered member spelled in the README in its
+FieldMask.<member> form. Model members and the rest of the
+public surface stand outside this guard, and no claim here
+certifies them.
 """
 
 from __future__ import annotations
