@@ -13,7 +13,7 @@ import json
 import math
 import weakref
 from collections.abc import Mapping
-from typing import Any, Callable, Iterable, Optional
+from typing import Any, Callable, Iterable, NoReturn, Optional
 
 from . import _placekit
 from ._placekit import PlacesError as _CorePlacesError
@@ -23,6 +23,7 @@ from .fields import (
     FieldsLike,
     _materialize_bounded,
     _safe_repr,
+    _safe_type_name,
     normalize_fields,
 )
 from .types import COLLECTION_CITIES, COLLECTION_REGIONS
@@ -40,6 +41,78 @@ from .models import (
 )
 
 __all__ = ["AsyncClient", "Client"]
+
+
+def _guarded_repr(value: Any) -> tuple[str, Optional[Exception]]:
+    """Render a caller supplied value for a refusal message and
+    capture the failure its raw repr raised, if it raised one.
+
+    The rendered form is the shared safe repr from the fields
+    module, which is the plain repr unchanged wherever the repr
+    works, so an ordinary value renders byte identically to the
+    raw formatting it replaces. Where the repr raises, the safe
+    form names the type through the guarded name reading, or
+    stands in the fixed unrepresentable form where even the name
+    cannot be read as a plain string. The probe read exists only
+    to capture the original exception, so the refusal that uses
+    the rendered form can chain it instead of letting it escape
+    into the argument wrap, whose generic wording names the
+    wrong failure (Round 75, on the Round 65 pattern).
+    """
+    detonation: Optional[Exception] = None
+    try:
+        repr(value)
+    except Exception as exc:
+        detonation = exc
+    return _safe_repr(value), detonation
+
+
+def _guarded_name(value: Any) -> tuple[str, Optional[Exception]]:
+    """Read a caller supplied value's type name for a refusal
+    message and capture the failure the raw read raised, if it
+    raised one.
+
+    The rendering decision is the shared guarded name reading
+    from the fields module. Where the name reads as a plain
+    string it is returned unchanged, so an ordinary value names
+    its type byte identically to the raw read it replaces. Where
+    the name cannot be read as a plain string, because the read
+    raised or because it answered with something that is not a
+    string, the fixed unrepresentable form stands in. The probe
+    read exists only to capture the original exception for the
+    refusal to chain (Round 75, on the Round 65 pattern).
+    """
+    detonation: Optional[Exception] = None
+    try:
+        type(value).__name__
+    except Exception as exc:
+        detonation = exc
+    name = _safe_type_name(value)
+    if name is None:
+        return "<unrepresentable value>", detonation
+    return name, detonation
+
+
+def _refuse(
+    message: str,
+    detonation: Optional[Exception],
+    *,
+    context: Optional[str] = None,
+) -> NoReturn:
+    """Raise a refusal's ConfigError, chaining the detonation
+    its guarded rendering captured, where there was one.
+
+    An ordinary refusal has no detonation and is raised plain,
+    exactly as the raw seats raised it. A refusal whose value
+    detonated its raw formatting chains that original exception,
+    so the caller sees the seat's own explanation and the cause
+    that produced it, not the argument wrap's generic wording
+    (Round 75).
+    """
+    error = ConfigError(message, context=context)
+    if detonation is not None:
+        raise error from detonation
+    raise error
 
 
 def _drop_none(body: dict[str, Any]) -> dict[str, Any]:
@@ -82,9 +155,11 @@ def _string_list(
     if value is None:
         return None
     if isinstance(value, (str, bytes)):
-        raise ConfigError(
+        rendered, detonation = _guarded_repr(value)
+        _refuse(
             f"{name} must be an iterable of strings, not a single "
-            f"string: {value!r}"
+            f"string: {rendered}",
+            detonation,
         )
     limit = MAX_MATERIALIZED_ITEMS if max_items is None else max_items
     items = _materialize_bounded(
@@ -92,8 +167,10 @@ def _string_list(
     )
     for item in items:
         if not isinstance(item, str):
-            raise ConfigError(
-                f"{name} items must be strings, got {item!r}"
+            rendered, detonation = _guarded_repr(item)
+            _refuse(
+                f"{name} items must be strings, got {rendered}",
+                detonation,
             )
         _validate_code_string(name, item)
     return items or None
@@ -117,13 +194,16 @@ def _validate_code_string(
     if value is None:
         return None
     if not isinstance(value, str):
-        raise ConfigError(f"{name} must be a string, got {value!r}")
+        rendered, detonation = _guarded_repr(value)
+        _refuse(f"{name} must be a string, got {rendered}", detonation)
     for char in value:
         code = ord(char)
         if code < 0x20 or 0x7F <= code <= 0x9F or 0xD800 <= code <= 0xDFFF:
-            raise ConfigError(
+            rendered, detonation = _guarded_repr(value)
+            _refuse(
                 f"{name} must not contain control characters or "
-                f"unpaired surrogates, got {value!r}"
+                f"unpaired surrogates, got {rendered}",
+                detonation,
             )
     return value
 
@@ -137,17 +217,21 @@ def _validate_bool(name: str, value: Optional[bool]) -> Optional[bool]:
     """
     if value is None or isinstance(value, bool):
         return value
-    raise ConfigError(f"{name} must be a bool, got {value!r}")
+    rendered, detonation = _guarded_repr(value)
+    _refuse(f"{name} must be a bool, got {rendered}", detonation)
 
 
 def _validate_coordinate(name: str, value: Any, low: float, high: float) -> float:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
-        raise ConfigError(f"{name} must be a real number, got {value!r}")
+        rendered, detonation = _guarded_repr(value)
+        _refuse(f"{name} must be a real number, got {rendered}", detonation)
     result = float(value)
     if not math.isfinite(result) or not low <= result <= high:
-        raise ConfigError(
+        rendered, detonation = _guarded_repr(value)
+        _refuse(
             f"{name} must be finite and within {low:g} to {high:g}, "
-            f"got {value!r}"
+            f"got {rendered}",
+            detonation,
         )
     return result
 
@@ -169,21 +253,29 @@ def _validate_lat_lng(
         longitude: Any = value.longitude
     elif isinstance(value, Mapping):
         if "latitude" not in value or "longitude" not in value:
-            raise ConfigError(
-                f"{name} must carry latitude and longitude, got {value!r}"
+            rendered, detonation = _guarded_repr(value)
+            _refuse(
+                f"{name} must carry latitude and longitude, "
+                f"got {rendered}",
+                detonation,
             )
         latitude = value["latitude"]
         longitude = value["longitude"]
     elif isinstance(value, (tuple, list)):
         if len(value) != 2:
-            raise ConfigError(
-                f"{name} must be a (latitude, longitude) pair, got {value!r}"
+            rendered, detonation = _guarded_repr(value)
+            _refuse(
+                f"{name} must be a (latitude, longitude) pair, "
+                f"got {rendered}",
+                detonation,
             )
         latitude, longitude = value
     else:
-        raise ConfigError(
+        rendered, detonation = _guarded_repr(value)
+        _refuse(
             f"{name} must be a LatLng, a (latitude, longitude) pair or "
-            f"a latitude/longitude dict, got {value!r}"
+            f"a latitude/longitude dict, got {rendered}",
+            detonation,
         )
     return {
         "latitude": _validate_coordinate(f"{name} latitude", latitude, -90, 90),
@@ -205,8 +297,10 @@ def _circle_body(
         or not isinstance(radius_m, (int, float))
         or not math.isfinite(float(radius_m))
     ):
-        raise ConfigError(
-            f"radius_m must be a finite number, got {radius_m!r}"
+        rendered, detonation = _guarded_repr(radius_m)
+        _refuse(
+            f"radius_m must be a finite number, got {rendered}",
+            detonation,
         )
     return {
         "circle": {
@@ -311,9 +405,12 @@ def _validate_dict_body(
                     "walk an unbounded structure"
                 )
             if key in _DICT_LIST_FIELDS and isinstance(item, (str, bytes)):
-                raise ConfigError(
-                    f"{name} field {key!r} must be a list of strings, "
-                    f"not a single string: {item!r}"
+                key_rendered, detonation = _guarded_repr(key)
+                item_rendered, item_detonation = _guarded_repr(item)
+                _refuse(
+                    f"{name} field {key_rendered} must be a list of "
+                    f"strings, not a single string: {item_rendered}",
+                    detonation if detonation is not None else item_detonation,
                 )
             _validate_dict_body(name, item, depth + 1, budget)
     elif isinstance(value, (list, tuple)):
@@ -347,8 +444,11 @@ def _location_body(
     if value is None:
         return None
     if not isinstance(value, Mapping):
-        raise ConfigError(
-            f"location bias or restriction must be a dict, got {value!r}"
+        rendered, detonation = _guarded_repr(value)
+        _refuse(
+            f"location bias or restriction must be a dict, "
+            f"got {rendered}",
+            detonation,
         )
     result = _mapping_copy(name, value)
     circle = result.get("circle")
@@ -378,7 +478,10 @@ def _routing_body(value: Optional[dict[str, Any]]) -> Optional[dict[str, Any]]:
     if value is None:
         return None
     if not isinstance(value, Mapping):
-        raise ConfigError(f"routing_parameters must be a dict, got {value!r}")
+        rendered, detonation = _guarded_repr(value)
+        _refuse(
+            f"routing_parameters must be a dict, got {rendered}", detonation
+        )
     result = _mapping_copy("routing_parameters", value)
     origin = result.get("origin")
     if isinstance(origin, (LatLng, tuple, list, Mapping)):
@@ -392,7 +495,8 @@ def _mapping_body(name: str, value: Optional[dict[str, Any]]) -> Optional[dict[s
     if value is None:
         return None
     if not isinstance(value, Mapping):
-        raise ConfigError(f"{name} must be a dict, got {value!r}")
+        rendered, detonation = _guarded_repr(value)
+        _refuse(f"{name} must be a dict, got {rendered}", detonation)
     result = _mapping_copy(name, value)
     _validate_dict_body(name, result)
     return result
@@ -615,8 +719,11 @@ class _Base:
     @staticmethod
     def _require_str(name: str, value: Any, context: str) -> str:
         if not isinstance(value, str):
-            raise ConfigError(
-                f"{name} must be a string, got {value!r}", context=context
+            rendered, detonation = _guarded_repr(value)
+            _refuse(
+                f"{name} must be a string, got {rendered}",
+                detonation,
+                context=context,
             )
         if any(0xD800 <= ord(char) <= 0xDFFF for char in value):
             # An unpaired surrogate can never be encoded as UTF-8,
@@ -626,9 +733,11 @@ class _Base:
             # (Round 25, the free text half of the scalar slot
             # finding). The refusal names the argument here, where
             # every free text argument is checked.
-            raise ConfigError(
+            rendered, detonation = _guarded_repr(value)
+            _refuse(
                 f"{name} must not contain unpaired surrogates, "
-                f"got {value!r}",
+                f"got {rendered}",
+                detonation,
                 context=context,
             )
         return value
@@ -656,14 +765,21 @@ class _Base:
         elif isinstance(value, str):
             resolved = value
         else:
-            raise ConfigError(
+            rendered, detonation = _guarded_repr(value)
+            _refuse(
                 f"place_id must be a string, a Place or a "
-                f"PlacePrediction, got {value!r}"
+                f"PlacePrediction, got {rendered}",
+                detonation,
             )
         if not isinstance(resolved, str):
-            raise ConfigError(
-                f"place_id from a {type(value).__name__} must be "
-                f"a string, got {resolved!r}"
+            name_rendered, detonation = _guarded_name(value)
+            resolved_rendered, resolved_detonation = _guarded_repr(
+                resolved
+            )
+            _refuse(
+                f"place_id from a {name_rendered} must be "
+                f"a string, got {resolved_rendered}",
+                detonation if detonation is not None else resolved_detonation,
             )
         if not resolved.strip():
             raise ConfigError(
@@ -695,16 +811,20 @@ class _Base:
             if isinstance(value.width_px, bool) or not isinstance(
                 value.width_px, int
             ):
-                raise ConfigError(
+                rendered, detonation = _guarded_repr(value.width_px)
+                _refuse(
                     "a Photo width_px must be an integer, "
-                    f"got {value.width_px!r}"
+                    f"got {rendered}",
+                    detonation,
                 )
             if isinstance(value.height_px, bool) or not isinstance(
                 value.height_px, int
             ):
-                raise ConfigError(
+                rendered, detonation = _guarded_repr(value.height_px)
+                _refuse(
                     "a Photo height_px must be an integer, "
-                    f"got {value.height_px!r}"
+                    f"got {rendered}",
+                    detonation,
                 )
             width = max_width_px
             height = max_height_px
@@ -723,8 +843,10 @@ class _Base:
             return value.name, width, height
         if isinstance(value, str):
             return value, max_width_px, max_height_px
-        raise ConfigError(
-            f"photo_name must be a string or a Photo, got {value!r}"
+        rendered, detonation = _guarded_repr(value)
+        _refuse(
+            f"photo_name must be a string or a Photo, got {rendered}",
+            detonation,
         )
 
     @staticmethod
@@ -751,8 +873,10 @@ class _Base:
                 context=context,
             )
         if not isinstance(skip_http_redirect, bool):
-            raise ConfigError(
-                f"skip_http_redirect must be a bool, got {skip_http_redirect!r}",
+            rendered, detonation = _guarded_repr(skip_http_redirect)
+            _refuse(
+                f"skip_http_redirect must be a bool, got {rendered}",
+                detonation,
                 context=context,
             )
 
@@ -771,8 +895,11 @@ class _Base:
             or not isinstance(value, int)
             or not low <= value <= high
         ):
-            raise ConfigError(
-                f"{name} must be an integer between {low} and {high}, got {value!r}"
+            rendered, detonation = _guarded_repr(value)
+            _refuse(
+                f"{name} must be an integer between {low} and {high}, "
+                f"got {rendered}",
+                detonation,
             )
         return value
 
@@ -790,9 +917,11 @@ class _Base:
             or not math.isfinite(float(value))
             or not low <= float(value) <= high
         ):
-            raise ConfigError(
+            rendered, detonation = _guarded_repr(value)
+            _refuse(
                 f"{name} must be a number between {low:g} and {high:g}, "
-                f"got {value!r}"
+                f"got {rendered}",
+                detonation,
             )
         return float(value)
 
