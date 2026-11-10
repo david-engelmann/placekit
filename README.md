@@ -8,7 +8,7 @@ pip install placekit
 
 Prebuilt wheels cover CPython 3.10 and newer on Linux (x86_64 and aarch64 with glibc 2.28 or newer), macOS (Intel on 10.12 or newer, Apple silicon on 11 or newer), and Windows (x64). Installing is a single small download with zero runtime dependencies. There is nothing to compile and no Rust toolchain is needed. Only if your platform has no wheel does pip fall back to the source distribution. That happens on musl systems such as Alpine and on anything below the floors above, and a source install has its own requirements, covered under Building from source below.
 
-Most Places libraries in Python are wrappers around the retired legacy API, or thin HTTP helpers that hand you back raw JSON. placekit targets the current Places API (New) end to end, with typed request building, field masks as a first-class feature, dataclass response models, and an exception hierarchy that tells you what actually went wrong. Google ships an official client for this API too, the generated google-maps-places package, and it is the right choice when you want the surface exactly as Google generates it. placekit is the hand shaped alternative over the same API, covering the five endpoints below with typed models whose raw attribute is the response body itself, and carrying no runtime dependencies.
+placekit targets the current Places API (New) end to end, with typed request building, field masks as a first-class feature, dataclass response models, and an exception hierarchy that tells you what actually went wrong. Google ships an official client for this API too, the generated google-maps-places package, and it is the right choice when you want the surface exactly as Google generates it. placekit is the hand shaped alternative over the same API, covering the five endpoints below with typed models whose raw attribute is the response body itself, with the one exception of PhotoMedia, the downloaded photo form, which carries no raw.
 
 ## Building from source
 
@@ -36,7 +36,7 @@ photo = client.place_photo(details.photos[0], max_width_px=800)
 photo.save("cafe.jpg")
 ```
 
-The photo call downloads the image itself by default. Pass `skip_http_redirect=True` to `place_photo` instead and the call returns a `PhotoUriResult` whose `photo_uri` attribute carries the photo URI, for callers who would rather fetch the image themselves or hand the URI to something else.
+The photo call downloads the image itself by default. Pass `skip_http_redirect=True` to `place_photo` instead and the call returns a `PhotoUriResult` whose `photo_uri` attribute carries the photo URI, for callers who would rather fetch the image themselves or hand the URI to something else. The size is set with `max_width_px`, with `max_height_px` as the other member of the size pair beside it, and each value runs from 1 to 4800.
 
 An `AsyncClient` with the identical method set is included for async code.
 
@@ -66,7 +66,7 @@ removals named plainly.
 
 ## Why a Rust core
 
-- One abi3 wheel per platform serves every Python from 3.10 up, so installs on the platforms above are a single small download with no compiler, no build step, and zero runtime dependencies.
+- One abi3 wheel per platform serves every Python from 3.10 up, so installs on the platforms above need no compiler and no build step.
 - TLS comes from rustls, never OpenSSL, so wheels do not break across system library versions.
 - Requests are typed and validated locally before anything goes over the wire. Field mask grammar and photo size ranges are checked on the Python side first, and the Rust core validates coordinates, radii and charging rates again on its side, so a bad field mask or an out-of-range photo size fails locally, not at the API.
 - The sync and async clients share one core, so their behavior cannot drift apart.
@@ -84,7 +84,9 @@ removals named plainly.
 
 The search and autocomplete calls take the filters their endpoints offer as keyword arguments. Text Search accepts `page_size`, `min_rating`, `open_now`, `price_levels`, `strict_type_filtering`, `included_type`, the `location_bias` and `location_restriction` shapes, `ev_options`, `search_along_route`, `routing_parameters`, `include_pure_service_area_businesses` and `include_future_opening_businesses`. Nearby Search accepts `included_types`, `excluded_types`, `included_primary_types` and `excluded_primary_types` beside `max_results` and `routing_parameters`, and it accepts `include_future_opening_businesses` as well. Autocomplete accepts `origin`, `input_offset`, `included_primary_types`, `included_region_codes` and `include_query_predictions` beside its input, together with the `location_bias` and `location_restriction` shapes and the `include_pure_service_area_businesses` and `include_future_opening_businesses` switches. Each of those calls and Place Details also accepts `region`, a CLDR region code such as `AU` naming the region a request is centered on. `price_levels` takes a list of the API price level values, `PRICE_LEVEL_FREE`, `PRICE_LEVEL_INEXPENSIVE`, `PRICE_LEVEL_MODERATE`, `PRICE_LEVEL_EXPENSIVE` and `PRICE_LEVEL_VERY_EXPENSIVE`, the same strings a place carries on its `price_level` attribute.
 
-Search results page through `next_page_token`. Pass it back as `page_token` on the same call to fetch the next page.
+A text search result also carries a `search_uri`, and both search results carry `routing_summaries`, the typed routing summaries for the call, when the response includes them.
+
+Text Search results page through `next_page_token`. Pass it back as `page_token` on the same Text Search call to fetch the next page.
 
 ```python
 page = client.text_search("cafes in Sydney")
@@ -92,7 +94,9 @@ while page.next_page_token:
     page = client.text_search("cafes in Sydney", page_token=page.next_page_token)
 ```
 
-A details result carries the opening hours the API returned for the place. The hours object sits at `current_opening_hours`, which is the attribute spelling of the wire field `currentOpeningHours`, one field under two spellings, the wire spelling in a field mask and the attribute spelling on the result. Its open state sits at `current_opening_hours.open_now`, and the same object carries `weekday_descriptions`, the week's hours as one text line per day. Both levels of the path can be None on a given place, the hours object when the response carried no hours and `open_now` itself when hours arrived without a state, so the example checks the hours object before reading it, and `open_now` can still be None and prints as None.
+Stop when the returned token is absent or repeats the one just used, so a server that hands back the same token cannot hold the loop open.
+
+A details result carries the opening hours the API returned for the place. The hours object sits at `current_opening_hours`, which is the attribute spelling of the wire field `currentOpeningHours`, one field under two spellings, the wire spelling in a field mask and the attribute spelling on the result. The regular hours object sits at `regular_opening_hours`, the wire name alias for `opening_hours`, beside the current hours object the example below reads. Its open state sits at `current_opening_hours.open_now`, and the same object carries `weekday_descriptions`, the week's hours as one text line per day. Both levels of the path can be None on a given place, the hours object when the response carried no hours and `open_now` itself when hours arrived without a state, so the example checks the hours object before reading it, and `open_now` can still be None and prints as None.
 
 ```python
 result = client.text_search("cafes in Sydney")
@@ -105,7 +109,7 @@ if details.current_opening_hours is not None:
 
 Autocomplete and Place Details both accept `session_token`. One token ties a run of autocomplete calls to the details call that closes the session, and that grouping is the shape the API bills as one session, so an autocomplete flow in production should mint a fresh token for each session and pass it to both calls. Tokens are caller generated rather than minted by placekit, and a UUID is the usual shape.
 
-An autocomplete result carries its predictions on two members, `place_predictions` and `query_predictions`. A prediction's `text` is an optional `FormattedText` rather than a plain string, so the read guards it first. The display string sits at `prediction.text.text`, and the ranges where the input matched inside that string sit at `prediction.text.matches`.
+An autocomplete result carries its predictions on two members, `place_predictions` and `query_predictions`, both read off its `suggestions`, the full list of suggestion objects the response carried. A prediction's `text` is an optional `FormattedText` rather than a plain string, so the read guards it first. The display string sits at `prediction.text.text`, and the ranges where the input matched inside that string sit at `prediction.text.matches`.
 
 ```python
 result = client.autocomplete("Bianco")
@@ -127,7 +131,7 @@ result = client.text_search(
 )
 ```
 
-Any iterable of path strings works too. Omit `fields` on a search or details call and that endpoint uses a curated default, available as `FieldMask.text_search()`, `FieldMask.nearby_search()`, and `FieldMask.place_details()`. Autocomplete takes an optional `fields` mask with no curated default behind it, and `place_photo` takes no `fields` argument at all.
+Any iterable of path strings works too, and `FieldMask.of` builds a mask from any such iterable, passing a mask it is handed through unchanged. A mask carries its joined header form on `FieldMask.header_value`, the value sent in the `X-Goog-FieldMask` header. Omit `fields` on a search or details call and that endpoint uses a curated default, available as `FieldMask.text_search()`, `FieldMask.nearby_search()`, and `FieldMask.place_details()`. The `normalize_fields` helper in `placekit.fields` turns a fields argument into the plain list of paths it carries, or None when no fields argument was given. Autocomplete takes an optional `fields` mask with no curated default behind it, and `place_photo` takes no `fields` argument at all.
 
 One billing note on the defaults. They include fields from the Enterprise billing tier, among them rating, user rating counts and price level, so a search call with a default mask is billed at the Enterprise tier. Place Details is the exception. Its default mask requests every modelled field, including current opening hours from the higher Enterprise plus Atmosphere tier, so a default `place_details` call is billed at that tier. Pass a narrower `fields` set when you want a lower tier.
 

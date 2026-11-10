@@ -63,7 +63,7 @@ here once and then met again inside the examples.
 
 ## Example 1. The flagship search
 
-The legacy flagship is quoted below. Its code lines are quoted
+The legacy example is quoted below. Its code lines are quoted
 exactly as published, with the comments and the API key assignment
 omitted. It is Python 2 as published, it is quoted history, and it
 is not executed anywhere in this repository.
@@ -102,7 +102,7 @@ if query_result.has_next_page_token:
             pagetoken=query_result.next_page_token)
 ```
 
-The ported flagship follows. It is two searches, because the legacy
+The ported version follows. It is two searches, because the legacy
 call mixed two intents the new API keeps apart, and then the same
 result loop with the upgrade made explicit.
 
@@ -215,7 +215,7 @@ What changed, in the order the code meets it.
 
 ## Example 2. Following the next page
 
-The legacy next page flow is the tail of the flagship, quoted here
+The legacy next page flow is the tail of that example, quoted here
 on its own. It is quoted history and is not executed.
 
 ```python
@@ -319,7 +319,7 @@ and place_details never reads it, because the resolver takes the
 identifier from place_id.
 
 The get_details call became place_details on the prediction object
-itself, returning a new Place as in the flagship. Session tokens
+itself, returning a new Place as in the first example. Session tokens
 are new. One token covers a run of autocomplete calls and the
 place_details call that closes it, and Google bills that session
 as a unit instead of charging for every call on its own, so a
@@ -471,7 +471,7 @@ The filter rule breaks quietly, which is worse. Only Table A
 values may filter a search. placekit.types files Table B values
 under their own heading, and a Table B constant in included_types
 or included_type is refused by the live API even though it passes
-every local check. The flagship example meets this rule at the
+every local check. The first example meets this rule at the
 type filter, and it applies to every Table B value a legacy types
 list carried.
 
@@ -539,7 +539,7 @@ resolved it before the search ran. One module function,
 geocode_location, spent one Geocoding API request on the client's
 own key ahead of every string location call, with no caching of
 any kind, and kept only the first result's coordinates. The
-flagship example never mentioned a second API, so the cost never
+first example never mentioned a second API, so the cost never
 appeared in the call the user wrote.
 
 placekit performs no geocode step, and that boundary stands. No
