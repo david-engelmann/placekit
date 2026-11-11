@@ -1101,8 +1101,9 @@ fn content_type_of(response: &reqwest::Response) -> Option<String> {
 /// form before this runs (red team R3), so a check on the raw
 /// string would misread exactly the spellings worth catching. An
 /// IPv6 literal that embeds an IPv4 address is judged by the
-/// address it embeds, so the mapped and compatible spellings of a
-/// loopback address read as loopback here.
+/// address it embeds, so the mapped, compatible and
+/// translation spellings of a loopback address read as loopback
+/// here.
 fn host_is_loopback(url: &reqwest::Url) -> bool {
     match url.host() {
         Some(url::Host::Domain(name)) => {
@@ -1130,15 +1131,78 @@ fn host_ip(url: &reqwest::Url) -> Option<std::net::IpAddr> {
 /// The IPv4 address an IPv6 literal embeds, when it carries one.
 /// The IPv4-mapped form and the older IPv4-compatible form both
 /// name an IPv4 address in their last 32 bits, and dual stack
-/// sockets deliver them to that address. The unspecified address
-/// and the IPv6 loopback address are not embeddings, they are
-/// addresses in their own right, so they return None here and keep
-/// their IPv6 reading.
+/// sockets deliver them to that address. The translation forms
+/// name an IPv4 address too, and a translator on the network
+/// path delivers them to that address on the same reasoning: the
+/// NAT64 well-known prefix 64:ff9b::/96 and the IPv4-translated
+/// prefix ::ffff:0:0/96 both carry the address in their last 32
+/// bits, and the NAT64 local-use prefix 64:ff9b:1::/48 can carry
+/// it in two places, under the RFC 6052 layout for that prefix
+/// length in segment 3, the low byte of segment 4 and the high
+/// byte of segment 5 (the byte between the two halves is the
+/// reserved u octet the layout sets to zero), and in the last
+/// 32 bits under a /96 length. A screen cannot know the prefix
+/// length the network is configured with, so either position
+/// counts as the embedding, and where the two positions carry
+/// different addresses the one a screen must act on wins, a
+/// loopback address first, a non-public address next, and the
+/// unspecified address ahead of a public one, because its
+/// dotted form is refused for naming the local host and a
+/// zero position is the only cover it could hide behind. The
+/// unspecified address and the IPv6 loopback address are not
+/// embeddings, they are addresses in their own right, so they
+/// return None here and keep their IPv6 reading.
 fn ipv6_embedded_ipv4(ip: std::net::Ipv6Addr) -> Option<std::net::Ipv4Addr> {
     if ip.is_unspecified() || ip.is_loopback() {
         return None;
     }
-    ip.to_ipv4()
+    if let Some(v4) = ip.to_ipv4() {
+        return Some(v4);
+    }
+    let segments = ip.segments();
+    let from_pair =
+        |high: u16, low: u16| std::net::Ipv4Addr::from(((high as u32) << 16) | (low as u32));
+    let low = from_pair(segments[6], segments[7]);
+    match segments {
+        // The NAT64 well-known prefix and the IPv4-translated
+        // prefix carry the embedded address in the last 32 bits.
+        [0x0064, 0xff9b, 0, 0, 0, 0, _, _] | [0, 0, 0, 0, 0xffff, 0, _, _] => Some(low),
+        [0x0064, 0xff9b, 0x0001, _, _, _, _, _] => {
+            // The local-use prefix, judged at both embedding
+            // positions (see the doc comment). The /48 position
+            // reads by the RFC 6052 layout for that length,
+            // segment 3, then the low byte of segment 4 and the
+            // high byte of segment 5, stepping over the reserved
+            // u octet in the high byte of segment 4. When both
+            // positions carry an address and they differ, the
+            // one a screen must act on wins, a loopback address
+            // first, a non-public address next, and the
+            // unspecified address ahead of a public one, because
+            // its dotted form is refused for naming the local
+            // host and a zero position is the only cover it
+            // could hide behind, so neither position can hide
+            // the other from the consumers of this helper.
+            let routed = std::net::Ipv4Addr::from(
+                ((segments[3] as u32) << 16)
+                    | (((segments[4] as u32) & 0xff) << 8)
+                    | ((segments[5] as u32) >> 8),
+            );
+            if routed.is_loopback() {
+                Some(routed)
+            } else if low.is_loopback() {
+                Some(low)
+            } else if ipv4_is_non_public(routed) && !routed.is_unspecified() {
+                Some(routed)
+            } else if ipv4_is_non_public(low) && !low.is_unspecified() {
+                Some(low)
+            } else if routed.is_unspecified() || low.is_unspecified() {
+                Some(std::net::Ipv4Addr::UNSPECIFIED)
+            } else {
+                Some(routed)
+            }
+        }
+        _ => None,
+    }
 }
 
 /// Whether an IPv4 address names a non-public address: a private
@@ -1163,9 +1227,9 @@ fn ipv4_is_non_public(v4: std::net::Ipv4Addr) -> bool {
 /// is judged separately by [`host_is_loopback`], because its
 /// treatment depends on the configured base. An IPv6 literal that
 /// embeds an IPv4 address is judged by the address it embeds, so
-/// the mapped and compatible spellings of a private address cannot
-/// walk past the screen their dotted spelling fails (Round 18
-/// landing red team).
+/// the mapped, compatible and translation spellings of a private
+/// address cannot walk past the screen their dotted spelling
+/// fails (Round 18 landing red team).
 fn ip_is_non_public(ip: std::net::IpAddr) -> bool {
     match ip {
         std::net::IpAddr::V4(v4) => ipv4_is_non_public(v4),
@@ -1816,6 +1880,47 @@ mod tests {
             // (red team R3).
             "http://0x7f.1:9/v1",
             "https://example.com/v1",
+        ] {
+            assert!(
+                Client::builder("k").base_url(good).build().is_ok(),
+                "{good}"
+            );
+        }
+    }
+
+    #[test]
+    fn base_url_translation_spellings_are_judged_by_the_embedded_address() {
+        // Round 78: base URL parsing reads the same embedded
+        // address recovery as the redirect screen, so a plain http
+        // base naming a translation spelling of a private address
+        // is refused at construction under the same loopback only
+        // rule its dotted spelling fails, and a translation
+        // spelling of the loopback address builds as the loopback
+        // it names.
+        for bad in [
+            "http://10.0.0.1/v1",
+            "http://[64:ff9b::a00:1]/v1",
+            "http://[64:ff9b:1::a00:1]/v1",
+            "http://[64:ff9b:1:a00:1:0:0:0]/v1",
+            "http://[64:ff9b:1:a00:0:100::]/v1",
+            "http://[::ffff:0:a00:1]/v1",
+        ] {
+            assert_eq!(
+                Client::builder("k")
+                    .base_url(bad)
+                    .build()
+                    .unwrap_err()
+                    .kind(),
+                "config",
+                "{bad}"
+            );
+        }
+        for good in [
+            "http://[64:ff9b::7f00:1]:8080/v1",
+            "http://[64:ff9b:1::7f00:1]:8080/v1",
+            "http://[64:ff9b:1:7f00:1:0:0:0]:8080/v1",
+            "http://[64:ff9b:1:7f00:0:100::]:8080/v1",
+            "http://[::ffff:0:7f00:1]:8080/v1",
         ] {
             assert!(
                 Client::builder("k").base_url(good).build().is_ok(),
@@ -2941,6 +3046,91 @@ mod tests {
         // mapped spelling of a private address is refused from the
         // loopback base just as its dotted spelling is.
         assert!(at(&stub, "https://[::ffff:192.168.1.10]/img").is_err());
+    }
+
+    #[test]
+    fn redirect_translation_spellings_are_judged_by_the_embedded_address() {
+        // Round 78 red team: the NAT64 and IPv4-translated
+        // spellings of a private address passed the screen
+        // unjudged, because the embedded address recovery read
+        // only the mapped and compatible forms. A translator on
+        // the network path delivers each of these spellings to
+        // the address it embeds, so the screen judges them by
+        // that address.
+        let api = reqwest::Url::parse("https://places.googleapis.com/v1").unwrap();
+        let at = |target: &str| screen_redirect_target(&api, &reqwest::Url::parse(target).unwrap());
+        // Each breach spelling of the private address 10.0.0.1 is
+        // refused with the non-public reason: the NAT64 well-known
+        // prefix, the NAT64 local-use prefix and the
+        // IPv4-translated prefix.
+        for target in [
+            "https://[64:ff9b::a00:1]/x",
+            "https://[64:ff9b:1::a00:1]/x",
+            "https://[::ffff:0:a00:1]/x",
+        ] {
+            let err = at(target).unwrap_err();
+            assert!(
+                err.to_string()
+                    .contains("the target is a non-public IP address"),
+                "{target}: {err}"
+            );
+        }
+        // The local-use prefix is refused with the embedded
+        // address in each of its two positions, the RFC 6052
+        // /48 layout and the last 32 bits. The third spelling
+        // is 10.0.0.1 under the /48 layout itself, its second
+        // half stepping over the reserved u octet.
+        for target in [
+            "https://[64:ff9b:1:a00:1:0:0:0]/x",
+            "https://[64:ff9b:1::a00:1]/x",
+            "https://[64:ff9b:1:a00:0:100::]/x",
+        ] {
+            let err = at(target).unwrap_err();
+            assert!(
+                err.to_string()
+                    .contains("the target is a non-public IP address"),
+                "{target}: {err}"
+            );
+        }
+        // The mapped and compatible spellings keep the judgement
+        // they already had, refused by the address they embed.
+        for target in ["https://[::ffff:10.0.0.1]/x", "https://[::10.0.0.1]/x"] {
+            let err = at(target).unwrap_err();
+            assert!(
+                err.to_string()
+                    .contains("the target is a non-public IP address"),
+                "{target}: {err}"
+            );
+        }
+        // A translation spelling of a public address is followed,
+        // not refused: 64:ff9b::808:808 embeds 8.8.8.8.
+        assert!(at("https://[64:ff9b::808:808]/x").is_ok());
+        // A loopback address embedded in a translation spelling
+        // is judged loopback by the https rule from a non-loopback
+        // base, and refused with the loopback reason.
+        let err = at("https://[64:ff9b::7f00:1]/x").unwrap_err();
+        assert!(
+            err.to_string().contains("the target is a loopback address"),
+            "{err}"
+        );
+        // The unspecified address cannot hide behind a public
+        // address in the other position of the local-use
+        // prefix. Under the /48 layout the first spelling
+        // names 0.0.0.0 itself, and under a /96 length the
+        // second spelling carries 0.0.0.0 in its last 32 bits,
+        // and the dotted form is refused for naming the local
+        // host, so both spellings refuse.
+        for target in [
+            "https://[64:ff9b:1::808:808]/x",
+            "https://[64:ff9b:1:808:808::]/x",
+        ] {
+            let err = at(target).unwrap_err();
+            assert!(
+                err.to_string()
+                    .contains("the target is a non-public IP address"),
+                "{target}: {err}"
+            );
+        }
     }
 
     #[test]
