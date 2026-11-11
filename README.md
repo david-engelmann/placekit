@@ -279,7 +279,7 @@ pip install (Get-ChildItem target\wheels\*.whl).FullName
 
 You normally never need this. The Linux wheels are built by GitHub Actions inside manylinux containers, the macOS and Windows wheels are built on native runners for their architectures, and pushing a version tag publishes them to PyPI through trusted publishing from the same workflow.
 
-A wheel built this way on a local machine is tied to that machine. On Linux it carries the local glibc as its floor, 2.39 on a current Ubuntu, not the manylinux 2_28 floor of the released wheels. A local build is for testing and is never a substitute for a released wheel.
+A wheel built this way on a local machine is tied to that machine. On Linux it carries the local glibc as its floor, 2.39 on Ubuntu 24.04, not the manylinux 2_28 floor of the released wheels. A local build is for testing and is never a substitute for a released wheel.
 
 Each wheel carries an embedded CycloneDX SBOM that the build generates for the Rust dependency tree, stored inside the wheel under its dist-info sboms folder. The tree it covers is the full locked tree across every platform that tree supports, so the SBOM also names components a given wheel platform never compiles, such as the Windows and WebAssembly branches of shared dependencies. The release trust story is that SBOM together with the commit SHA pin on every action in the workflow and PyPI trusted publishing, which ties each upload to this repository and workflow.
 
