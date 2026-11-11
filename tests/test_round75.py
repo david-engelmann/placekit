@@ -20,7 +20,7 @@ raise the raw read produced. For every ordinary value the
 refusal messages are byte identical to the messages before
 this round, and the controls beside each detonation pin hold
 that identity. The audit behind this round drove every raw
-repr seat in the client module; the seats the drives proved
+repr seat in the client module. The seats the drives proved
 identical in shape are pinned here beside the two resolvers
 the red team indicted. Both clients share the resolvers and
 validators on the base class, and the async pins hold that
@@ -61,6 +61,16 @@ class ReprBombInt(int):
 
 
 class ReprBombFloat(float):
+    def __repr__(self):
+        raise REPR_BOOM
+
+
+class ReprBombList(list):
+    def __repr__(self):
+        raise REPR_BOOM
+
+
+class ReprBombDict(dict):
     def __repr__(self):
         raise REPR_BOOM
 
@@ -449,6 +459,64 @@ def test_validate_bool_bomb():
     assert caught.value.__cause__ is REPR_BOOM
 
 
+def test_coordinate_nonnumeric_bomb():
+    client = Client("test-key")
+    with pytest.raises(ConfigError) as caught:
+        client.autocomplete("x", origin=(ReprBomb(), 0.0))
+    assert caught.value.message == (
+        "origin latitude must be a real number, "
+        "got <ReprBomb whose repr raised>"
+    )
+    assert WRAP_WORDING not in caught.value.message
+    assert caught.value.context == "autocomplete"
+    assert caught.value.__cause__ is REPR_BOOM
+
+
+def test_coordinate_range_bomb():
+    client = Client("test-key")
+    with pytest.raises(ConfigError) as caught:
+        client.autocomplete(
+            "x", origin=(ReprBombFloat(999.0), 0.0)
+        )
+    assert caught.value.message == (
+        "origin latitude must be finite and within -90 to 90, "
+        "got <ReprBombFloat whose repr raised>"
+    )
+    assert WRAP_WORDING not in caught.value.message
+    assert caught.value.context == "autocomplete"
+    assert caught.value.__cause__ is REPR_BOOM
+
+
+def test_lat_lng_mapping_keys_bomb():
+    client = Client("test-key")
+    with pytest.raises(ConfigError) as caught:
+        client.autocomplete(
+            "x", origin=ReprBombDict({"lat": 1})
+        )
+    assert caught.value.message == (
+        "origin must carry latitude and longitude, "
+        "got <ReprBombDict whose repr raised>"
+    )
+    assert WRAP_WORDING not in caught.value.message
+    assert caught.value.context == "autocomplete"
+    assert caught.value.__cause__ is REPR_BOOM
+
+
+def test_lat_lng_pair_length_bomb():
+    client = Client("test-key")
+    with pytest.raises(ConfigError) as caught:
+        client.autocomplete(
+            "x", origin=ReprBombList([1, 2, 3])
+        )
+    assert caught.value.message == (
+        "origin must be a (latitude, longitude) pair, "
+        "got <ReprBombList whose repr raised>"
+    )
+    assert WRAP_WORDING not in caught.value.message
+    assert caught.value.context == "autocomplete"
+    assert caught.value.__cause__ is REPR_BOOM
+
+
 def test_lat_lng_else_bomb():
     client = Client("test-key")
     with pytest.raises(ConfigError) as caught:
@@ -511,6 +579,32 @@ def test_mapping_body_bomb():
         "ev_options must be a dict, got <ReprBomb whose repr raised>"
     )
     assert WRAP_WORDING not in caught.value.message
+    assert caught.value.__cause__ is REPR_BOOM
+
+
+def test_location_body_bomb():
+    client = Client("test-key")
+    with pytest.raises(ConfigError) as caught:
+        client.text_search("q", location_bias=ReprBomb())
+    assert caught.value.message == (
+        "location bias or restriction must be a dict, "
+        "got <ReprBomb whose repr raised>"
+    )
+    assert WRAP_WORDING not in caught.value.message
+    assert caught.value.context == "text_search"
+    assert caught.value.__cause__ is REPR_BOOM
+
+
+def test_routing_body_bomb():
+    client = Client("test-key")
+    with pytest.raises(ConfigError) as caught:
+        client.text_search("q", routing_parameters=ReprBomb())
+    assert caught.value.message == (
+        "routing_parameters must be a dict, "
+        "got <ReprBomb whose repr raised>"
+    )
+    assert WRAP_WORDING not in caught.value.message
+    assert caught.value.context == "text_search"
     assert caught.value.__cause__ is REPR_BOOM
 
 
