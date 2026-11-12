@@ -3134,6 +3134,85 @@ mod tests {
     }
 
     #[test]
+    fn embedded_ipv4_extraction_returns_the_rfc_address() {
+        // The Round 78 verdict pins judge spellings by the
+        // predicates on the extracted address, and every
+        // predicate reads the first two octets (the unspecified
+        // check alone reads all four), so a wrong third or
+        // fourth octet in the routed extraction would pass
+        // every verdict pin. These assertions pin the
+        // extracted value itself, octet for octet, across the
+        // spelling families, including the segment 5 shapes
+        // where the RFC 6052 layout puts the fourth octet in
+        // the high byte and the low byte carries nothing.
+        let cases: [(&str, Option<std::net::Ipv4Addr>); 15] = [
+            ("64:ff9b::a00:1", Some(std::net::Ipv4Addr::new(10, 0, 0, 1))),
+            (
+                "64:ff9b::7f00:1",
+                Some(std::net::Ipv4Addr::new(127, 0, 0, 1)),
+            ),
+            (
+                "::ffff:0:c0a8:101",
+                Some(std::net::Ipv4Addr::new(192, 168, 1, 1)),
+            ),
+            (
+                "::ffff:c0a8:101",
+                Some(std::net::Ipv4Addr::new(192, 168, 1, 1)),
+            ),
+            (
+                "64:ff9b:1:a00:0:100::",
+                Some(std::net::Ipv4Addr::new(10, 0, 0, 1)),
+            ),
+            (
+                "64:ff9b:1:7f00:0:100::",
+                Some(std::net::Ipv4Addr::new(127, 0, 0, 1)),
+            ),
+            (
+                "64:ff9b:1:a00:0:ff::",
+                Some(std::net::Ipv4Addr::new(10, 0, 0, 0)),
+            ),
+            (
+                "64:ff9b:1:102:300:4000:808:808",
+                Some(std::net::Ipv4Addr::new(1, 2, 0, 64)),
+            ),
+            (
+                "64:ff9b:1:102:300:4000::",
+                Some(std::net::Ipv4Addr::new(0, 0, 0, 0)),
+            ),
+            (
+                "64:ff9b:1:a00:ab00:100::",
+                Some(std::net::Ipv4Addr::new(10, 0, 0, 1)),
+            ),
+            (
+                "64:ff9b:1:a00:0:100:7f00:1",
+                Some(std::net::Ipv4Addr::new(127, 0, 0, 1)),
+            ),
+            (
+                "64:ff9b:1::808:808",
+                Some(std::net::Ipv4Addr::new(0, 0, 0, 0)),
+            ),
+            (
+                "64:ff9b:1:808:808::",
+                Some(std::net::Ipv4Addr::new(0, 0, 0, 0)),
+            ),
+            (
+                "64:ff9b:1:808:800:100:a00:1",
+                Some(std::net::Ipv4Addr::new(10, 0, 0, 1)),
+            ),
+            (
+                "64:ff9b:1:808:800:100:808:808",
+                Some(std::net::Ipv4Addr::new(8, 8, 0, 1)),
+            ),
+        ];
+        for (spelling, expected) in cases {
+            let ip: std::net::Ipv6Addr = spelling.parse().unwrap();
+            assert_eq!(ipv6_embedded_ipv4(ip), expected, "{spelling}");
+        }
+        let outside: std::net::Ipv6Addr = "2001:db8::1".parse().unwrap();
+        assert_eq!(ipv6_embedded_ipv4(outside), None);
+    }
+
+    #[test]
     fn photo_redirect_to_a_userinfo_target_is_refused() {
         // Red team R2: the HTTP layer promotes userinfo in a
         // redirect target into an Authorization Basic header on the
