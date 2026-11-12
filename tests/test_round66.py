@@ -42,7 +42,7 @@ whether or not the include entry stands, so a build there
 cannot see the entry dropped. A plain tree is also the shape
 the round's artifact drives build from, and the shape a
 tarball consumer builds from. The staged copy is the whole
-working tree minus the five names the stage ignore set
+working tree minus the six names the stage ignore set
 names, and it includes untracked files, because the copy is
 made without reading version control state. What the built
 archive carries is then decided by the build's own include
@@ -269,7 +269,7 @@ def find_maturin() -> Path:
 
 
 STAGE_IGNORE_NAMES = frozenset(
-    {".git", ".venv", ".pytest_cache", "__pycache__", "target"}
+    {".git", ".venv", ".pytest_cache", "__pycache__", "target", "PKG-INFO"}
 )
 
 
@@ -305,16 +305,25 @@ def read_sdist_members(archive_path: Path) -> dict[str, bytes]:
 def ignore_stage_noise(directory: str, names: list[str]) -> list[str]:
     """The copy exclusions for the staged tree.
 
-    The exclusions are exactly the five names in
+    The exclusions are exactly the six names in
     STAGE_IGNORE_NAMES. The .git entry goes so the staged tree
     is a plain tree, the shape whose build the include entry
     decides. The target directory, the .pytest_cache and
     __pycache__ caches, and the .venv virtual environment go
     because the sdist never carries them and copying a target
-    directory could dwarf the tree itself. No other name is
-    excluded here. Every other name in the working tree is
+    directory could dwarf the tree itself. The PKG-INFO file
+    goes for a different reason. It is build output rather than
+    source, and a tree unpacked from the sdist carries one at
+    its root, left there by the build that made the archive. A
+    staged copy that kept it would hand the build a metadata
+    file the build means to generate itself, and the build
+    refuses that file rather than overwriting it, so the
+    artifact tests below could not run from an unpacked archive
+    at all. No checkout carries the file, so excluding it
+    changes nothing for a tree staged from a checkout. No other
+    name is excluded here. Every other name in the working tree is
     staged, dist and build directories and virtual
-    environments under names outside the five included, and
+    environments under names outside the six included, and
     the build carries from the staged tree whatever its own
     include rules take, so noise of that kind that reaches
     the archive only raises the member count, the direction
@@ -338,7 +347,7 @@ def built_sdist_members(tmp_path_factory) -> dict[str, bytes]:
     and it assembles files only, with no compilation. It builds
     from a plain copy of the repository tree staged in that
     directory, never from the checkout itself. The staged copy
-    is the whole working tree minus the five names in
+    is the whole working tree minus the six names in
     STAGE_IGNORE_NAMES, untracked files included, and the
     build's own include rules decide which of the staged files
     the archive carries.
@@ -399,3 +408,12 @@ def test_built_sdist_carries_at_least_the_member_count_floor(
         f"sdist carries {len(built_sdist_members)} file members, "
         f"under the floor of {SDIST_MEMBER_COUNT_FLOOR}"
     )
+
+
+# The staging exclusions are part of the guard, because the staged
+# copy is the shape a tarball consumer builds from, and an unpacked
+# archive carries one name a checkout never does.
+
+def test_stage_exclusions_drop_a_stray_pkg_info() -> None:
+    names = ["PKG-INFO", "pyproject.toml", "Cargo.toml", "target", "tests"]
+    assert ignore_stage_noise("unused", names) == ["PKG-INFO", "target"]
