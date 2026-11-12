@@ -2638,6 +2638,16 @@ def test_review_rating_keeps_fraction_and_whole_forms():
     assert isinstance(whole.rating, float)
 
 
+def test_place_rating_keeps_full_precision():
+    from placekit.models import Place
+
+    place = Place.from_api({"id": "ChIJx", "rating": 4.567})
+    assert place.rating == 4.567
+    assert isinstance(place.rating, float)
+    place = Place.from_api({"id": "ChIJx", "rating": 4.5678})
+    assert place.rating == 4.5678
+
+
 def test_place_without_reviews_has_empty_list():
     from placekit.models import Place
 
