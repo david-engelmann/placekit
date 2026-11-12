@@ -12,7 +12,7 @@ import asyncio
 import json
 import math
 import weakref
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import Any, Callable, Iterable, NoReturn, Optional
 
 from . import _placekit
@@ -386,7 +386,14 @@ def _validate_dict_body(
 
     The walk carries a node budget under the universal ceiling, so
     a structure whose nested mappings or sequences never end is
-    refused instead of being walked forever (R20-F01).
+    refused instead of being walked forever (R20-F01). Every
+    container the converter can materialise counts toward the
+    budget by the same rule, sets and frozensets and every
+    sequence, because the converter accepts the sequence protocol
+    at the list-typed fields rather than a list of concrete types;
+    an uncounted container would carry its members past the
+    ceiling whole (Round 81). A string or bytes value is a single
+    value and stays a leaf, counted by the entry that carries it.
     """
     if budget is None:
         budget = [MAX_MATERIALIZED_ITEMS]
@@ -395,6 +402,8 @@ def _validate_dict_body(
             f"{name} is nested deeper than {_MAX_DICT_DEPTH} levels; "
             "check for a self-referential structure"
         )
+    if isinstance(value, (str, bytes)):
+        return
     if isinstance(value, Mapping):
         for key, item in value.items():
             budget[0] -= 1
@@ -413,7 +422,7 @@ def _validate_dict_body(
                     detonation if detonation is not None else item_detonation,
                 )
             _validate_dict_body(name, item, depth + 1, budget)
-    elif isinstance(value, (list, tuple)):
+    elif isinstance(value, (set, frozenset, Sequence)):
         for item in value:
             budget[0] -= 1
             if budget[0] < 0:
