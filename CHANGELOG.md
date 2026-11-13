@@ -4,6 +4,8 @@ All notable changes to placekit are recorded here. The format follows Keep a Cha
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-11-12
+
 ### Added
 
 - README teachings and a wider spelling guard. The Quickstart photo passage now names `max_height_px` as the other member of the photo size pair beside `max_width_px`, each from 1 to 4800, and the Field masks passage now spells `FieldMask.of` and `FieldMask.header_value` where it teaches mask construction, with `normalize_fields` named beside them. The opening hours passage names `regular_opening_hours` beside `current_opening_hours`, the endpoints section names `search_uri` and `routing_summaries` on the search results, and the autocomplete passage names `suggestions` as the list the two prediction members read off. The opening paragraph now qualifies its raw claim for `PhotoMedia`, which carries no raw, the paging passage is scoped to Text Search and carries a stop caution for a repeated page token, and the spelling guard in tests/test_round57.py now covers all five client calls and the public members of `FieldMask`.

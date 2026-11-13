@@ -49,7 +49,10 @@ def make_release_ready(tree: Path) -> Path:
 
     The Unreleased heading is left empty and a dated release heading
     takes the entries that sat under it, which is the fold the release
-    checklist asks for before the tag is cut.
+    checklist asks for before the tag is cut. A copy whose changelog
+    already carries the release heading past the Unreleased heading
+    stands in that shape already and is left as it is, so the fold
+    lands exactly one release heading either way.
     """
     changelog = tree / "CHANGELOG.md"
     lines = changelog.read_text().splitlines(keepends=True)
@@ -57,8 +60,13 @@ def make_release_ready(tree: Path) -> Path:
     for i, line in enumerate(lines):
         out.append(line)
         if line.startswith("## [Unreleased]"):
-            out.append("\n## [0.1.0] - 2026-11-01\n")
-            out.extend(lines[i + 1 :])
+            rest = lines[i + 1 :]
+            already_folded = any(
+                later.startswith("## [0.1.0]") for later in rest
+            )
+            if not already_folded:
+                out.append("\n## [0.1.0] - 2026-11-01\n")
+            out.extend(rest)
             break
     changelog.write_text("".join(out))
     return tree
@@ -117,7 +125,19 @@ def test_guard_accepts_a_prerelease_changelog_heading(tmp_path: Path) -> None:
 def test_guard_refuses_a_tag_over_a_nonempty_unreleased_section(
     tmp_path: Path,
 ) -> None:
-    result = run_guard(make_copy(tmp_path), "v0.1.0")
+    tree = make_copy(tmp_path)
+    changelog = tree / "CHANGELOG.md"
+    # The copy is given an entry of its own under the Unreleased
+    # heading, so the section holds an entry whatever state the
+    # real changelog stands in when the suite runs.
+    changelog.write_text(
+        changelog.read_text().replace(
+            "## [Unreleased]\n",
+            "## [Unreleased]\n\n- An entry that has not been released yet.\n",
+            1,
+        )
+    )
+    result = run_guard(tree, "v0.1.0")
     assert result.returncode == 1
     assert "Unreleased" in result.stdout
 
@@ -181,12 +201,18 @@ def test_guard_refuses_a_tag_over_a_restyled_unreleased_heading(
 ) -> None:
     tree = make_copy(tmp_path)
     changelog = tree / "CHANGELOG.md"
-    # The copied changelog holds entries under its Unreleased heading,
-    # so only the respelled heading can let the publish guard past
-    # them. Recognition is tolerant, so each spelling still refuses.
-    changelog.write_text(
-        changelog.read_text().replace("## [Unreleased]", spelling, 1)
+    # The copy is given an entry of its own under the Unreleased
+    # heading before the heading is respelled, so the section holds
+    # an entry whatever state the real changelog stands in when the
+    # suite runs. Only the respelled heading can let the publish
+    # guard past that entry. Recognition is tolerant, so each
+    # spelling still refuses.
+    text = changelog.read_text().replace(
+        "## [Unreleased]\n",
+        "## [Unreleased]\n\n- An entry that has not been released yet.\n",
+        1,
     )
+    changelog.write_text(text.replace("## [Unreleased]", spelling, 1))
     result = run_guard(tree, "v0.1.0")
     assert result.returncode == 1
     assert "still holds entries under Unreleased" in result.stdout
