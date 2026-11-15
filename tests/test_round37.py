@@ -93,7 +93,13 @@ def test_readme_opening_hours_example_guards_the_full_path(client):
 
 
 def test_readme_teaching_sentences_are_pinned():
-    readme = (REPO_ROOT / "README.md").read_text()
+    # Since the 0.1.1 docs move these teachings live in the
+    # Addresses and Endpoints reference files the README routes
+    # to, so the pin reads both files as one surface.
+    readme = (
+        (REPO_ROOT / "docs" / "addresses.md").read_text()
+        + (REPO_ROOT / "docs" / "endpoints.md").read_text()
+    )
     # Whitespace is normalised before the substring checks, so a
     # rewrap that changes no wording cannot fail these pins while a
     # wording softening still does.

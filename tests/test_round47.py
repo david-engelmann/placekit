@@ -103,7 +103,15 @@ def test_photo_default_mode_returns_media(client):
 
 
 def test_readme_teaching_sentences_are_pinned():
-    readme = (REPO_ROOT / "README.md").read_text()
+    # Since the 0.1.1 docs move these teachings live across the
+    # README (the Quickstart pair), the Field masks reference
+    # file, and the Endpoints reference file, so the pin reads
+    # all three as one surface.
+    readme = (
+        (REPO_ROOT / "README.md").read_text()
+        + (REPO_ROOT / "docs" / "field-masks.md").read_text()
+        + (REPO_ROOT / "docs" / "endpoints.md").read_text()
+    )
     # Whitespace is normalised before the substring checks, so a
     # rewrap that changes no wording cannot fail these pins while
     # a wording softening still does.

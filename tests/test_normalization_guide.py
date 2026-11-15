@@ -663,7 +663,7 @@ def _normalised(text: str) -> str:
 
 
 def test_guide_file_exists_and_names_the_boundaries():
-    guide = (REPO_ROOT / "NORMALIZATION.md").read_text()
+    guide = (REPO_ROOT / "docs" / "NORMALIZATION.md").read_text()
     # Whitespace is normalised before the substring checks, so a
     # rewrap that changes no wording cannot fail these pins while
     # a wording softening still does.
@@ -818,7 +818,7 @@ def _opens_with_tag(unit: str) -> bool:
 
 
 def test_guide_structure_keeps_scope_with_its_claims():
-    guide = (REPO_ROOT / "NORMALIZATION.md").read_text()
+    guide = (REPO_ROOT / "docs" / "NORMALIZATION.md").read_text()
     sections, subsections = _units(guide)
 
     section_5 = _normalised(_section(sections, 5))

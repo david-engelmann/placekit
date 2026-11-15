@@ -129,7 +129,11 @@ def test_save_docstring_states_the_leftover_behaviour():
 
 
 def test_readme_states_the_leftover_behaviour():
-    readme = _squeezed((REPO_ROOT / "README.md").read_text(encoding="utf-8"))
+    # Since the 0.1.1 docs move this passage lives in the Errors
+    # reference file the README routes to.
+    readme = _squeezed(
+        (REPO_ROOT / "docs" / "errors.md").read_text(encoding="utf-8")
+    )
     assert "zero byte or partial file" in readme
     assert "truncated before the write begins" in readme
     assert "shorter than the file it replaced" in readme

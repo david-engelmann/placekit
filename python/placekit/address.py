@@ -31,7 +31,7 @@ address or renders an envelope. No helper assembles a postal
 code from prefix and suffix pieces and no helper reads a sorting
 code, because the recorded corpus holds no instance of either
 form. Formatting and envelope rendering belong to the
-normalization guide at NORMALIZATION.md in the repository root,
+normalization guide at docs/NORMALIZATION.md in the repository,
 which points at libaddressinput metadata instead.
 
 A result from this module is a reading of one response and its

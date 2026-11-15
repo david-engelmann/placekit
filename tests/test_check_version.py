@@ -44,6 +44,19 @@ def run_guard(tree: Path, *args: str) -> subprocess.CompletedProcess:
     )
 
 
+def standing_version(tree: Path) -> str:
+    """The version a tree stands at, read from its root manifest.
+
+    The tests name the standing release through this reader instead
+    of a literal, so a version bump moves them with the tree rather
+    than silently unmooring them from it.
+    """
+    for line in (tree / "Cargo.toml").read_text().splitlines():
+        if line.startswith('version = "'):
+            return line.split('"')[1]
+    raise AssertionError("no version line in the tree's Cargo.toml")
+
+
 def make_release_ready(tree: Path) -> Path:
     """Fold the copied changelog into the shape tag day expects.
 
@@ -61,11 +74,12 @@ def make_release_ready(tree: Path) -> Path:
         out.append(line)
         if line.startswith("## [Unreleased]"):
             rest = lines[i + 1 :]
+            current = standing_version(tree)
             already_folded = any(
-                later.startswith("## [0.1.0]") for later in rest
+                later.startswith(f"## [{current}]") for later in rest
             )
             if not already_folded:
-                out.append("\n## [0.1.0] - 2026-11-01\n")
+                out.append(f"\n## [{current}] - 2026-11-01\n")
             out.extend(rest)
             break
     changelog.write_text("".join(out))
@@ -111,13 +125,14 @@ def test_guard_accepts_a_prerelease_changelog_heading(tmp_path: Path) -> None:
         "## [Unreleased]", "## [Unreleased]\n\n## [0.2.0-rc.1] - 2026-11-01", 1
     )
     changelog.write_text(text)
+    current = standing_version(tree)
     for rel in ("Cargo.toml", "crates/placekit-core/Cargo.toml"):
         path = tree / rel
-        path.write_text(path.read_text().replace('version = "0.1.0"', 'version = "0.2.0-rc.1"'))
+        path.write_text(path.read_text().replace(f'version = "{current}"', 'version = "0.2.0-rc.1"'))
     lock = tree / "Cargo.lock"
     lock.write_text(mutate_lock_version(lock.read_text(), "0.2.0-rc.1"))
     init = tree / "python" / "placekit" / "__init__.py"
-    init.write_text(init.read_text().replace('"0.1.0"', '"0.2.0-rc.1"'))
+    init.write_text(init.read_text().replace(f'"{current}"', '"0.2.0-rc.1"'))
     result = run_guard(tree)
     assert result.returncode == 0, result.stdout + result.stderr
 
@@ -137,7 +152,7 @@ def test_guard_refuses_a_tag_over_a_nonempty_unreleased_section(
             1,
         )
     )
-    result = run_guard(tree, "v0.1.0")
+    result = run_guard(tree, "v" + standing_version(tree))
     assert result.returncode == 1
     assert "Unreleased" in result.stdout
 
@@ -148,15 +163,16 @@ def test_guard_refuses_a_tag_with_no_release_heading(tmp_path: Path) -> None:
     # A changelog with an empty Unreleased section and no release
     # heading at all, so only the missing heading can fail the guard.
     changelog.write_text("# Changelog\n\n## [Unreleased]\n")
-    result = run_guard(tree, "v0.1.0")
+    result = run_guard(tree, "v" + standing_version(tree))
     assert result.returncode == 1
     assert "no released version entry" in result.stdout
 
 
 def test_guard_passes_on_a_folded_changelog_with_a_tag(tmp_path: Path) -> None:
-    result = run_guard(make_release_ready(make_copy(tmp_path)), "v0.1.0")
+    tree = make_release_ready(make_copy(tmp_path))
+    result = run_guard(tree, "v" + standing_version(tree))
     assert result.returncode == 0, result.stdout + result.stderr
-    assert "matches 0.1.0" in result.stdout
+    assert ("matches " + standing_version(tree)) in result.stdout
 
 
 def test_guard_fails_on_a_duplicate_release_heading(tmp_path: Path) -> None:
@@ -164,9 +180,9 @@ def test_guard_fails_on_a_duplicate_release_heading(tmp_path: Path) -> None:
     changelog = tree / "CHANGELOG.md"
     changelog.write_text(
         changelog.read_text()
-        + "\n## [0.1.0] - 2026-11-02\n\n### Added\n\n- A second entry section.\n"
+        + f"\n## [{standing_version(tree)}] - 2026-11-02\n\n### Added\n\n- A second entry section.\n"
     )
-    result = run_guard(tree, "v0.1.0")
+    result = run_guard(tree, "v" + standing_version(tree))
     assert result.returncode == 1
     assert "more than one release heading" in result.stdout
 
@@ -183,7 +199,7 @@ def test_guard_ignores_a_release_heading_inside_a_fenced_block(
         1,
     )
     changelog.write_text(text)
-    result = run_guard(tree, "v0.1.0")
+    result = run_guard(tree, "v" + standing_version(tree))
     assert result.returncode == 0, result.stdout + result.stderr
 
 
@@ -213,7 +229,7 @@ def test_guard_refuses_a_tag_over_a_restyled_unreleased_heading(
         1,
     )
     changelog.write_text(text.replace("## [Unreleased]", spelling, 1))
-    result = run_guard(tree, "v0.1.0")
+    result = run_guard(tree, "v" + standing_version(tree))
     assert result.returncode == 1
     assert "still holds entries under Unreleased" in result.stdout
 
@@ -225,9 +241,9 @@ def test_guard_fails_on_a_duplicate_release_heading_at_level_three(
     changelog = tree / "CHANGELOG.md"
     changelog.write_text(
         changelog.read_text()
-        + "\n### [0.1.0] - 2026-11-02\n\n### Added\n\n- A second entry section.\n"
+        + f"\n### [{standing_version(tree)}] - 2026-11-02\n\n### Added\n\n- A second entry section.\n"
     )
-    for args in (("v0.1.0",), ()):
+    for args in (("v" + standing_version(tree),), ()):
         result = run_guard(tree, *args)
         assert result.returncode == 1
         assert "more than one release heading" in result.stdout
@@ -244,24 +260,27 @@ def test_guard_ignores_a_release_heading_inside_a_longer_fence(
     text = changelog.read_text()
     text = text.replace(
         "## [Unreleased]\n",
-        "## [Unreleased]\n\n````markdown\n```\n## [0.1.0]\n````\n",
+        f"## [Unreleased]\n\n````markdown\n```\n## [{standing_version(tree)}]\n````\n",
         1,
     )
     changelog.write_text(text)
-    result = run_guard(tree, "v0.1.0")
+    result = run_guard(tree, "v" + standing_version(tree))
     assert result.returncode == 0, result.stdout + result.stderr
+
+
+CURRENT = standing_version(ROOT)
 
 
 @pytest.mark.parametrize(
     "argument,expected_code",
     [
-        ("0.1.0", 0),
-        ("v0.1.0", 0),
-        ("0.1", 1),
-        ("0.1.0.1", 1),
-        ("vv0.1.0", 1),
-        ("0.1.0-rc.1", 1),
-        ("V0.1.0", 1),
+        (CURRENT, 0),
+        ("v" + CURRENT, 0),
+        (CURRENT.rsplit(".", 1)[0], 1),
+        (CURRENT + ".1", 1),
+        ("vv" + CURRENT, 1),
+        (CURRENT + "-rc.1", 1),
+        ("V" + CURRENT, 1),
     ],
 )
 def test_guard_argument_shapes(

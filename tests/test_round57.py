@@ -33,6 +33,13 @@ rendered page never shows teaches nobody anything. The raw
 text let an HTML comment, a hidden element, a script or style
 element, a tag attribute, a link destination and a link
 definition each stand as a teaching.
+
+0.1.1: the reference sections moved out of the README into
+docs/, one file each, and the README routes to them from its
+first screen. The guard's taught surface follows the teachings
+to their new home, so _taught_text below reads the README
+together with the five routed reference files. The guides were
+never part of this guard's surface and stay outside it.
 """
 
 from __future__ import annotations
@@ -263,6 +270,25 @@ def _strip_links(text):
         pos = dest_end
 
 
+#: The files whose rendered text counts as taught since the
+#: 0.1.1 docs move. The README first, then the five reference
+#: files it routes to.
+TAUGHT_FILES = (
+    "README.md",
+    "docs/endpoints.md",
+    "docs/field-masks.md",
+    "docs/constants.md",
+    "docs/addresses.md",
+    "docs/errors.md",
+)
+
+
+def _taught_text():
+    return "\n".join(
+        _reader_text((REPO_ROOT / name).read_text()) for name in TAUGHT_FILES
+    )
+
+
 def _reader_text(readme):
     # The text a reader of the rendered README sees. Spans the
     # rendered page never shows are removed before the checks
@@ -387,7 +413,7 @@ def test_sync_and_async_keyword_sets_match():
 
 @pytest.mark.parametrize("method_name", ALL_CALLS)
 def test_readme_spells_every_keyword_of_the_client_calls(method_name):
-    readme = _reader_text((REPO_ROOT / "README.md").read_text())
+    readme = _taught_text()
     unspelled = sorted(
         name
         for name in _keyword_names(Client, method_name)
@@ -403,7 +429,7 @@ def test_readme_spells_every_public_fieldmask_member():
     # `FieldMask.text_search()` with the parentheses inside the
     # backticks, so the check accepts the bare and the called
     # spelling alike.
-    readme = _reader_text((REPO_ROOT / "README.md").read_text())
+    readme = _taught_text()
     unspelled = sorted(
         name
         for name in FIELDMASK_MEMBERS
@@ -422,7 +448,7 @@ def test_readme_price_level_values_reach_the_wire(client, stub_server):
     # first checked against the oracle, because the client passes
     # price values through unvalidated by design, so a corrupted
     # teaching would otherwise reach the wire under a green suite.
-    readme = _reader_text((REPO_ROOT / "README.md").read_text())
+    readme = _taught_text()
     taught = sorted(set(re.findall(r"PRICE_LEVEL_[A-Z_]+", readme)))
     assert taught, "the README spells no price level values"
     assert taught == sorted(PRICE_LEVEL_VALUES), (

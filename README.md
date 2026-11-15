@@ -1,6 +1,31 @@
 # placekit
 
-A modern client for the Google Places API (New), with a Rust core and a Python surface that feels native.
+[![PyPI version](https://img.shields.io/pypi/v/placekit)](https://pypi.org/project/placekit/)
+[![Supported Pythons](https://img.shields.io/pypi/pyversions/placekit)](https://pypi.org/project/placekit/)
+[![CI](https://github.com/david-engelmann/placekit/actions/workflows/ci.yml/badge.svg)](https://github.com/david-engelmann/placekit/actions/workflows/ci.yml)
+
+Modern Google Places API (New) client for Python, powered by a Rust core.
+
+placekit targets the current Places API (New) end to end, with typed request building, field masks as a first-class feature, dataclass response models, and an exception hierarchy that tells you what actually went wrong. Google ships an official client for this API too, the generated google-maps-places package, and it is the right choice when you want the surface exactly as Google generates it. placekit is the hand shaped alternative over the same API, covering the five endpoints in the reference with typed models whose raw attribute is the response body itself, with the one exception of PhotoMedia, the downloaded photo form, which carries no raw.
+
+The current release is 0.1.1, dated 2026-11-15. It changes no library behavior, and the install below is the whole evaluation path.
+
+[Documentation](docs/README.md) · [Examples](examples/README.md) · [Changelog](CHANGELOG.md) · [Migrating from python-google-places](docs/MIGRATING.md)
+
+## Contents
+
+- [Install](#install)
+- [Quickstart](#quickstart)
+- [Coming from googleplaces](#coming-from-googleplaces)
+- [Why a Rust core](#why-a-rust-core)
+- [Reference](#reference)
+- [Concurrency and lifecycle](#concurrency-and-lifecycle)
+- [Pointing the client somewhere else](#pointing-the-client-somewhere-else)
+- [Building from source](#building-from-source)
+- [Development](#development)
+- [License](#license)
+
+## Install
 
 ```bash
 pip install placekit
@@ -8,17 +33,19 @@ pip install placekit
 
 Prebuilt wheels cover CPython 3.10 and newer on Linux (x86_64 and aarch64 with glibc 2.28 or newer), macOS (Intel on 10.12 or newer, Apple silicon on 11 or newer), and Windows (x64). Installing is a single small download with zero runtime dependencies. There is nothing to compile and no Rust toolchain is needed. Only if your platform has no wheel does pip fall back to the source distribution. That happens on musl systems such as Alpine and on anything below the floors above, and a source install has its own requirements, covered under Building from source below.
 
-placekit targets the current Places API (New) end to end, with typed request building, field masks as a first-class feature, dataclass response models, and an exception hierarchy that tells you what actually went wrong. Google ships an official client for this API too, the generated google-maps-places package, and it is the right choice when you want the surface exactly as Google generates it. placekit is the hand shaped alternative over the same API, covering the five endpoints below with typed models whose raw attribute is the response body itself, with the one exception of PhotoMedia, the downloaded photo form, which carries no raw.
+Verify the install without a key. Field masks are built locally, so this runs offline, and it prints the header value a mask sends.
 
-## Building from source
+```bash
+python -c "from placekit import FieldMask; print(FieldMask('places.displayName').header_value)"
+```
 
-When pip finds no wheel it downloads the source distribution and builds it locally. That build needs a Rust toolchain at version 1.88 or newer (rustup installs one), network access while it downloads the crate dependencies from crates.io, and the platform C toolchain. With those in place a source install just works, only slower than a wheel.
+```
+places.displayName
+```
 
-Without a Rust toolchain the build backend tries to download and bootstrap one by itself, and when that fails the error talks about cargo metadata rather than the missing toolchain. If a source install fails, install Rust first and retry before debugging anything else. Wheels remain the recommended path wherever one exists.
+Before the first live call, the key has to be able to call the API. In the Google Cloud console, enable Places API (New) on the project the key belongs to, and restrict the key to that API so it cannot be used for anything else. A key on a project without the API enabled is rejected on every call, and the project needs billing enabled, because the API charges per call and by the tier of the fields requested.
 
 ## Quickstart
-
-Before the first call, the key has to be able to call the API. In the Google Cloud console, enable Places API (New) on the project the key belongs to, and restrict the key to that API so it cannot be used for anything else. A key on a project without the API enabled is rejected on every call.
 
 ```python
 from placekit import Client
@@ -35,6 +62,16 @@ print(details.national_phone_number, details.website_uri)
 photo = client.place_photo(details.photos[0], max_width_px=800)
 photo.save("cafe.jpg")
 ```
+
+The search loop prints one line per place. Output recorded from the live API:
+
+```
+Bianco Latte 4.6 Shop 1/123 George St, Sydney NSW 2000, Australia
+Harbour Espresso 4.4 45 Circular Quay W, The Rocks NSW 2000, Australia
+(02) 5550 1234 https://example.com/
+```
+
+The examples folder runs the search and details calls offline against the recorded responses, so the output above is reproducible without a key.
 
 The photo call downloads the image itself by default. Pass `skip_http_redirect=True` to `place_photo` instead and the call returns a `PhotoUriResult` whose `photo_uri` attribute carries the photo URI, for callers who would rather fetch the image themselves or hand the URI to something else. The size is set with `max_width_px`, with `max_height_px` as the other member of the size pair beside it, and each value runs from 1 to 4800.
 
@@ -58,11 +95,11 @@ The sync `Client` refuses to run inside a running event loop, raising a `ConfigE
 
 placekit targets Places API (New), and python-google-places wraps the
 retired legacy API, so the port is more than an import change.
-MIGRATING.md walks the four canonical legacy examples across call by
+The migration guide walks the four canonical legacy examples across call by
 call, with the name mapping, the attribute reading contract, and the
 removals named plainly.
 
-[Migrating from python-google-places](https://github.com/david-engelmann/placekit/blob/main/MIGRATING.md)
+[Migrating from python-google-places](docs/MIGRATING.md)
 
 ## Why a Rust core
 
@@ -72,149 +109,16 @@ removals named plainly.
 - The sync and async clients share one core, so their behavior cannot drift apart.
 - Connections ignore proxy environment variables and go direct, which keeps behavior identical on a laptop, in CI, and against a local test server.
 
-## Endpoints
+## Reference
 
-| Method | Endpoint | Returns |
-| --- | --- | --- |
-| `text_search` | `POST /v1/places:searchText` | `TextSearchResult` with a `next_page_token` for paging |
-| `nearby_search` | `POST /v1/places:searchNearby` | `NearbySearchResult` |
-| `place_details` | `GET /v1/places/{id}` | `Place` |
-| `autocomplete` | `POST /v1/places:autocomplete` | `AutocompleteResult` split into place and query predictions |
-| `place_photo` | `GET /v1/{photo}/media` | `PhotoMedia` with the image bytes, or `PhotoUriResult` carrying `photo_uri` when `skip_http_redirect=True` |
+The reference lives in the docs folder, one file per subject, under one index.
 
-The search and autocomplete calls take the filters their endpoints offer as keyword arguments. Text Search accepts `page_size`, `min_rating`, `open_now`, `price_levels`, `strict_type_filtering`, `included_type`, the `location_bias` and `location_restriction` shapes, `ev_options`, `search_along_route`, `routing_parameters`, `include_pure_service_area_businesses` and `include_future_opening_businesses`. Nearby Search accepts `included_types`, `excluded_types`, `included_primary_types` and `excluded_primary_types` beside `max_results` and `routing_parameters`, and it accepts `include_future_opening_businesses` as well. Autocomplete accepts `origin`, `input_offset`, `included_primary_types`, `included_region_codes` and `include_query_predictions` beside its input, together with the `location_bias` and `location_restriction` shapes and the `include_pure_service_area_businesses` and `include_future_opening_businesses` switches. Each of those calls and Place Details also accepts `region`, a CLDR region code such as `AU` naming the region a request is centered on. `price_levels` takes a list of the API price level values, `PRICE_LEVEL_FREE`, `PRICE_LEVEL_INEXPENSIVE`, `PRICE_LEVEL_MODERATE`, `PRICE_LEVEL_EXPENSIVE` and `PRICE_LEVEL_VERY_EXPENSIVE`, the same strings a place carries on its `price_level` attribute.
-
-A text search result also carries a `search_uri`, and both search results carry `routing_summaries`, the typed routing summaries for the call, when the response includes them.
-
-Text Search results page through `next_page_token`. Pass it back as `page_token` on the same Text Search call to fetch the next page.
-
-```python
-page = client.text_search("cafes in Sydney")
-while page.next_page_token:
-    page = client.text_search("cafes in Sydney", page_token=page.next_page_token)
-```
-
-Stop when the returned token is absent or repeats the one just used, so a server that hands back the same token cannot hold the loop open.
-
-A details result carries the opening hours the API returned for the place. The hours object sits at `current_opening_hours`, which is the attribute spelling of the wire field `currentOpeningHours`, one field under two spellings, the wire spelling in a field mask and the attribute spelling on the result. The regular hours object sits at `regular_opening_hours`, the wire name alias for `opening_hours`, beside the current hours object the example below reads. Its open state sits at `current_opening_hours.open_now`, and the same object carries `weekday_descriptions`, the week's hours as one text line per day. Both levels of the path can be None on a given place, the hours object when the response carried no hours and `open_now` itself when hours arrived without a state, so the example checks the hours object before reading it, and `open_now` can still be None and prints as None.
-
-```python
-result = client.text_search("cafes in Sydney")
-details = client.place_details(result.places[0])
-if details.current_opening_hours is not None:
-    print(details.current_opening_hours.open_now)
-    for line in details.current_opening_hours.weekday_descriptions:
-        print(line)
-```
-
-Autocomplete and Place Details both accept `session_token`. One token ties a run of autocomplete calls to the details call that closes the session, and that grouping is the shape the API bills as one session, so an autocomplete flow in production should mint a fresh token for each session and pass it to both calls. Tokens are caller generated rather than minted by placekit, and a UUID is the usual shape.
-
-An autocomplete result carries its predictions on two members, `place_predictions` and `query_predictions`, both read off its `suggestions`, the full list of suggestion objects the response carried. A prediction's `text` is an optional `FormattedText` rather than a plain string, so the read guards it first. The display string sits at `prediction.text.text`, and the ranges where the input matched inside that string sit at `prediction.text.matches`.
-
-```python
-result = client.autocomplete("Bianco")
-for prediction in result.place_predictions:
-    if prediction.text is not None:
-        print(prediction.text.text)
-```
-
-## Field masks
-
-The Places API (New) only returns the fields named in the `X-Goog-FieldMask` header, and billing follows the fields requested. placekit treats the mask as a typed feature instead of a string you assemble by hand.
-
-```python
-from placekit import FieldMask
-
-result = client.text_search(
-    "cafes in Sydney",
-    fields=FieldMask("places.displayName", "places.rating"),
-)
-```
-
-Any iterable of path strings works too, and `FieldMask.of` builds a mask from any such iterable, passing a mask it is handed through unchanged. A mask carries its joined header form on `FieldMask.header_value`, the value sent in the `X-Goog-FieldMask` header. Omit `fields` on a search or details call and that endpoint uses a curated default, available as `FieldMask.text_search()`, `FieldMask.nearby_search()`, and `FieldMask.place_details()`. The `normalize_fields` helper in `placekit.fields` turns a fields argument into the plain list of paths it carries, or None when no fields argument was given. Autocomplete takes an optional `fields` mask with no curated default behind it, and `place_photo` takes no `fields` argument at all.
-
-One billing note on the defaults. They include fields from the Enterprise billing tier, among them rating, user rating counts and price level, so a search call with a default mask is billed at the Enterprise tier. Place Details is the exception. Its default mask requests every modelled field, including current opening hours from the higher Enterprise plus Atmosphere tier, so a default `place_details` call is billed at that tier. Pass a narrower `fields` set when you want a lower tier.
-
-Two facts about details masks belong beside that invitation. The path root differs by endpoint. Search and nearby masks name their paths under the `places` prefix, as the example above does, while place details mask paths are bare field names with no prefix, so the details form of the example above is `FieldMask("id", "displayName", "rating")`. A details mask must also still name `id` or `name`, the two identity paths. Drop both and the call raises `DecodeError` even on a well-formed response, because a details result carrying no identity is the wrong shape entirely rather than a place with unrequested attributes. The curated details default names both, so the floor only bites a hand-built narrower mask.
-
-### Reading attributes the mask did not request
-
-A place from a search call only carries the fields the search mask asked for. Reading an attribute outside the mask gives None, an empty list, or an empty default, never an error and never a fabricated value, and the object cannot say whether the field was unrequested or simply had no value. The `raw` attribute on every model is the response body itself rather than a reserialization of the typed fields, so a name sits in `raw` exactly when the response carried that field, and membership in `raw` is an exact record of what arrived. The one exception is `PhotoMedia`, the downloaded photo form, which carries no `raw` because its content bytes are the body. Two habits follow. Check membership in `raw` with the wire name when the distinction matters. Call `place_details` with the place when the full modelled set is needed, since its default mask requests every modelled field.
-
-## Constants
-
-Three modules carry the vocabularies callers pass most often, as plain strings that drop into the existing parameters. `placekit.types` holds the place type vocabulary from the official Place Types page, `placekit.lang` holds the supported language codes, and `placekit.ranking` holds the ranking preferences split by method, because Text Search and Nearby Search accept different sets.
-
-```python
-from placekit import lang, ranking, types
-
-result = client.nearby_search(
-    (-33.8668, 151.2071),
-    800.0,
-    included_types=[types.TYPE_CAFE],
-    language=lang.ENGLISH,
-    rank_preference=ranking.DISTANCE,
-)
-```
-
-The modules are snapshots of the official tables and a convenience only. The client accepts any string in the type and language slots, including values this version has never heard of, so a type or language the API adds tomorrow works without waiting for a placekit release. The one refusal in those slots is a string carrying control characters or unpaired surrogates, which fails locally with a `ConfigError` naming the argument. The ranking slots are the exception, because the ranking preferences form a closed set in the API, and an unknown ranking value fails locally with a `ConfigError` naming the values the endpoint accepts.
-
-## Addresses
-
-`placekit.address` reads the structured address a place already carries and answers the questions its two carrier sets raise. It looks components up by type and has a reader for the components that carry no type at all, reads the country with `country_code` and the postal code with `postal_code` across both carrier sets, reads the administrative area from the components alone with its postal counterpart read by the separate `postal_administrative_area` reader, and splits plus codes from a plus code object or a compound code string. Its `postal_code` reader returns a `PostalCodeResult` that carries the value with its carrier, a present or absent status, and any competing value the other carrier set holds, and the postal address readers read the second carrier set on its own terms. `country_code` returns a plainer shape than that, the region code itself as a plain string or None when neither carrier set yields one, with no result object to unpack and no value member to read off it. Presence helpers and an `address_flags` summary answer the shape questions about a place. City resolution is the careful part, because which carrier holds the city changes by country and the carriers sometimes disagree on the same place, so `resolve_city` returns the value with the carrier it came from and a confidence grade in the open.
-
-```python
-from placekit import Client, address
-
-client = Client("YOUR_API_KEY")
-result = client.text_search("cafes in Sydney")
-place = client.place_details(result.places[0])
-
-city = address.resolve_city(place)
-city.value, city.carrier, city.confidence
-code = address.country_code(place)
-```
-
-The details call in that example is load bearing. These readers read the address a place carries, and a bare search result carrying neither address components nor a postal address gives them nothing to read, so the same calls over such a result answer quietly instead, a city resolution carrying no value and a country code of None, and no error marks the difference.
-
-`city_resolutions` returns every reading a place supports, and where the carriers disagree the reading carries its rival on the result itself, as `competing_value` and `competing_carrier`. A British place whose locality and postal town differ therefore hands back both values with the rivalry visible, instead of one value with the other hidden.
-
-Stated answers ship for Japan and the United Arab Emirates and the United Kingdom, each built from recorded places inside one sampled locality, and every other country follows a generic fallback chain capped at the heuristic grade. The module never parses formatted text and never composes a display address, and a resolved city is a reading of one response rather than a fact of the same kind as a place ID.
-
-The normalization guide teaches the address handling the recorded corpus and this module embody, with an oddities catalogue of the shapes the corpus actually returned, per country readings that state how far each one reaches, worked recipes that run against the recorded fixtures, and a list of the things no helper here can promise.
-
-[Normalizing addresses with placekit](https://github.com/david-engelmann/placekit/blob/main/NORMALIZATION.md)
-
-## Errors
-
-Every failure raises a subclass of `PlacesError`, carrying `status_code` and `google_status` when the error came from the API. The one exception is saving a downloaded photo, where `PhotoMedia.save` raises the `OSError` family for a path the filesystem refuses, by design. A save refused part way can leave a zero byte or partial file at the target, and an existing file is truncated before the write begins, so a refused save can leave the target shorter than the file it replaced.
-
-Classification follows the Google envelope status first and the HTTP code second, so the exception class and `status_code` can come from different sources. A quota envelope on an HTTP 500 is a `RateLimitError` with `status_code` 500, and the `status_mismatch` attribute is True whenever the envelope code and the HTTP status disagree. API exceptions also carry `retryable`, which says whether a caller side retry can plausibly succeed, and `retry_after`, the seconds from a `Retry-After` header when the response sent one. Exceptions raised by a client call carry `context`, naming the call that failed, and failures from the address helpers and from field mask construction carry the helper name or the mask as their context the same way, with an address failure naming the innermost helper that raised it rather than the helper the caller invoked. Model decode errors carry no context of their own, and their messages name the model and the payload key instead. A decode failure reached through a client call still arrives carrying that call context, because the client attaches it the way it does for every error a call raises. API exceptions also carry the parsed envelope details, as `error_code` and `details` and `field_violations` and `quota_violations`, so a rejected request shows which fields it broke and which quota it hit.
-
-| Exception | Raised when |
-| --- | --- |
-| `AuthenticationError` | The key was rejected or lacks permission, HTTP 401 or 403 |
-| `RateLimitError` | Quota is exhausted or the rate limit is hit, HTTP 429 |
-| `NotFoundError` | The resource does not exist, HTTP 404 |
-| `InvalidRequestError` | The request was malformed, HTTP 400 |
-| `ApiError` | A canonical Google status with no narrower class, such as deadline exceeded |
-| `NetworkError` | No HTTP response was produced |
-| `DecodeError` | A success body did not match the expected shape |
-| `ConfigError` | The client was called incorrectly, detected before any request |
-
-`QuotaError` is exported as an alias of `RateLimitError`, so either name catches a quota failure.
-
-Local validation follows one coercion rule everywhere. Numbers must be real and finite, bools are never numbers, and strings are never lists, so a value of the wrong kind fails as a `ConfigError` before any request instead of being converted into something else on the wire.
-
-```python
-from placekit import Client, RateLimitError
-
-client = Client("YOUR_API_KEY")
-try:
-    client.text_search("cafes in Sydney")
-except RateLimitError as exc:
-    print("quota", exc.status_code, exc.google_status)
-```
+- [Endpoints](docs/endpoints.md) names the five calls, what each returns, and the keyword arguments each one takes.
+- [Field masks](docs/field-masks.md) covers mask construction, the curated defaults and their billing tiers, and reading attributes the mask did not request.
+- [Constants](docs/constants.md) covers the type, language, and ranking vocabularies.
+- [Addresses](docs/addresses.md) covers the address readers and city resolution across the two carrier sets.
+- [Errors](docs/errors.md) covers the exception hierarchy and the attributes every API exception carries.
+- [Normalizing addresses with placekit](docs/NORMALIZATION.md) teaches the address handling the recorded corpus and the address module embody.
 
 ## Concurrency and lifecycle
 
@@ -238,6 +142,12 @@ A process may fork after using placekit. The bindings detect the new process on 
 client = Client("YOUR_API_KEY", base_url="http://127.0.0.1:8080/v1", timeout=5.0)
 ```
 
+## Building from source
+
+When pip finds no wheel it downloads the source distribution and builds it locally. That build needs a Rust toolchain at version 1.88 or newer (rustup installs one), network access while it downloads the crate dependencies from crates.io, and the platform C toolchain. With those in place a source install just works, only slower than a wheel.
+
+Without a Rust toolchain the build backend tries to download and bootstrap one by itself, and when that fails the error talks about cargo metadata rather than the missing toolchain. If a source install fails, install Rust first and retry before debugging anything else. Wheels remain the recommended path wherever one exists.
+
 ## Development
 
 You need a Rust toolchain at version 1.88 or newer and Python 3.10 or newer. The dev loop builds in debug mode, so it stays fast.
@@ -252,7 +162,7 @@ cargo test -p placekit-core
 
 On Windows the venv binaries live under `.venv\Scripts`, so the same steps use `.venv\Scripts\pip`, `.venv\Scripts\maturin` and `.venv\Scripts\python`.
 
-`maturin develop` compiles the Rust core without optimizations and installs it into the venv; iterate with the targeted commands above. The full gate is one command, and CI runs it word for word:
+`maturin develop` compiles the Rust core without optimizations and installs it into the venv. Iterate with the targeted commands above. The full gate is one command, and CI runs it word for word:
 
 ```bash
 make check
@@ -287,4 +197,4 @@ Each wheel carries an embedded CycloneDX SBOM that the build generates for the R
 
 ## License
 
-MIT
+placekit is released under the [MIT License](LICENSE).

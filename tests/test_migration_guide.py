@@ -249,7 +249,7 @@ def test_guide_examples_against_the_live_cassettes():
 
 
 def test_guide_file_exists_and_names_the_boundaries():
-    guide = (REPO_ROOT / "MIGRATING.md").read_text()
+    guide = (REPO_ROOT / "docs" / "MIGRATING.md").read_text()
     # Whitespace is normalised before the substring checks, so a
     # rewrap that changes no wording cannot fail these pins while
     # a wording softening still does.

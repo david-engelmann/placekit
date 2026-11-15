@@ -11,7 +11,7 @@ license = "MIT"
 license-files = ["LICENSE"]
 requires-python = ">=3.10"
 authors = [{ name = "David Engelmann" }]
-keywords = ["google-places", "places", "pyo3", "maps"]
+keywords = ["google-places", "google-places-api", "places", "pyo3", "maps"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
@@ -34,6 +34,7 @@ Homepage = "https://github.com/david-engelmann/placekit"
 Repository = "https://github.com/david-engelmann/placekit"
 Issues = "https://github.com/david-engelmann/placekit/issues"
 Changelog = "https://github.com/david-engelmann/placekit/blob/main/CHANGELOG.md"
+Documentation = "https://github.com/david-engelmann/placekit/blob/main/docs/README.md"
 
 [project.optional-dependencies]
 dev = ["pytest==9.2.0", "mypy==2.4.1", "maturin==1.16.0", "tomli==2.5.0; python_version < \"3.11\""]

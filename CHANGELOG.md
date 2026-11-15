@@ -4,7 +4,29 @@ All notable changes to placekit are recorded here. The format follows Keep a Cha
 
 ## [Unreleased]
 
-## [0.1.0] - 2026-11-12
+## [0.1.1] - 2026-11-15
+
+### Added
+
+- A docs folder holding the reference and the guides under one index. The Endpoints, Field masks, Constants, Addresses, and Errors sections move out of the README into docs as one file each, and the migration and normalization guides move in beside them, contents unchanged. The index at docs/README.md routes the whole set and the README links to it in its first screen.
+- An examples folder with complete tasks that run offline against recorded responses, needing no Google API key. A text search read properly, a details call with the address readers, and an error handled by type, each served by the offline stub promoted from the test suite and each carrying the recorded response caption.
+- Support files sized to one maintainer. An issue template asking for the version, the platform and wheel, the endpoint, the field mask, and a minimal call with the key removed, a CONTRIBUTING file pointing at the README's Development section and the gate command, and a SECURITY file naming the private vulnerability reporting route.
+- Three live badges at the head of the README, for the PyPI version, the supported Pythons, and CI, each a live query rather than a copied figure. A status line naming the current release, a first screen link row, and a contents list follow from the slimmer shape.
+
+### Changed
+
+- The README is reordered and slimmed to the install decision. Install comes first with a key free verify step and the API key gate named inside the install path, the Quickstart follows with recorded output shown, and Building from source moves below the Quickstart. The README's first line now reads in the same words as the package summary in the manifests. One sentence in the Development section loses its semicolon.
+- Package keywords now include the API's own product phrasing, google-places-api, beside the existing forms.
+- The version carriers move to 0.1.1 in step. This release changes no library behavior. The only code edits are the version literal in the package's fallback and one docstring path in the address module.
+
+### Fixed
+
+- The package metadata gains the Documentation project link, pointing at the docs index, so the docs route ships with the package page instead of living only in the repository.
+- The 0.1.0 heading below now carries 2026-11-13, the day that version was published to PyPI, in place of 2026-11-12.
+- The License section of the README now links the LICENSE file it names.
+- The package metadata's license form was verified against the platform record before this release. The published files carry the MIT license as a license expression, the field PyPI renders for the license display, and the empty legacy license field is the expected companion of that form, so no metadata repair was needed.
+
+## [0.1.0] - 2026-11-13
 
 ### Added
 
