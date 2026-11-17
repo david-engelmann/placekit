@@ -352,3 +352,76 @@ class TestDefaultMaskListsAgree:
         client = Client("test-api-key", base_url=base_url)
         client.place_details("ChIJrTLr-GyuEmsRBfy61i59si0")
         assert _sent_mask(stub_server) == ",".join(PLACE_DETAILS_FIELDS)
+
+
+class TestServerMessageAndTypedEntries:
+    """A50-027. The bare server message and the typed violation
+    entries cross as their own attributes, beside the raw views,
+    which keep every entry verbatim."""
+
+    def test_bad_request_envelope(self, raw_response, base_url):
+        body = (
+            '{"error": {"code": 400, "message": '
+            '"Request contains an invalid argument.", "status": '
+            '"INVALID_ARGUMENT", "details": [{"@type": '
+            '"type.googleapis.com/google.rpc.BadRequest", '
+            '"fieldViolations": [{"field": "textQuery", '
+            '"description": "Request contains an invalid argument."}, '
+            '{"field": 7, "description": "not a pair"}]}]}}'
+        )
+        raw_response(400, body)
+        client = Client("test-api-key", base_url=base_url)
+        with pytest.raises(PlacesError) as excinfo:
+            client.text_search("pizza")
+        err = excinfo.value
+        assert err.kind == "invalid_request"
+        assert err.server_message == "Request contains an invalid argument."
+        assert err.message.startswith(
+            "invalid request (HTTP 400): Request contains an invalid argument."
+        )
+        assert err.field_violation_entries == [
+            {
+                "field": "textQuery",
+                "description": "Request contains an invalid argument.",
+            }
+        ]
+        # The raw view keeps both entries, the malformed one verbatim.
+        assert len(err.field_violations) == 2
+        assert err.field_violations[1] == {"field": 7, "description": "not a pair"}
+
+    def test_quota_envelope(self, raw_response, base_url):
+        body = (
+            '{"error": {"code": 429, "message": '
+            '"Resource has been exhausted (e.g. check quota).", '
+            '"status": "RESOURCE_EXHAUSTED", "details": [{"@type": '
+            '"type.googleapis.com/google.rpc.QuotaFailure", '
+            '"violations": [{"description": "Quota exceeded.", '
+            '"quotaId": "default", "quotaMetric": '
+            '"places.googleapis.com/default", "quotaValue": "1000", '
+            '"subject": "clientip:203.0.113.10"}, "not an object"]}]}}'
+        )
+        raw_response(429, body)
+        client = Client("test-api-key", base_url=base_url)
+        with pytest.raises(PlacesError) as excinfo:
+            client.text_search("pizza")
+        err = excinfo.value
+        assert err.kind == "rate_limit"
+        assert err.server_message == (
+            "Resource has been exhausted (e.g. check quota)."
+        )
+        assert err.quota_violation_entries == [
+            {
+                "subject": "clientip:203.0.113.10",
+                "description": "Quota exceeded.",
+                "quota_id": "default",
+                "quota_metric": "places.googleapis.com/default",
+                "quota_value": "1000",
+            }
+        ]
+        assert len(err.quota_violations) == 2
+
+    def test_defaults_on_a_plain_error(self):
+        err = PlacesError("plain")
+        assert err.server_message is None
+        assert err.field_violation_entries == []
+        assert err.quota_violation_entries == []

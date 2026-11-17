@@ -81,7 +81,7 @@ def _safe_text(value: Any) -> str:
 def _copy_list_argument(name: str, value: Optional[list[Any]]) -> list[Any]:
     """Copy one list argument of the exception constructor.
 
-    The three list arguments are copied so later mutation of the
+    The list arguments are copied so later mutation of the
     caller's list cannot rewrite a raised exception, and the copy
     sits under the same typed discipline as every other read of a
     caller iterable in the library (Round 41, Findings 1 and 2).
@@ -142,9 +142,12 @@ class PlacesError(Exception):
         details: Optional[list[Any]] = None,
         field_violations: Optional[list[Any]] = None,
         quota_violations: Optional[list[Any]] = None,
+        field_violation_entries: Optional[list[Any]] = None,
+        quota_violation_entries: Optional[list[Any]] = None,
         status_mismatch: bool = False,
         retryable: bool = False,
         retry_after: Optional[float] = None,
+        server_message: Optional[str] = None,
         context: Optional[str] = None,
     ) -> None:
         super().__init__(message)
@@ -156,7 +159,7 @@ class PlacesError(Exception):
         #: The parsed ``details`` array of the envelope (google.rpc detail
         #: objects as dicts), empty when the response carried none. The
         #: list is copied, so later mutation of the caller's list cannot
-        #: rewrite a raised exception. All three list arguments copy
+        #: rewrite a raised exception. All five list arguments copy
         #: through ``_copy_list_argument``, so a caller iterable that
         #: raises while being read, or one that never ends, is refused
         #: as a ``ConfigError`` instead of escaping bare or hanging
@@ -173,9 +176,27 @@ class PlacesError(Exception):
         self.field_violations = _copy_list_argument(
             "field_violations", field_violations
         )
-        #: Violation dicts from a QuotaFailure detail.
+        #: Violation entries from a QuotaFailure detail, read
+        #: exactly as the wire carried them.
         self.quota_violations = _copy_list_argument(
             "quota_violations", quota_violations
+        )
+        #: The well formed field violations as dicts of exactly
+        #: ``field`` and ``description`` (audit A50-027). Entries
+        #: of any other shape are absent here and present verbatim
+        #: in ``field_violations``, so the two views together lose
+        #: nothing.
+        self.field_violation_entries = _copy_list_argument(
+            "field_violation_entries", field_violation_entries
+        )
+        #: The well formed quota violations as dicts with
+        #: ``subject``, ``description``, ``quota_id``,
+        #: ``quota_metric`` and ``quota_value`` keys, each the
+        #: wire string or None when the entry carries none (audit
+        #: A50-027). Entries of any other shape are absent here
+        #: and present verbatim in ``quota_violations``.
+        self.quota_violation_entries = _copy_list_argument(
+            "quota_violation_entries", quota_violation_entries
         )
         #: True when the envelope ``code`` and the HTTP status disagree.
         #: Classification follows the envelope status first and the HTTP
@@ -230,6 +251,15 @@ class PlacesError(Exception):
         #: finite non-negative delta is a retry delay (audit
         #: round 2, A50-001).
         self.retry_after = retry_after_value
+        #: The bare message of the Google error envelope, without
+        #: the classification the rendered message prepends and
+        #: without any note the library appended after the error
+        #: was built (audit A50-027). None for errors that did not
+        #: come from an API response, and for API errors whose
+        #: envelope carried no readable message. The ``message``
+        #: attribute keeps the classified rendering, so this
+        #: changes no existing text.
+        self.server_message = server_message
         #: Which call failed, as an operation name plus its identifying
         #: argument where one exists (for example ``place_details
         #: place_id=...``), set by the client methods. Never a URL, so
@@ -391,9 +421,12 @@ def raise_translated(exc: BaseException, context: Optional[str] = None) -> NoRet
         details=getattr(exc, "details", None),
         field_violations=getattr(exc, "field_violations", None),
         quota_violations=getattr(exc, "quota_violations", None),
+        field_violation_entries=getattr(exc, "field_violation_entries", None),
+        quota_violation_entries=getattr(exc, "quota_violation_entries", None),
         status_mismatch=getattr(exc, "status_mismatch", False),
         retryable=getattr(exc, "retryable", False),
         retry_after=getattr(exc, "retry_after", None),
+        server_message=getattr(exc, "server_message", None),
         context=context,
     ) from None
 
