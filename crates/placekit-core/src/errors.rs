@@ -603,17 +603,29 @@ impl Error {
     /// body carries a Google error envelope, or `None` when it
     /// carries none. A body carries an envelope when its `error`
     /// object holds a status string, or a numeric code or a message
-    /// even without one. The body is parsed once and the parts
-    /// serve both the detection and the construction. The guard
-    /// this replaces ran the envelope parse twice per success
-    /// status response, once to detect and once to build, which
-    /// doubled the price of the whole parse failure this round
-    /// measured (Round 29, Finding 1).
+    /// even without one. Detection runs the tolerant head scan
+    /// first, which reads only the body's head, so the ordinary
+    /// success body pays no whole document parse here at all
+    /// (audit A50-037. The whole parse ran on every success body
+    /// and its result was dropped whenever no envelope was
+    /// present, which is nearly every call, before the caller
+    /// parsed the body again for its value). Only a body the scan
+    /// finds an envelope head in pays for the whole parse that
+    /// builds the parts, and that parse's verdict governs,
+    /// exactly as it did when it ran first. The guard this
+    /// replaces ran the envelope parse twice per success status
+    /// response, once to detect and once to build, which doubled
+    /// the price of the whole parse failure Round 29 measured
+    /// (Finding 1).
     pub(crate) fn from_success_body(
         status: u16,
         body: &str,
         content_type: Option<&str>,
     ) -> Option<Error> {
+        let head = parse_envelope_head(body)?;
+        if head.status.is_none() && head.code.is_none() && head.message.is_none() {
+            return None;
+        }
         let parts = parse_envelope(body)?;
         if parts.status.is_none() && parts.code.is_none() && parts.message.is_none() {
             return None;
@@ -2768,6 +2780,65 @@ mod tests {
         )
         .expect("an envelope with details builds an error");
         assert_eq!(err.details().len(), 1);
+    }
+
+    #[test]
+    fn success_body_detection_matches_the_whole_parse_route() {
+        // Audit A50-037 differential: detection now runs the head
+        // scan first and only pays for the whole parse when the
+        // scan finds an envelope head. The verdict and, when an
+        // error is built, its kind, status and details must equal
+        // the route that parsed whole first, over every shape the
+        // two routes could read differently.
+        fn reference(status: u16, body: &str) -> Option<Error> {
+            let parts = parse_envelope(body)?;
+            if parts.status.is_none() && parts.code.is_none() && parts.message.is_none() {
+                return None;
+            }
+            Some(Error::from_envelope_parts(
+                status,
+                body,
+                None,
+                None,
+                Some(parts),
+            ))
+        }
+        let bodies = [
+            r#"{"places": []}"#,
+            r#"{"places": [{"id": "x", "displayName": {"text": "Cafe"}}]}"#,
+            "not json",
+            "",
+            r#"[]"#,
+            r#""a string""#,
+            r#"{"error": {}}"#,
+            r#"{"error": {"code": 403}}"#,
+            r#"{"error": {"message": "denied"}}"#,
+            r#"{"error": {"status": "PERMISSION_DENIED"}}"#,
+            r#"{"error": {"code": 429, "message": "Quota", "status": "RESOURCE_EXHAUSTED", "details": [{"@type": "t", "reason": "r"}]}}"#,
+            r#"{"error": {"details": [{"@type": "t"}]}}"#,
+            r#"{"error": "not an object"}"#,
+            r#"{"error": null, "error": {"code": 400, "message": "second wins"}}"#,
+            r#"{"error": {"code": 400}, "error": {}}"#,
+            r#"{"error": {"status": 403}}"#,
+            r#"{"error": {"code": "403", "message": "string code"}}"#,
+            r#"{"places": [], "error": {"code": 500, "message": "late envelope", "status": "INTERNAL"}}"#,
+            r#"{"error": {"code": 403, "message": "m", "status": "PERMISSION_DENIED"#,
+        ];
+        for body in bodies {
+            let got = Error::from_success_body(200, body, None);
+            let want = reference(200, body);
+            assert_eq!(got.is_some(), want.is_some(), "verdict differs: {body}");
+            if let (Some(got), Some(want)) = (got, want) {
+                assert_eq!(got.kind(), want.kind(), "kind differs: {body}");
+                assert_eq!(
+                    got.google_status(),
+                    want.google_status(),
+                    "google status differs: {body}"
+                );
+                assert_eq!(got.details(), want.details(), "details differ: {body}");
+                assert_eq!(got.to_string(), want.to_string(), "text differs: {body}");
+            }
+        }
     }
 
     #[test]

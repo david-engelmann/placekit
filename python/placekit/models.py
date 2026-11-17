@@ -47,6 +47,7 @@ from __future__ import annotations
 
 import contextvars
 import copy
+import functools
 import math
 import os
 from contextlib import contextmanager
@@ -560,6 +561,51 @@ _TRACE_KIND_MAPPING = 0
 _TRACE_KIND_SEQUENCE = 1
 
 
+_decode_depth: contextvars.ContextVar[int] = contextvars.ContextVar(
+    "placekit_decode_depth", default=0
+)
+
+_decode_plain: contextvars.ContextVar[bool] = contextvars.ContextVar(
+    "placekit_decode_plain", default=False
+)
+
+
+def _rooted_decode(fn: Any) -> Any:
+    """Bracket one ``from_api`` decode as a validation root.
+
+    Every model decoder carries this under its ``classmethod``.
+    The outermost decode in a call stack runs at depth one and
+    its payload walk covers the whole tree. The decoders it
+    calls into for child models run nested, and a nested
+    decoder skips its own walk only when the enclosing walk
+    found the whole tree plain, meaning every container in it
+    is an exact dict, list or tuple whose container protocols
+    cannot run caller code (audit A50-044). A tree carrying
+    any container subclass keeps the full walk at every level,
+    so the caller object operation sequence of a hostile
+    payload is exactly what it was before the skip existed.
+    A decoder called directly by user code is the outermost
+    call and validates in full. A decode that raises still
+    resets the state, so a later call starts at the root
+    again.
+    """
+
+    @functools.wraps(fn)
+    def wrapper(*args: Any, **kwargs: Any) -> Any:
+        token = _decode_depth.set(_decode_depth.get() + 1)
+        plain_token = None
+        if _decode_depth.get() == 1:
+            plain_token = _decode_plain.set(False)
+        try:
+            return fn(*args, **kwargs)
+        finally:
+            _decode_depth.reset(token)
+            if plain_token is not None:
+                _decode_plain.reset(plain_token)
+
+    return wrapper
+
+
 def _validate_payload(data: Any, model: str) -> None:
     """Validate one ``from_api`` payload without copying it.
 
@@ -580,6 +626,20 @@ def _validate_payload(data: Any, model: str) -> None:
     one event per container visit carrying its kind and its
     depth, and the trace stops at the first visit past the
     limit, so no container past that visit is read (Round 55).
+
+    Inside one rooted decode (see ``_rooted_decode``) a nested
+    call runs only the object check above when the enclosing
+    walk found the whole tree plain. A plain tree's containers
+    are exact dicts, lists and tuples, so their container
+    protocols cannot run caller code and a repeated walk could
+    only repeat the root's verdict over ground the root already
+    covered, because decoders read subtrees of the one payload
+    and never mutate them (audit A50-044). A tree carrying any
+    container subclass is walked at every level exactly as
+    before, so a hostile container still meets the walk, and
+    converts through it, at every decoder seat. A decoder
+    called directly is its own root and validates its input
+    in full.
     """
     if not isinstance(data, dict):
         name = _safe_type_name(data)
@@ -589,17 +649,24 @@ def _validate_payload(data: Any, model: str) -> None:
             f"{model} payload must be an object, got "
             f"{name}: {_safe_repr(data)}"
         )
+    if _decode_depth.get() > 1 and _decode_plain.get():
+        return
     trace: list[tuple[int, int]] = []
+    plain = True
     try:
         stack = [(data, 1)]
         while stack:
             node, depth = stack.pop()
             if isinstance(node, dict):
+                if type(node) is not dict:
+                    plain = False
                 trace.append((_TRACE_KIND_MAPPING, depth))
                 if depth > _MAX_PAYLOAD_DEPTH:
                     break
                 stack.extend((child, depth + 1) for child in node.values())
             elif isinstance(node, (list, tuple)):
+                if type(node) is not list and type(node) is not tuple:
+                    plain = False
                 trace.append((_TRACE_KIND_SEQUENCE, depth))
                 if depth > _MAX_PAYLOAD_DEPTH:
                     break
@@ -610,6 +677,7 @@ def _validate_payload(data: Any, model: str) -> None:
         raise DecodeError(
             f"{model} payload could not be read: {_safe_repr(exc)}"
         ) from exc
+    _decode_plain.set(plain)
     if not _placekit.models_payload_depth_within_limit(trace):
         raise DecodeError(
             f"{model} payload is nested deeper than "
@@ -833,6 +901,7 @@ class LocalizedText:
     raw: dict[str, Any] = field(default_factory=dict, repr=False, compare=False)
 
     @classmethod
+    @_rooted_decode
     def from_api(
         cls, data: dict[str, Any], raw: Optional[dict[str, Any]] = None
     ) -> "LocalizedText":
@@ -886,6 +955,7 @@ class LatLng:
                 )
 
     @classmethod
+    @_rooted_decode
     def from_api(
         cls, data: dict[str, Any], raw: Optional[dict[str, Any]] = None
     ) -> "LatLng":
@@ -912,6 +982,7 @@ class AuthorAttribution:
     raw: dict[str, Any] = field(default_factory=dict, repr=False, compare=False)
 
     @classmethod
+    @_rooted_decode
     def from_api(
         cls, data: dict[str, Any], raw: Optional[dict[str, Any]] = None
     ) -> "AuthorAttribution":
@@ -945,6 +1016,7 @@ class Attribution:
     raw: dict[str, Any] = field(default_factory=dict, repr=False, compare=False)
 
     @classmethod
+    @_rooted_decode
     def from_api(
         cls, data: dict[str, Any], raw: Optional[dict[str, Any]] = None
     ) -> "Attribution":
@@ -989,6 +1061,7 @@ class Photo:
         _reject_bare_string("Photo", "author_attributions", self.author_attributions)
 
     @classmethod
+    @_rooted_decode
     def from_api(
         cls, data: dict[str, Any], raw: Optional[dict[str, Any]] = None
     ) -> "Photo":
@@ -1028,6 +1101,7 @@ class Date:
     raw: dict[str, Any] = field(default_factory=dict, repr=False, compare=False)
 
     @classmethod
+    @_rooted_decode
     def from_api(
         cls, data: dict[str, Any], raw: Optional[dict[str, Any]] = None
     ) -> "Date":
@@ -1057,6 +1131,7 @@ class OpeningPoint:
     raw: dict[str, Any] = field(default_factory=dict, repr=False, compare=False)
 
     @classmethod
+    @_rooted_decode
     def from_api(
         cls, data: dict[str, Any], raw: Optional[dict[str, Any]] = None
     ) -> "OpeningPoint":
@@ -1099,6 +1174,7 @@ class Period:
     raw: dict[str, Any] = field(default_factory=dict, repr=False, compare=False)
 
     @classmethod
+    @_rooted_decode
     def from_api(
         cls, data: dict[str, Any], raw: Optional[dict[str, Any]] = None
     ) -> "Period":
@@ -1129,6 +1205,7 @@ class SpecialDay:
     raw: dict[str, Any] = field(default_factory=dict, repr=False, compare=False)
 
     @classmethod
+    @_rooted_decode
     def from_api(
         cls, data: dict[str, Any], raw: Optional[dict[str, Any]] = None
     ) -> "SpecialDay":
@@ -1169,6 +1246,7 @@ class OpeningHours:
         _reject_bare_string("OpeningHours", "special_days", self.special_days)
 
     @classmethod
+    @_rooted_decode
     def from_api(
         cls, data: dict[str, Any], raw: Optional[dict[str, Any]] = None
     ) -> "OpeningHours":
@@ -1231,6 +1309,7 @@ class AddressComponent:
         _reject_bare_string("AddressComponent", "types", self.types)
 
     @classmethod
+    @_rooted_decode
     def from_api(
         cls, data: dict[str, Any], raw: Optional[dict[str, Any]] = None
     ) -> "AddressComponent":
@@ -1269,6 +1348,7 @@ class PlusCode:
     raw: dict[str, Any] = field(default_factory=dict, repr=False, compare=False)
 
     @classmethod
+    @_rooted_decode
     def from_api(
         cls, data: dict[str, Any], raw: Optional[dict[str, Any]] = None
     ) -> "PlusCode":
@@ -1295,6 +1375,7 @@ class Viewport:
     raw: dict[str, Any] = field(default_factory=dict, repr=False, compare=False)
 
     @classmethod
+    @_rooted_decode
     def from_api(
         cls, data: dict[str, Any], raw: Optional[dict[str, Any]] = None
     ) -> "Viewport":
@@ -1328,6 +1409,7 @@ class PostalAddress:
         _reject_bare_string("PostalAddress", "recipients", self.recipients)
 
     @classmethod
+    @_rooted_decode
     def from_api(
         cls, data: dict[str, Any], raw: Optional[dict[str, Any]] = None
     ) -> "PostalAddress":
@@ -1400,6 +1482,7 @@ class Review:
     raw: dict[str, Any] = field(default_factory=dict, repr=False, compare=False)
 
     @classmethod
+    @_rooted_decode
     def from_api(
         cls, data: dict[str, Any], raw: Optional[dict[str, Any]] = None
     ) -> "Review":
@@ -1467,6 +1550,7 @@ class PaymentOptions:
     raw: dict[str, Any] = field(default_factory=dict, repr=False, compare=False)
 
     @classmethod
+    @_rooted_decode
     def from_api(
         cls, data: dict[str, Any], raw: Optional[dict[str, Any]] = None
     ) -> "PaymentOptions":
@@ -1510,6 +1594,7 @@ class ParkingOptions:
     raw: dict[str, Any] = field(default_factory=dict, repr=False, compare=False)
 
     @classmethod
+    @_rooted_decode
     def from_api(
         cls, data: dict[str, Any], raw: Optional[dict[str, Any]] = None
     ) -> "ParkingOptions":
@@ -1565,6 +1650,7 @@ class AccessibilityOptions:
     raw: dict[str, Any] = field(default_factory=dict, repr=False, compare=False)
 
     @classmethod
+    @_rooted_decode
     def from_api(
         cls, data: dict[str, Any], raw: Optional[dict[str, Any]] = None
     ) -> "AccessibilityOptions":
@@ -1606,6 +1692,7 @@ class TimeZone:
     raw: dict[str, Any] = field(default_factory=dict, repr=False, compare=False)
 
     @classmethod
+    @_rooted_decode
     def from_api(
         cls, data: dict[str, Any], raw: Optional[dict[str, Any]] = None
     ) -> "TimeZone":
@@ -1627,6 +1714,7 @@ class GenerativeSummary:
     raw: dict[str, Any] = field(default_factory=dict, repr=False, compare=False)
 
     @classmethod
+    @_rooted_decode
     def from_api(
         cls, data: dict[str, Any], raw: Optional[dict[str, Any]] = None
     ) -> "GenerativeSummary":
@@ -1654,6 +1742,7 @@ class ReviewSummary:
     raw: dict[str, Any] = field(default_factory=dict, repr=False, compare=False)
 
     @classmethod
+    @_rooted_decode
     def from_api(
         cls, data: dict[str, Any], raw: Optional[dict[str, Any]] = None
     ) -> "ReviewSummary":
@@ -1684,6 +1773,7 @@ class ConsumerAlert:
     raw: dict[str, Any] = field(default_factory=dict, repr=False, compare=False)
 
     @classmethod
+    @_rooted_decode
     def from_api(
         cls, data: dict[str, Any], raw: Optional[dict[str, Any]] = None
     ) -> "ConsumerAlert":
@@ -1716,6 +1806,7 @@ class GoogleMapsLinks:
     raw: dict[str, Any] = field(default_factory=dict, repr=False, compare=False)
 
     @classmethod
+    @_rooted_decode
     def from_api(
         cls, data: dict[str, Any], raw: Optional[dict[str, Any]] = None
     ) -> "GoogleMapsLinks":
@@ -1765,6 +1856,7 @@ class Money:
     raw: dict[str, Any] = field(default_factory=dict, repr=False, compare=False)
 
     @classmethod
+    @_rooted_decode
     def from_api(
         cls, data: dict[str, Any], raw: Optional[dict[str, Any]] = None
     ) -> "Money":
@@ -1792,6 +1884,7 @@ class PriceRange:
     raw: dict[str, Any] = field(default_factory=dict, repr=False, compare=False)
 
     @classmethod
+    @_rooted_decode
     def from_api(
         cls, data: dict[str, Any], raw: Optional[dict[str, Any]] = None
     ) -> "PriceRange":
@@ -1833,6 +1926,7 @@ class ConnectorAggregation:
     raw: dict[str, Any] = field(default_factory=dict, repr=False, compare=False)
 
     @classmethod
+    @_rooted_decode
     def from_api(
         cls, data: dict[str, Any], raw: Optional[dict[str, Any]] = None
     ) -> "ConnectorAggregation":
@@ -1891,6 +1985,7 @@ class EvChargeOptions:
         )
 
     @classmethod
+    @_rooted_decode
     def from_api(
         cls, data: dict[str, Any], raw: Optional[dict[str, Any]] = None
     ) -> "EvChargeOptions":
@@ -1929,6 +2024,7 @@ class Landmark:
         _reject_bare_string("Landmark", "types", self.types)
 
     @classmethod
+    @_rooted_decode
     def from_api(
         cls, data: dict[str, Any], raw: Optional[dict[str, Any]] = None
     ) -> "Landmark":
@@ -1983,6 +2079,7 @@ class Area:
     raw: dict[str, Any] = field(default_factory=dict, repr=False, compare=False)
 
     @classmethod
+    @_rooted_decode
     def from_api(
         cls, data: dict[str, Any], raw: Optional[dict[str, Any]] = None
     ) -> "Area":
@@ -2018,6 +2115,7 @@ class AddressDescriptor:
         _reject_bare_string("AddressDescriptor", "areas", self.areas)
 
     @classmethod
+    @_rooted_decode
     def from_api(
         cls, data: dict[str, Any], raw: Optional[dict[str, Any]] = None
     ) -> "AddressDescriptor":
@@ -2162,6 +2260,7 @@ class Place:
         return self.opening_hours
 
     @classmethod
+    @_rooted_decode
     def from_api(
         cls, data: dict[str, Any], raw: Optional[dict[str, Any]] = None
     ) -> "Place":
@@ -2554,6 +2653,7 @@ class Leg:
     raw: dict[str, Any] = field(default_factory=dict, repr=False, compare=False)
 
     @classmethod
+    @_rooted_decode
     def from_api(
         cls, data: dict[str, Any], raw: Optional[dict[str, Any]] = None
     ) -> "Leg":
@@ -2579,6 +2679,7 @@ class RoutingSummary:
         _reject_bare_string("RoutingSummary", "legs", self.legs)
 
     @classmethod
+    @_rooted_decode
     def from_api(
         cls, data: dict[str, Any], raw: Optional[dict[str, Any]] = None
     ) -> "RoutingSummary":
@@ -2623,6 +2724,7 @@ class TextSearchResult:
         )
 
     @classmethod
+    @_rooted_decode
     def from_api(
         cls, data: dict[str, Any], raw: Optional[dict[str, Any]] = None
     ) -> "TextSearchResult":
@@ -2679,6 +2781,7 @@ class NearbySearchResult:
         )
 
     @classmethod
+    @_rooted_decode
     def from_api(
         cls, data: dict[str, Any], raw: Optional[dict[str, Any]] = None
     ) -> "NearbySearchResult":
@@ -2711,6 +2814,7 @@ class StringMatch:
     raw: dict[str, Any] = field(default_factory=dict, repr=False, compare=False)
 
     @classmethod
+    @_rooted_decode
     def from_api(
         cls, data: dict[str, Any], raw: Optional[dict[str, Any]] = None
     ) -> "StringMatch":
@@ -2742,6 +2846,7 @@ class FormattedText:
         _reject_bare_string("FormattedText", "matches", self.matches)
 
     @classmethod
+    @_rooted_decode
     def from_api(
         cls, data: dict[str, Any], raw: Optional[dict[str, Any]] = None
     ) -> "FormattedText":
@@ -2782,6 +2887,7 @@ class PlacePrediction:
         _reject_bare_string("PlacePrediction", "types", self.types)
 
     @classmethod
+    @_rooted_decode
     def from_api(
         cls, data: dict[str, Any], raw: Optional[dict[str, Any]] = None
     ) -> "PlacePrediction":
@@ -2861,6 +2967,7 @@ class QueryPrediction:
     raw: dict[str, Any] = field(default_factory=dict, repr=False, compare=False)
 
     @classmethod
+    @_rooted_decode
     def from_api(
         cls, data: dict[str, Any], raw: Optional[dict[str, Any]] = None
     ) -> "QueryPrediction":
@@ -2923,6 +3030,7 @@ class Suggestion:
     raw: dict[str, Any] = field(default_factory=dict, repr=False, compare=False)
 
     @classmethod
+    @_rooted_decode
     def from_api(
         cls, data: dict[str, Any], raw: Optional[dict[str, Any]] = None
     ) -> "Suggestion":
@@ -2966,6 +3074,7 @@ class AutocompleteResult:
         return [s.query_prediction for s in self.suggestions if s.query_prediction]
 
     @classmethod
+    @_rooted_decode
     def from_api(
         cls, data: dict[str, Any], raw: Optional[dict[str, Any]] = None
     ) -> "AutocompleteResult":
@@ -3035,6 +3144,7 @@ class PhotoUriResult:
     raw: dict[str, Any] = field(default_factory=dict, repr=False, compare=False)
 
     @classmethod
+    @_rooted_decode
     def from_api(
         cls, data: dict[str, Any], raw: Optional[dict[str, Any]] = None
     ) -> "PhotoUriResult":

@@ -16,7 +16,7 @@ from placekit import AsyncClient, Client, PlacesError
 from placekit._placekit import Client as NativeClient
 from placekit._placekit import PlacesError as NativePlacesError
 from placekit.exceptions import ConfigError, DecodeError
-from placekit.models import Money, Photo, Place
+from placekit.models import LocalizedText, Money, Photo, Place
 
 
 class TestRetryAfterValueDiscipline:
@@ -202,3 +202,153 @@ class TestEnvironmentKeyFallback:
         monkeypatch.setenv("PLACEKIT_API_KEY", "env-key")
         client = AsyncClient()
         client.close()
+
+
+class _CountingDict(dict):
+    """A payload mapping that counts how often a walk reads it."""
+
+    visits = 0
+
+    def values(self):  # type: ignore[override]
+        type(self).visits += 1
+        return super().values()
+
+
+def _counting(value):
+    if isinstance(value, dict):
+        return _CountingDict({k: _counting(v) for k, v in value.items()})
+    if isinstance(value, list):
+        return [_counting(v) for v in value]
+    return value
+
+
+def _dict_nodes(value) -> int:
+    if isinstance(value, dict):
+        return 1 + sum(_dict_nodes(v) for v in value.values())
+    if isinstance(value, list):
+        return sum(_dict_nodes(v) for v in value)
+    return 0
+
+
+def _deep_payload() -> dict:
+    node: dict = {"text": "x"}
+    for _ in range(200):
+        node = {"a": node}
+    return node
+
+
+def _count_verdicts(monkeypatch) -> list:
+    """Count the depth verdicts one decode asks the core for.
+
+    The walk is the only caller of the core verdict, so the
+    count of verdict calls is the count of walks that ran.
+    """
+    from placekit import _placekit
+
+    original = _placekit.models_payload_depth_within_limit
+    calls: list = []
+
+    def counting(trace):
+        calls.append(trace)
+        return original(trace)
+
+    monkeypatch.setattr(
+        _placekit, "models_payload_depth_within_limit", counting
+    )
+    return calls
+
+
+class TestRootedDecodeValidation:
+    """A50-044: a plain payload is walked once, at the root of
+    its decode. A tree carrying any container subclass is
+    walked at every level exactly as before, so a hostile
+    container still meets the walk at every decoder seat. A
+    decoder called directly is its own root and validates its
+    input in full."""
+
+    PAYLOAD = {
+        "id": "ChIJrTLr-GyuEmsRBfy61i59si0",
+        "displayName": {"text": "Cafe", "languageCode": "en"},
+        "location": {"latitude": -33.86, "longitude": 151.2},
+        "rating": 4.5,
+        "userRatingCount": 12,
+        "reviews": [
+            {
+                "name": "places/x/reviews/y",
+                "rating": 5,
+                "text": {"text": "Great", "languageCode": "en"},
+                "authorAttribution": {
+                    "displayName": "A",
+                    "uri": "https://example.test/a",
+                    "photoUri": "https://example.test/p",
+                },
+            }
+        ],
+    }
+
+    def test_a_plain_place_walks_once_at_the_root(self, monkeypatch):
+        calls = _count_verdicts(monkeypatch)
+        place = Place.from_api(self.PAYLOAD)
+        assert place.id == "ChIJrTLr-GyuEmsRBfy61i59si0"
+        assert len(calls) == 1
+
+    def test_a_hostile_tree_still_walks_at_nested_seats(self):
+        payload = _counting(self.PAYLOAD)
+        _CountingDict.visits = 0
+        place = Place.from_api(payload)
+        assert place.id == "ChIJrTLr-GyuEmsRBfy61i59si0"
+        assert _CountingDict.visits > _dict_nodes(self.PAYLOAD)
+
+    def test_a_direct_child_decode_validates_in_full(self):
+        with pytest.raises(DecodeError):
+            LocalizedText.from_api(_deep_payload())
+
+    def test_a_root_decode_still_refuses_a_deep_tree(self):
+        with pytest.raises(DecodeError):
+            Place.from_api(_deep_payload())
+
+    def test_a_failed_decode_leaves_the_next_call_at_the_root(
+        self, monkeypatch
+    ):
+        with pytest.raises(DecodeError):
+            Place.from_api(_deep_payload())
+        calls = _count_verdicts(monkeypatch)
+        Place.from_api(self.PAYLOAD)
+        assert len(calls) == 1
+
+
+def _sent_mask(stub_server) -> str:
+    headers = stub_server.last_request["headers"]
+    for key, value in headers.items():
+        if key.lower() == "x-goog-fieldmask":
+            return value
+    raise AssertionError("no field mask header was sent")
+
+
+class TestDefaultMaskListsAgree:
+    """A50-058: the curated default mask lists live in both the
+    Python fields module and the Rust core, and the two copies
+    must agree. The pin reads the mask the core actually sends
+    when no fields are given and compares it with the Python
+    tuple, endpoint by endpoint."""
+
+    def test_text_search_default_agrees(self, stub_server, base_url):
+        from placekit.fields import TEXT_SEARCH_FIELDS
+
+        client = Client("test-api-key", base_url=base_url)
+        client.text_search("cafes in Sydney")
+        assert _sent_mask(stub_server) == ",".join(TEXT_SEARCH_FIELDS)
+
+    def test_nearby_search_default_agrees(self, stub_server, base_url):
+        from placekit.fields import NEARBY_SEARCH_FIELDS
+
+        client = Client("test-api-key", base_url=base_url)
+        client.nearby_search((-33.86, 151.2), 500)
+        assert _sent_mask(stub_server) == ",".join(NEARBY_SEARCH_FIELDS)
+
+    def test_place_details_default_agrees(self, stub_server, base_url):
+        from placekit.fields import PLACE_DETAILS_FIELDS
+
+        client = Client("test-api-key", base_url=base_url)
+        client.place_details("ChIJrTLr-GyuEmsRBfy61i59si0")
+        assert _sent_mask(stub_server) == ",".join(PLACE_DETAILS_FIELDS)

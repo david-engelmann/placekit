@@ -92,8 +92,15 @@ pub fn sorted_order(keys: &[(u8, Vec<u8>)]) -> Vec<usize> {
 }
 
 /// A validated set of field paths for one request.
+///
+/// The joined header value is computed once at construction and
+/// carried beside the paths, so reading it on every call costs
+/// no join (audit A50-038).
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct FieldMask(Vec<String>);
+pub struct FieldMask {
+    paths: Vec<String>,
+    header: String,
+}
 
 impl FieldMask {
     /// Build a mask from field paths such as `places.displayName`.
@@ -140,32 +147,55 @@ impl FieldMask {
                 return Err(Error::config(format!("invalid field mask path: {path:?}")));
             }
         }
-        let mask = Self(paths);
-        if mask.header_value().len() > MAX_MASK_HEADER_LEN {
+        let header = paths.join(",");
+        if header.len() > MAX_MASK_HEADER_LEN {
             return Err(Error::config(format!(
                 "field mask header value exceeds {MAX_MASK_HEADER_LEN} bytes"
             )));
         }
-        Ok(mask)
+        Ok(Self { paths, header })
+    }
+
+    /// Build a mask from borrowed paths, owned on the way in.
+    ///
+    /// The composition this serves is a curated default plus one
+    /// field, where the default's [`paths`](Self::paths) chained
+    /// with the extra path build the extended mask in one call and
+    /// the owned constructor alone forced a manual rebuild of
+    /// every string (audit A50-024). The same rule set as
+    /// [`new`](Self::new) applies.
+    pub fn from_paths<I, S>(paths: I) -> Result<Self, Error>
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<str>,
+    {
+        Self::new(paths.into_iter().map(|p| p.as_ref().to_owned()).collect())
     }
 
     /// The value for the `X-Goog-FieldMask` header.
-    pub fn header_value(&self) -> String {
-        self.0.join(",")
+    pub fn header_value(&self) -> &str {
+        &self.header
     }
 
     /// The individual paths.
     pub fn paths(&self) -> &[String] {
-        &self.0
+        &self.paths
     }
 
     fn from_static(paths: &[&str]) -> Self {
-        Self(paths.iter().map(|s| (*s).to_owned()).collect())
+        let paths: Vec<String> = paths.iter().map(|s| (*s).to_owned()).collect();
+        let header = paths.join(",");
+        Self { paths, header }
     }
 
     /// Default mask for Text Search. Covers identity, address, rating and
     /// photos, plus the pagination token.
-    pub fn text_search_default() -> Self {
+    pub fn text_search_default() -> &'static Self {
+        static DEFAULT: std::sync::OnceLock<FieldMask> = std::sync::OnceLock::new();
+        DEFAULT.get_or_init(Self::text_search_mask)
+    }
+
+    fn text_search_mask() -> Self {
         Self::from_static(&[
             "places.id",
             "places.name",
@@ -184,7 +214,12 @@ impl FieldMask {
     }
 
     /// Default mask for Nearby Search (which has no pagination token).
-    pub fn nearby_search_default() -> Self {
+    pub fn nearby_search_default() -> &'static Self {
+        static DEFAULT: std::sync::OnceLock<FieldMask> = std::sync::OnceLock::new();
+        DEFAULT.get_or_init(Self::nearby_search_mask)
+    }
+
+    fn nearby_search_mask() -> Self {
         Self::from_static(&[
             "places.id",
             "places.name",
@@ -205,7 +240,12 @@ impl FieldMask {
     /// because the response is a single place. This is every modelled
     /// field, mirroring `PLACE_DETAILS_FIELDS` in the Python package,
     /// because the method promises full details.
-    pub fn place_details_default() -> Self {
+    pub fn place_details_default() -> &'static Self {
+        static DEFAULT: std::sync::OnceLock<FieldMask> = std::sync::OnceLock::new();
+        DEFAULT.get_or_init(Self::place_details_mask)
+    }
+
+    fn place_details_mask() -> Self {
         Self::from_static(&[
             "id",
             "name",
@@ -296,6 +336,51 @@ mod tests {
         .unwrap();
         assert_eq!(mask.header_value(), "places.id,places.displayName");
         assert_eq!(mask.paths().len(), 2);
+    }
+
+    #[test]
+    fn from_paths_builds_from_borrowed_paths() {
+        // Audit A50-024: the borrowed constructor applies the
+        // same rules and serves the default plus one composition.
+        let mask = FieldMask::from_paths(["places.id", "places.name"]).unwrap();
+        assert_eq!(mask.header_value(), "places.id,places.name");
+        let extended = FieldMask::from_paths(
+            FieldMask::text_search_default()
+                .paths()
+                .iter()
+                .map(String::as_str)
+                .chain(["places.reviews"]),
+        )
+        .unwrap();
+        assert_eq!(
+            extended.header_value(),
+            format!(
+                "{},places.reviews",
+                FieldMask::text_search_default().header_value()
+            )
+        );
+        assert_eq!(
+            FieldMask::from_paths(["places.*"]).unwrap_err().kind(),
+            "config"
+        );
+    }
+
+    #[test]
+    fn defaults_are_shared_statics() {
+        // Audit A50-038: a default is built once and borrowed on
+        // every call, never rebuilt from its statics.
+        assert!(std::ptr::eq(
+            FieldMask::text_search_default(),
+            FieldMask::text_search_default()
+        ));
+        assert!(std::ptr::eq(
+            FieldMask::nearby_search_default(),
+            FieldMask::nearby_search_default()
+        ));
+        assert!(std::ptr::eq(
+            FieldMask::place_details_default(),
+            FieldMask::place_details_default()
+        ));
     }
 
     #[test]

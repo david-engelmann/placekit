@@ -16,6 +16,11 @@ The stub behaves like the real API in the ways the suite depends on:
 * The photo media route answers with an HTTP redirect to a second route
   that serves the image, and with ``skipHttpRedirect=true`` it answers
   with the documented JSON photo object instead (finding A7 with F8).
+
+This stub has a drift pair, and examples/offline_stub.py carries
+the same handler machinery for the standalone examples (audit
+A50-096). A fix to the stub API behaviour here needs its twin
+there, and the reverse.
 """
 
 from __future__ import annotations
