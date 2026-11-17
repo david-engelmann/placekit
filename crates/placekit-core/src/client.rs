@@ -1250,13 +1250,14 @@ fn host_ip(url: &reqwest::Url) -> Option<std::net::IpAddr> {
 /// The tunneling forms name an IPv4 address too, and the
 /// tunnel delivers to it: the 6to4 prefix 2002::/16 carries
 /// the site address in segments 1 and 2, and the Teredo
-/// prefix 2001:0000::/32 carries two addresses, the server
-/// address in plain form in segments 2 and 3 and the client
-/// address, the host a connection to the address is
-/// delivered to, in the last 32 bits XORed with all ones,
-/// the pair judged by the same ladder as the local-use
-/// form with the client address as the primary (audit
-/// A50-006). The unspecified address and the IPv6 loopback
+/// prefix 2001:0000::/32 carries the client address, the
+/// host a connection to the address is delivered to, in
+/// the last 32 bits XORed with all ones. The Teredo server
+/// address in segments 2 and 3 names the tunnel server the
+/// client chose, not a delivery candidate, so it is not
+/// extracted: judging by it could grant loopback trust to
+/// a delivery that goes to the client (audit A50-006).
+/// The unspecified address and the IPv6 loopback
 /// address are not embeddings, they are addresses in their
 /// own right, so they return None here and keep their IPv6
 /// reading.
@@ -1300,17 +1301,13 @@ fn ipv6_embedded_ipv4(ip: std::net::Ipv6Addr) -> Option<std::net::Ipv4Addr> {
         // The 6to4 prefix carries the site address in
         // segments 1 and 2 (audit A50-006).
         [0x2002, _, _, _, _, _, _, _] => Some(from_pair(segments[1], segments[2])),
-        // The Teredo prefix carries two addresses (audit
-        // A50-006), the server address in plain form in
-        // segments 2 and 3 and the client address in the
-        // last 32 bits XORed with all ones. The pair is
-        // judged by the same ladder as the local-use form,
-        // with the client address, the delivery host, as
-        // the primary.
+        // The Teredo prefix delivers to the client address
+        // in the last 32 bits XORed with all ones (audit
+        // A50-006). The server address in segments 2 and 3
+        // names the client's tunnel server, not a delivery
+        // candidate, and is not judged.
         [0x2001, 0x0000, _, _, _, _, _, _] => {
-            let server = from_pair(segments[2], segments[3]);
-            let client = from_pair(segments[6] ^ 0xffff, segments[7] ^ 0xffff);
-            Some(judge_embedded_pair(client, server))
+            Some(from_pair(segments[6] ^ 0xffff, segments[7] ^ 0xffff))
         }
         _ => None,
     }
@@ -3349,12 +3346,16 @@ mod tests {
         // The 6to4 spelling of the private address 10.0.0.1,
         // a Teredo spelling whose client address is 10.0.0.1
         // under a public server, and a Teredo spelling whose
-        // server address is private under a public client
-        // are all refused with the non-public reason.
+        // client address is 10.0.0.1 under a loopback server
+        // are all refused with the non-public reason. The
+        // third spelling's reason is the discrimination: its
+        // server field names a loopback tunnel server, but
+        // the delivery goes to the client, so the verdict is
+        // the client's and not a loopback one.
         for target in [
             "https://[2002:a00:1::]/x",
             "https://[2001:0:808:808:0:0:f5ff:fffe]/x",
-            "https://[2001:0:c0a8:101:0:0:f7f7:f7f7]/x",
+            "https://[2001:0:7f00:1:0:0:f5ff:fffe]/x",
         ] {
             let err = at(target).unwrap_err();
             assert!(
@@ -3377,10 +3378,14 @@ mod tests {
         }
         // Tunneling spellings of public addresses are
         // followed, not refused: 2002:808:808:: embeds
-        // 8.8.8.8, and the Teredo spelling below delivers
-        // to 9.9.9.9 under a public server.
+        // 8.8.8.8, the second Teredo spelling below delivers
+        // to 9.9.9.9 under a public server, and the third
+        // delivers to 8.8.8.8 under a private server, whose
+        // address names the client's tunnel server and is
+        // not judged.
         assert!(at("https://[2002:808:808::]/x").is_ok());
         assert!(at("https://[2001:0:808:808:0:0:f6f6:f6f6]/x").is_ok());
+        assert!(at("https://[2001:0:c0a8:101:0:0:f7f7:f7f7]/x").is_ok());
     }
 
     #[test]
@@ -3390,10 +3395,14 @@ mod tests {
         // naming a tunneling spelling of a private address
         // is refused at construction, and a tunneling
         // spelling of the loopback address builds as the
-        // loopback it names.
+        // loopback it names. The third refused spelling
+        // carries a loopback Teredo server field over a
+        // private client, and refuses on the client's
+        // verdict, because the delivery goes to the client.
         for bad in [
             "http://[2002:a00:1::]/v1",
             "http://[2001:0:808:808:0:0:f5ff:fffe]/v1",
+            "http://[2001:0:7f00:1:0:0:f5ff:fffe]/v1",
         ] {
             assert_eq!(
                 Client::builder("k")
@@ -3487,10 +3496,11 @@ mod tests {
                 Some(std::net::Ipv4Addr::new(8, 8, 0, 1)),
             ),
             // Audit A50-006: the 6to4 form reads segments 1
-            // and 2, and the Teredo form judges its pair,
-            // the plaintext server address against the
-            // de-obfuscated client address, under the same
-            // ladder as the local-use form.
+            // and 2, and the Teredo form reads the client
+            // address out of the last 32 bits. The Teredo
+            // server address is not judged, so the spelling
+            // whose server is private and whose client is
+            // public extracts to the public client.
             ("2002:7f00:1::", Some(std::net::Ipv4Addr::new(127, 0, 0, 1))),
             ("2002:a00:1::", Some(std::net::Ipv4Addr::new(10, 0, 0, 1))),
             ("2002:808:808::", Some(std::net::Ipv4Addr::new(8, 8, 8, 8))),
@@ -3504,7 +3514,7 @@ mod tests {
             ),
             (
                 "2001:0:c0a8:101:0:0:f7f7:f7f7",
-                Some(std::net::Ipv4Addr::new(192, 168, 1, 1)),
+                Some(std::net::Ipv4Addr::new(8, 8, 8, 8)),
             ),
             (
                 "2001:0:808:808:0:0:f6f6:f6f6",
