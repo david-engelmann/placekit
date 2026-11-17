@@ -1401,12 +1401,21 @@ def test_model_conversion_failure_is_decode_error(client, monkeypatch):
     assert "model conversion" in excinfo.value.message
 
 
-def test_place_from_api_coerces_numeric_fields():
-    place = Place.from_api({"id": "ChIJx", "rating": "4.6", "userRatingCount": "1284"})
+def test_place_from_api_refuses_numeric_strings():
+    # A50-002: the direct decoders take numbers as numbers. A
+    # numeric string in a float or int position is refused with
+    # a DecodeError rather than silently coerced, the breaking
+    # change the audit recorded for 0.2.0. Real numbers decode
+    # exactly as they always did.
+    place = Place.from_api({"id": "ChIJx", "rating": 4.6, "userRatingCount": 1284})
     assert place.rating == pytest.approx(4.6)
     assert isinstance(place.rating, float)
     assert place.user_rating_count == 1284
     assert isinstance(place.user_rating_count, int)
+    with pytest.raises(DecodeError):
+        Place.from_api({"id": "ChIJx", "rating": "4.6"})
+    with pytest.raises(DecodeError):
+        Place.from_api({"id": "ChIJx", "userRatingCount": "1284"})
 
 
 def test_autocomplete_unknown_top_level_field_survives(client, raw_response):
@@ -1902,8 +1911,10 @@ def test_from_api_numeric_coercion_is_uniform():
     # R20-F03 supersedes the truncation half of this pin: a fractional
     # value in an integer position is refused with a DecodeError, not
     # silently truncated, because the typed view must never contradict
-    # raw silently. Digit strings, which the wire itself sends for
-    # int64 fields, still coerce.
+    # raw silently. A50-002 supersedes the digit-string half for the
+    # direct decoders: a string in a numeric position is refused, and
+    # only Money.units, the one field the wire itself sends as a
+    # string, keeps the string form, through its own decoder.
     from placekit.models import OpeningPoint, PlacePrediction
 
     with pytest.raises(DecodeError):
@@ -1913,7 +1924,9 @@ def test_from_api_numeric_coercion_is_uniform():
     )
     assert prediction.distance_meters == 12
     assert isinstance(prediction.distance_meters, int)
-    point = OpeningPoint.from_api({"day": "2", "hour": "9"})
+    with pytest.raises(DecodeError):
+        OpeningPoint.from_api({"day": "2", "hour": "9"})
+    point = OpeningPoint.from_api({"day": 2, "hour": 9})
     assert point.day == 2 and point.hour == 9
 
 
