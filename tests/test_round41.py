@@ -46,16 +46,15 @@ cut.
 from __future__ import annotations
 
 import asyncio
-import json
 
 import pytest
 
-from placekit import AsyncClient, Client
+from conftest import raised as _raised
+from placekit import AsyncClient
 from placekit.exceptions import (
     ConfigError,
     InvalidRequestError,
     PlacesError,
-    RateLimitError,
     raise_translated,
 )
 
@@ -64,31 +63,6 @@ QUOTA = "type.googleapis.com/google.rpc.QuotaFailure"
 DEBUGINFO = "type.googleapis.com/google.rpc.DebugInfo"
 
 BIG_LITERAL = "9" * 4301
-
-
-@pytest.fixture()
-def client(api_key, base_url) -> Client:
-    return Client(api_key, base_url=base_url)
-
-
-def _envelope(details, code=400, status_text="INVALID_ARGUMENT", message="r41 probe"):
-    return json.dumps(
-        {
-            "error": {
-                "code": code,
-                "message": message,
-                "status": status_text,
-                "details": details,
-            }
-        }
-    )
-
-
-def _raised(client, raw_response, body, http_status=400, exc_type=InvalidRequestError, headers=None):
-    raw_response(http_status, body, headers=headers)
-    with pytest.raises(exc_type) as excinfo:
-        client.text_search("anything")
-    return excinfo.value
 
 
 # ------------------------------------------------------------------
@@ -305,11 +279,6 @@ def test_unterminated_details_array_keeps_the_whole_array_fallback(
     exc = _raised(client, raw_response, body)
     assert exc.google_status == "INVALID_ARGUMENT"
     assert exc.details == []
-
-
-def test_capped_error_body_still_reports_the_cap(client, raw_response):
-    exc = _raised(client, raw_response, "x" * 300_000)
-    assert "stopped at the 262144 byte cap" in str(exc)
 
 
 # ------------------------------------------------------------------

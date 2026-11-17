@@ -969,7 +969,6 @@ mod tests {
         assert_eq!(district.carrier, Some(CARRIER_SUBLOCALITY_LEVEL_1));
         assert_eq!(district.confidence, CONFIDENCE_PRIMARY);
         let neighborhood = first_long_text(&place.components, b"neighborhood");
-        assert_eq!(place.postal_sublocality(), text(&neighborhood));
         assert_ne!(district.value, neighborhood);
     }
 

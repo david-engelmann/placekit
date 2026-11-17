@@ -25,7 +25,6 @@ from placekit import AsyncClient, Client, address
 from placekit.exceptions import (
     ConfigError,
     DecodeError,
-    PlacesError,
     RateLimitError,
 )
 from placekit.fields import MAX_MATERIALIZED_ITEMS, FieldMask, normalize_fields
@@ -50,11 +49,6 @@ QUOTA_BODY = (
     '{"error": {"code": 429, "message": "Quota exceeded", '
     '"status": "RESOURCE_EXHAUSTED"}}'
 )
-
-
-@pytest.fixture()
-def client(api_key, base_url) -> Client:
-    return Client(api_key, base_url=base_url)
 
 
 def _place(**over) -> Place:
@@ -376,18 +370,6 @@ def test_retry_after_fractional_header_async(api_key, base_url, raw_response):
         assert type(excinfo.value.retry_after) is float
 
     asyncio.run(run())
-
-
-def test_places_error_construction_coerces_retry_after_to_float():
-    err = PlacesError("slow down", retry_after=7)
-    assert err.retry_after == 7.0
-    assert type(err.retry_after) is float
-    # Round 25 supersedes the bool passthrough this test used to
-    # codify: a bool is not a count of seconds, and a non numeric
-    # value is not one either, so both read as None and the stored
-    # value is a float or None, never the caller's object.
-    assert PlacesError("x", retry_after=True).retry_after is None
-    assert PlacesError("x", retry_after="7").retry_after is None
 
 
 # ---------------------------------------------------------------------

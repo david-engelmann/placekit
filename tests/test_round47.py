@@ -14,15 +14,10 @@ from pathlib import Path
 
 import pytest
 
-from placekit import Client, DecodeError, FieldMask
+from placekit import DecodeError, FieldMask
 from placekit.models import PhotoMedia, PhotoUriResult
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-
-
-@pytest.fixture()
-def client(api_key, base_url) -> Client:
-    return Client(api_key, base_url=base_url)
 
 
 def _first_place(client):
