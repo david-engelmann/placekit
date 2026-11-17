@@ -87,50 +87,38 @@ fn field_violation_pair(violation: &serde_json::Value) -> Option<(&str, &str)> {
 }
 
 /// Errors returned by every `placekit-core` operation.
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug)]
 pub enum Error {
     /// The API key was rejected or lacks permission (HTTP 401/403,
     /// `UNAUTHENTICATED`, `PERMISSION_DENIED`).
-    #[error("authentication failed (HTTP {parts.status}): {parts.message}")]
     Auth { parts: ApiError },
     /// Quota exhausted or rate limit hit (HTTP 429, `RESOURCE_EXHAUSTED`).
-    #[error("rate limit or quota exceeded (HTTP {parts.status}): {parts.message}")]
     RateLimit { parts: ApiError },
     /// The requested resource does not exist (HTTP 404, `NOT_FOUND`).
-    #[error("not found (HTTP {parts.status}): {parts.message}")]
     NotFound { parts: ApiError },
     /// The request itself was malformed (HTTP 400, `INVALID_ARGUMENT`,
     /// `FAILED_PRECONDITION` or `OUT_OF_RANGE`).
-    #[error("invalid request (HTTP {parts.status}): {parts.message}")]
     InvalidRequest { parts: ApiError },
     /// Any other error response from the API.
-    #[error(
-        "places API error (HTTP {parts.status}{segment}): {parts.message}",
-        segment = google_status_segment(&parts.google_status)
-    )]
     Api { parts: ApiError },
     /// The request never produced an HTTP response (DNS, connect, TLS,
     /// timeout, or a dropped connection).
-    #[error("network error: {detail}")]
     Network {
         detail: String,
         /// The underlying transport error, kept typed as the source
         /// instead of being flattened into the message (R4-16). Absent
         /// when there is no concrete cause or when the cause's own
         /// rendering would leak a secret (see `network_redacted`).
-        #[source]
         source: Option<Box<dyn std::error::Error + Send + Sync>>,
     },
     /// The API returned a success status with a body that did not decode
     /// into the expected shape. `status` carries the HTTP status of that
     /// response when there was one.
-    #[error("failed to decode response: {detail}")]
     Decode {
         detail: String,
         status: Option<u16>,
         /// The underlying decode failure, kept typed as the source
         /// (R4-16), when a concrete one exists.
-        #[source]
         source: Option<Box<dyn std::error::Error + Send + Sync>>,
     },
     /// The client itself was configured or called incorrectly. This is a
@@ -139,8 +127,65 @@ pub enum Error {
     /// a fixed prefix saying the configuration or call was invalid
     /// repeated the classification the type already carries into
     /// every message built from this variant.
-    #[error("{detail}")]
     Config { detail: String },
+}
+
+// The rendering and the source chain are written by hand rather
+// than derived (audit A50-063). The five API headlines read two
+// members of the shared struct each, and the format machinery
+// refuses member access on a captured argument in every form the
+// derive accepts, so the derive cannot state these headlines.
+impl std::fmt::Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Error::Auth { parts } => {
+                write!(
+                    f,
+                    "authentication failed (HTTP {}): {}",
+                    parts.status, parts.message
+                )
+            }
+            Error::RateLimit { parts } => {
+                write!(
+                    f,
+                    "rate limit or quota exceeded (HTTP {}): {}",
+                    parts.status, parts.message
+                )
+            }
+            Error::NotFound { parts } => {
+                write!(f, "not found (HTTP {}): {}", parts.status, parts.message)
+            }
+            Error::InvalidRequest { parts } => {
+                write!(
+                    f,
+                    "invalid request (HTTP {}): {}",
+                    parts.status, parts.message
+                )
+            }
+            Error::Api { parts } => {
+                write!(
+                    f,
+                    "places API error (HTTP {}{}): {}",
+                    parts.status,
+                    google_status_segment(&parts.google_status),
+                    parts.message
+                )
+            }
+            Error::Network { detail, .. } => write!(f, "network error: {detail}"),
+            Error::Decode { detail, .. } => write!(f, "failed to decode response: {detail}"),
+            Error::Config { detail } => write!(f, "{detail}"),
+        }
+    }
+}
+
+impl std::error::Error for Error {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Error::Network { source, .. } => source.as_deref(),
+            Error::Decode { source, .. } => source.as_deref(),
+            _ => None,
+        }
+    }
 }
 
 impl Error {
