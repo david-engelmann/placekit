@@ -56,10 +56,10 @@ pub struct ComponentData {
     pub types: Vec<Option<Vec<u8>>>,
 }
 
-const TYPE_LOCALITY: &[u8] = b"locality";
-const TYPE_POSTAL_TOWN: &[u8] = b"postal_town";
-const TYPE_SUBLOCALITY_LEVEL_1: &[u8] = b"sublocality_level_1";
-const TYPE_SUBLOCALITY_LEVEL_2: &[u8] = b"sublocality_level_2";
+const TYPE_LOCALITY: &[u8] = CARRIER_LOCALITY.as_bytes();
+const TYPE_POSTAL_TOWN: &[u8] = CARRIER_POSTAL_TOWN.as_bytes();
+const TYPE_SUBLOCALITY_LEVEL_1: &[u8] = CARRIER_SUBLOCALITY_LEVEL_1.as_bytes();
+const TYPE_SUBLOCALITY_LEVEL_2: &[u8] = CARRIER_SUBLOCALITY_LEVEL_2.as_bytes();
 const TYPE_COUNTRY: &[u8] = b"country";
 const TYPE_STREET_NUMBER: &[u8] = b"street_number";
 const TYPE_ROUTE: &[u8] = b"route";
@@ -69,7 +69,9 @@ const TYPE_SUBPREMISE: &[u8] = b"subpremise";
 /// Carrier names, matching the Python module constants of the
 /// same names. The component carriers are the wire type strings
 /// themselves, and the postal carriers name the postal field the
-/// value came from.
+/// value came from. The four component carriers also spell the
+/// TYPE_ byte constants above, which derive from these
+/// (audit A50-078), so each shared name has one written source.
 pub const CARRIER_LOCALITY: &str = "locality";
 pub const CARRIER_POSTAL_TOWN: &str = "postal_town";
 pub const CARRIER_SUBLOCALITY_LEVEL_1: &str = "sublocality_level_1";

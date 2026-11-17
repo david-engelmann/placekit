@@ -56,6 +56,11 @@ use serde_json::{Map, Value};
 // ---------------------------------------------------------------------------
 // Payload depth verdict
 // ---------------------------------------------------------------------------
+//
+// This section is binding plumbing, not a model type. It is the
+// verdict half of a protocol whose walk lives in the Python layer,
+// consumed by the bindings (audit A50-076, the same signpost the
+// mask and address modules carry).
 
 /// The payload nesting limit the depth verdict enforces. The Python
 /// layer pins the same limit as its own `_MAX_PAYLOAD_DEPTH`
@@ -177,7 +182,11 @@ pub struct Viewport {
 }
 
 /// A `locationBias` value for Text Search: a rectangle or a circle, never
-/// both (the API rejects a bias carrying both shapes).
+/// both (the API rejects a bias carrying both shapes). The shape is
+/// identical to [`AutocompleteLocation`]. The two types stay separate
+/// on purpose, one per endpoint that names them, so an API change to
+/// one endpoint's bias does not silently rewrite the other's
+/// (audit A50-072).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TextSearchLocationBias {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -275,6 +284,12 @@ pub enum NearbySearchRankPreference {
 }
 
 /// Body of a `places:searchText` request.
+///
+/// The boolean fields on this and the other request structs in
+/// this module are the source of the bindings' BOOL_BODY_FIELDS
+/// table, which names these structs in return (audit A50-094).
+/// A boolean field added on either side must be added on both,
+/// or dict-shaped bodies lose the string "false" refusal for it.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TextSearchRequest {

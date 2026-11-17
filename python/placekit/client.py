@@ -120,6 +120,13 @@ def _drop_none(body: dict[str, Any]) -> dict[str, Any]:
     return {key: value for key, value in body.items() if value is not None}
 
 
+# Argument validators live in two homes in this module, by one
+# rule (audit A50-085). The free functions below serve body
+# construction and shared parameter materialisation, and the
+# staticmethods on _Base serve the call path itself. A new
+# validator takes the home of the family it joins.
+
+
 def _string_list(
     name: str,
     value: Optional[Iterable[str]],
