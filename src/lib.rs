@@ -381,8 +381,9 @@ where
 
 /// Translate a core error into a `PlacesError` with structured attributes
 /// the Python layer uses to pick a concrete exception subclass. API errors
-/// also carry the envelope `error_code`, the parsed `details`, and any
-/// field or quota violations extracted from them (C6).
+/// also carry the envelope `error_code`, the bare server message, the
+/// parsed `details`, and any field or quota violations extracted from
+/// them (C6. The typed violation entries joined them in audit A50-027).
 /// Record the first attribute attachment failure on an error being
 /// translated (R4-15); later failures do not overwrite it.
 fn record_failure(slot: &mut Option<String>, result: PyResult<()>) {
@@ -427,6 +428,10 @@ fn to_pyerr(py: Python<'_>, err: CoreError) -> PyErr {
         &mut first_failure,
         instance.setattr("retry_after", err.retry_after()),
     );
+    record_failure(
+        &mut first_failure,
+        instance.setattr("server_message", err.server_message()),
+    );
     // The details surface (the parsed details and the field and
     // quota views extracted from them) converts as one surface,
     // and it is best effort diagnostic payload rather than
@@ -451,12 +456,56 @@ fn to_pyerr(py: Python<'_>, err: CoreError) -> PyErr {
     let quota_violations_result =
         value_to_py(py, &serde_json::Value::Array(err.quota_violations()))
             .map_err(|e| e.to_string());
+    // The typed violation entries (audit A50-027) ride the same
+    // best effort surface. They are built from the same details,
+    // and they degrade to empty with it.
+    let field_violation_entries_result = value_to_py(
+        py,
+        &serde_json::Value::Array(
+            err.field_violation_entries()
+                .iter()
+                .map(|entry| {
+                    serde_json::json!({
+                        "field": entry.field,
+                        "description": entry.description,
+                    })
+                })
+                .collect(),
+        ),
+    )
+    .map_err(|e| e.to_string());
+    let quota_violation_entries_result = value_to_py(
+        py,
+        &serde_json::Value::Array(
+            err.quota_violation_entries()
+                .iter()
+                .map(|entry| {
+                    serde_json::json!({
+                        "subject": entry.subject,
+                        "description": entry.description,
+                        "quota_id": entry.quota_id,
+                        "quota_metric": entry.quota_metric,
+                        "quota_value": entry.quota_value,
+                    })
+                })
+                .collect(),
+        ),
+    )
+    .map_err(|e| e.to_string());
     match (
         details_result,
         field_violations_result,
         quota_violations_result,
+        field_violation_entries_result,
+        quota_violation_entries_result,
     ) {
-        (Ok(details), Ok(field_violations), Ok(quota_violations)) => {
+        (
+            Ok(details),
+            Ok(field_violations),
+            Ok(quota_violations),
+            Ok(field_violation_entries),
+            Ok(quota_violation_entries),
+        ) => {
             record_failure(&mut first_failure, instance.setattr("details", details));
             record_failure(
                 &mut first_failure,
@@ -465,6 +514,14 @@ fn to_pyerr(py: Python<'_>, err: CoreError) -> PyErr {
             record_failure(
                 &mut first_failure,
                 instance.setattr("quota_violations", quota_violations),
+            );
+            record_failure(
+                &mut first_failure,
+                instance.setattr("field_violation_entries", field_violation_entries),
+            );
+            record_failure(
+                &mut first_failure,
+                instance.setattr("quota_violation_entries", quota_violation_entries),
             );
         }
         _ => {
@@ -477,6 +534,14 @@ fn to_pyerr(py: Python<'_>, err: CoreError) -> PyErr {
             record_failure(
                 &mut first_failure,
                 instance.setattr("quota_violations", empty()),
+            );
+            record_failure(
+                &mut first_failure,
+                instance.setattr("field_violation_entries", empty()),
+            );
+            record_failure(
+                &mut first_failure,
+                instance.setattr("quota_violation_entries", empty()),
             );
         }
     }

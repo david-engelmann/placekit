@@ -27,9 +27,12 @@ class PlacesError(Exception):
     details: list[Any]
     field_violations: list[Any]
     quota_violations: list[Any]
+    field_violation_entries: list[Any]
+    quota_violation_entries: list[Any]
     status_mismatch: bool
     retryable: bool
     retry_after: Optional[float]
+    server_message: Optional[str]
     context: Optional[str]
     def __init__(
         self,
@@ -41,9 +44,12 @@ class PlacesError(Exception):
         details: Optional[list[Any]] = ...,
         field_violations: Optional[list[Any]] = ...,
         quota_violations: Optional[list[Any]] = ...,
+        field_violation_entries: Optional[list[Any]] = ...,
+        quota_violation_entries: Optional[list[Any]] = ...,
         status_mismatch: bool = ...,
         retryable: bool = ...,
         retry_after: Optional[float] = ...,
+        server_message: Optional[str] = ...,
         context: Optional[str] = ...,
     ) -> None: ...
     def __str__(self) -> str: ...

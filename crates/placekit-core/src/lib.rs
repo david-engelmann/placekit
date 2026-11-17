@@ -15,7 +15,8 @@ pub mod models;
 // The crate root re-exports the surface a consumer needs to
 // make and configure a call. That surface is the client and
 // its builder, the three named builder defaults, the error
-// type, the field mask type, and the address component data
+// type with the field set and violation types it carries,
+// the field mask type, and the address component data
 // the binding-facing module exposes (audit A50-028). Request
 // and response types stay behind their module paths, where
 // the module map groups them by endpoint and concern.
@@ -23,7 +24,7 @@ pub use address::ComponentData;
 pub use client::{
     Client, ClientBuilder, DEFAULT_BASE_URL, DEFAULT_MAX_RESPONSE_BYTES, DEFAULT_TIMEOUT,
 };
-pub use errors::Error;
+pub use errors::{ApiError, Error, FieldViolation, QuotaViolation};
 pub use mask::FieldMask;
 
 /// Builders shared by the crate's test modules, so a shape two

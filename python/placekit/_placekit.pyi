@@ -133,10 +133,13 @@ class PlacesError(Exception):
     error_code: Optional[int]
     details: list[Any]
     field_violations: list[Any]
-    quota_violations: list[dict[str, Any]]
+    quota_violations: list[Any]
+    field_violation_entries: list[Any]
+    quota_violation_entries: list[Any]
     status_mismatch: bool
     retryable: bool
     retry_after: Optional[float]
+    server_message: Optional[str]
 
 @final
 class Client:
