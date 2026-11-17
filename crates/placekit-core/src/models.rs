@@ -837,7 +837,21 @@ fn lenient_u64_value(value: &Value) -> Option<u64> {
                 None
             }
         }),
-        Value::String(s) => s.parse::<u64>().ok(),
+        Value::String(s) => {
+            // The string form is the canonical unsigned decimal,
+            // 0 or a non-zero digit followed by digits (audit
+            // A50-010). The integer parser also admits a leading
+            // plus and zero padding, neither of which the wire
+            // carries, so the shape is judged before the value
+            // is read.
+            let canonical = s == "0"
+                || (!s.is_empty() && !s.starts_with('0') && s.bytes().all(|b| b.is_ascii_digit()));
+            if canonical {
+                s.parse::<u64>().ok()
+            } else {
+                None
+            }
+        }
         _ => None,
     }
 }
@@ -1691,6 +1705,16 @@ mod tests {
         assert!(
             serde_json::from_str::<Place>(r#"{"id":"ChIJx","userRatingCount":"many"}"#).is_err()
         );
+        // Audit A50-010: the string form is the canonical unsigned
+        // decimal. A leading plus and zero padding are outside it
+        // and fail like any other unrepresentable form, while the
+        // canonical zero decodes.
+        assert!(serde_json::from_str::<Place>(r#"{"id":"ChIJx","userRatingCount":"+5"}"#).is_err());
+        assert!(
+            serde_json::from_str::<Place>(r#"{"id":"ChIJx","userRatingCount":"007"}"#).is_err()
+        );
+        let place: Place = serde_json::from_str(r#"{"id":"ChIJx","userRatingCount":"0"}"#).unwrap();
+        assert_eq!(place.user_rating_count, Some(0));
     }
 
     #[test]

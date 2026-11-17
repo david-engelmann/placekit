@@ -11,7 +11,7 @@ use std::time::Duration;
 use reqwest::header::{HeaderMap, HeaderValue};
 use serde::de::DeserializeOwned;
 
-use crate::errors::Error;
+use crate::errors::{transport_class, Error};
 use crate::mask::FieldMask;
 use crate::models::{
     AutocompleteRequest, AutocompleteResponse, Circle, EvOptions, LatLng, NearbySearchRequest,
@@ -108,7 +108,9 @@ impl ClientBuilder {
     /// sent as an HTTP header value, a timeout of zero, a response cap
     /// of zero, or a base URL that does not parse, is not http or https,
     /// carries credentials, a query string or a fragment, or uses plain
-    /// http for a non-loopback host.
+    /// http for a non-loopback host. It also fails when the HTTP client
+    /// itself cannot be built, which is a configuration failure on the
+    /// same terms (audit A50-097).
     pub fn build(self) -> Result<Client, Error> {
         if self.api_key.trim().is_empty() {
             return Err(Error::config("API key must not be empty"));
@@ -142,7 +144,7 @@ impl ClientBuilder {
             .redirect(reqwest::redirect::Policy::none())
             .user_agent(USER_AGENT)
             .build()
-            .map_err(Error::network)?;
+            .map_err(|e| Error::config(format!("could not build the HTTP client: {e}")))?;
         Ok(Client {
             api_key: self.api_key,
             base_url,
@@ -432,7 +434,7 @@ impl Client {
             // it is computed here rather than on every photo call
             // (audit A50-040).
             let final_host = response.url().host_str().map(str::to_owned);
-            let mut err = read_error_body(response, status.as_u16(), content_type.as_deref())
+            let mut err = read_error_body(response, status.as_u16(), true)
                 .await
                 .with_retry_after(retry_after);
             let mut notes: Vec<String> = Vec::new();
@@ -455,10 +457,8 @@ impl Client {
             return Err(err);
         }
         if skip_http_redirect {
-            let body = self.read_success_text(response, status).await?;
-            if let Some(err) =
-                envelope_error(status.as_u16(), &body, content_type.as_deref(), retry_after)
-            {
+            let body = self.read_success_text(response, status, true).await?;
+            if let Some(err) = envelope_error(status.as_u16(), &body, retry_after) {
                 return Err(err);
             }
             let media: PhotoMediaJson = decode_typed(&body, status.as_u16())?;
@@ -482,12 +482,10 @@ impl Client {
         // body that is not an envelope goes on to the declared type
         // gate and the magic bytes check that judge an image claim.
         let bytes = self
-            .read_capped_body(response, status, "photo body")
+            .read_capped_body(response, status, "photo body", true)
             .await?;
         if let Ok(text) = std::str::from_utf8(&bytes) {
-            if let Some(err) =
-                envelope_error(status.as_u16(), text, content_type.as_deref(), retry_after)
-            {
+            if let Some(err) = envelope_error(status.as_u16(), text, retry_after) {
                 return Err(err);
             }
         }
@@ -593,14 +591,16 @@ impl Client {
 
     /// Read a success response body as text under the size cap, for
     /// the JSON endpoints and the JSON form of the photo endpoint.
-    /// Failures keep the HTTP status.
+    /// Failures keep the HTTP status. `redact` is the photo path
+    /// reading, passed through to the body reader (audit A50-098).
     async fn read_success_text(
         &self,
         response: reqwest::Response,
         status: reqwest::StatusCode,
+        redact: bool,
     ) -> Result<String, Error> {
         let bytes = self
-            .read_capped_body(response, status, "response body")
+            .read_capped_body(response, status, "response body", redact)
             .await?;
         String::from_utf8(bytes).map_err(|e| Error::Decode {
             detail: format!("response body was not valid UTF-8: {e}"),
@@ -628,6 +628,7 @@ impl Client {
         response: reqwest::Response,
         status: reqwest::StatusCode,
         label: &str,
+        redact: bool,
     ) -> Result<Vec<u8>, Error> {
         // The two gzip predicates are the only header reads this
         // path makes, so they are judged before the response is
@@ -664,7 +665,7 @@ impl Client {
                                 "{label} carried a gzip body that failed to decompress: {error}"
                             ),
                             status: Some(status.as_u16()),
-                            source: None,
+                            source: Some(Box::new(error)),
                         }),
                     }
                 } else {
@@ -683,13 +684,32 @@ impl Client {
                 if read_error.is_timeout() {
                     return Err(Error::network_body_read_timeout_labelled(label));
                 }
+                // On the photo path the read error is recorded as
+                // its transport class token only, with no source
+                // kept. A rendered transport error can embed the
+                // request URL, and the photo URL carries the API
+                // key (R4-07, audit A50-098). On the JSON paths
+                // the rendered error is recorded and the cause is
+                // kept as the typed source, as the sibling UTF-8
+                // seat does (audit A50-100).
+                if redact {
+                    return Err(Error::Decode {
+                        detail: format!(
+                            "HTTP {} received, body read failed: {}: transport error",
+                            status.as_u16(),
+                            transport_class(&read_error)
+                        ),
+                        status: Some(status.as_u16()),
+                        source: None,
+                    });
+                }
                 Err(Error::Decode {
                     detail: format!(
                         "HTTP {} received, body read failed: {read_error}",
                         status.as_u16()
                     ),
                     status: Some(status.as_u16()),
-                    source: None,
+                    source: Some(Box::new(read_error)),
                 })
             }
         }
@@ -728,20 +748,15 @@ impl Client {
         let response = builder.send().await.map_err(Error::network)?;
         let status = response.status();
         let retry_after = retry_after_of(&response);
-        let content_type = content_type_of(&response);
         if !status.is_success() {
-            return Err(
-                read_error_body(response, status.as_u16(), content_type.as_deref())
-                    .await
-                    .with_retry_after(retry_after),
-            );
+            return Err(read_error_body(response, status.as_u16(), false)
+                .await
+                .with_retry_after(retry_after));
         }
-        let body = self.read_success_text(response, status).await?;
+        let body = self.read_success_text(response, status, false).await?;
         // An error envelope on a success status is an error, exactly
         // as if it had arrived on its own HTTP code.
-        if let Some(err) =
-            envelope_error(status.as_u16(), &body, content_type.as_deref(), retry_after)
-        {
+        if let Some(err) = envelope_error(status.as_u16(), &body, retry_after) {
             return Err(err);
         }
         decode_typed::<T>(&body, status.as_u16()).map(|value| (value, body, status.as_u16()))
@@ -860,12 +875,11 @@ async fn read_body_capped(response: reqwest::Response, cap: usize) -> BodyRead {
 /// A read failure discards the partial body, which is
 /// unreliable by definition, and keeps the HTTP fallback class with
 /// the read failure recorded in the message, so neither the status
-/// nor the read error is lost.
-async fn read_error_body(
-    response: reqwest::Response,
-    status: u16,
-    content_type: Option<&str>,
-) -> Error {
+/// nor the read error is lost. `redact` is set on the photo path,
+/// whose request URL carries the API key. A read failure there is
+/// recorded as its transport class token only, never as a rendered
+/// transport error, which can embed the URL (R4-07, audit A50-098).
+async fn read_error_body(response: reqwest::Response, status: u16, redact: bool) -> Error {
     use futures_util::StreamExt;
     // The two gzip predicates are the only header reads this
     // path makes, so they are judged before the response is
@@ -896,7 +910,7 @@ async fn read_error_body(
                 if e.is_timeout() {
                     return Error::network_body_read_timeout();
                 }
-                return Error::from_unreadable_body(status, &e.to_string(), content_type);
+                return unreadable_body_error(status, &e, redact);
             }
             None => break,
         }
@@ -963,7 +977,10 @@ async fn read_error_body(
             Gunzip::OverCap(out) => Some((out, true)),
             Gunzip::Failed { partial, error } => {
                 if !capped {
-                    return Error::from_unreadable_body(status, &error, content_type);
+                    // A decompression failure carries no URL, so
+                    // its rendering is safe on the photo path too
+                    // and needs no redaction (audit A50-098).
+                    return Error::from_unreadable_body(status, &error.to_string());
                 }
                 if partial.is_empty() {
                     None
@@ -981,9 +998,27 @@ async fn read_error_body(
     };
     let text = String::from_utf8_lossy(&buf);
     if capped {
-        Error::from_capped_error_body(status, &text, content_type, ERROR_BODY_CAP)
+        Error::from_capped_error_body(status, &text, ERROR_BODY_CAP)
     } else {
-        Error::from_response_detailed(status, &text, content_type)
+        Error::from_response_detailed(status, &text)
+    }
+}
+
+/// The unreadable body error for a failed error body read. Under
+/// `redact` (the photo path) the read error enters the text only
+/// as its transport class token, in the shape `network_redacted`
+/// uses, because a rendered transport error can embed the request
+/// URL and the photo URL carries the API key (R4-07, audit
+/// A50-098). On the JSON paths the rendered error is recorded as
+/// it always was.
+fn unreadable_body_error(status: u16, read_error: &reqwest::Error, redact: bool) -> Error {
+    if redact {
+        Error::from_unreadable_body(
+            status,
+            &format!("{}: transport error", transport_class(read_error)),
+        )
+    } else {
+        Error::from_unreadable_body(status, &read_error.to_string())
     }
 }
 
@@ -1050,8 +1085,13 @@ enum Gunzip {
     OverCap(Vec<u8>),
     /// The stream failed. Output produced before the failure
     /// rides along, because a stream cut short by a read cap
-    /// yields its prefix before it reports the cut.
-    Failed { partial: Vec<u8>, error: String },
+    /// yields its prefix before it reports the cut. The error
+    /// itself rides along typed, so a caller can keep it as a
+    /// source instead of only its rendering (audit A50-100).
+    Failed {
+        partial: Vec<u8>,
+        error: std::io::Error,
+    },
 }
 
 /// Decompress one gzip body under an output cap. Exactly one
@@ -1076,7 +1116,7 @@ fn gunzip_capped(bytes: &[u8], cap: usize) -> Gunzip {
             Err(error) => {
                 return Gunzip::Failed {
                     partial: out,
-                    error: error.to_string(),
+                    error,
                 };
             }
         }
@@ -1089,14 +1129,8 @@ fn gunzip_capped(bytes: &[u8], cap: usize) -> Gunzip {
 /// paths and both photo branches so the check and the error
 /// construction cannot drift apart. The envelope is parsed once for
 /// both (Round 29, Finding 1).
-fn envelope_error(
-    status: u16,
-    body: &str,
-    content_type: Option<&str>,
-    retry_after: Option<f64>,
-) -> Option<Error> {
-    Error::from_success_body(status, body, content_type)
-        .map(|err| err.with_retry_after(retry_after))
+fn envelope_error(status: u16, body: &str, retry_after: Option<f64>) -> Option<Error> {
+    Error::from_success_body(status, body).map(|err| err.with_retry_after(retry_after))
 }
 
 /// The `Retry-After` header in seconds, when present. Both forms
@@ -1116,12 +1150,31 @@ fn retry_after_of(response: &reqwest::Response) -> Option<f64> {
 
 fn parse_retry_after(raw: &str, now: std::time::SystemTime) -> Option<f64> {
     let raw = raw.trim();
-    if let Ok(seconds) = raw.parse::<f64>() {
-        return if seconds.is_finite() && seconds >= 0.0 {
-            Some(seconds)
-        } else {
-            None
-        };
+    // The delta form is a plain decimal, digits with an optional
+    // single fractional part (audit A50-004). The float parser
+    // also admits the exponent, sign and bare point forms, none
+    // of which the HTTP grammar allows, so the shape is judged
+    // before the value is read. Fractional values keep their
+    // fraction (Round 24).
+    let plain_decimal = {
+        let mut parts = raw.splitn(2, '.');
+        let whole = parts.next().unwrap_or("");
+        let fraction = parts.next();
+        !whole.is_empty()
+            && whole.bytes().all(|b| b.is_ascii_digit())
+            && match fraction {
+                None => true,
+                Some(f) => !f.is_empty() && f.bytes().all(|b| b.is_ascii_digit()),
+            }
+    };
+    if plain_decimal {
+        if let Ok(seconds) = raw.parse::<f64>() {
+            return if seconds.is_finite() && seconds >= 0.0 {
+                Some(seconds)
+            } else {
+                None
+            };
+        }
     }
     let when = httpdate::parse_http_date(raw).ok()?;
     match when.duration_since(now) {
@@ -2053,6 +2106,12 @@ mod tests {
             Some(0.0)
         );
         assert_eq!(parse_retry_after("whenever", now), None);
+        // Audit A50-004: the delta form is a plain decimal. The
+        // exponent, sign and bare point forms the float parser
+        // admits are outside the HTTP grammar and read as absent.
+        assert_eq!(parse_retry_after("1e3", now), None);
+        assert_eq!(parse_retry_after("+7", now), None);
+        assert_eq!(parse_retry_after("7.", now), None);
     }
 
     fn encoding_headers(value: &str) -> HeaderMap {
