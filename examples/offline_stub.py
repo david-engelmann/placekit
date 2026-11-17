@@ -3,6 +3,11 @@
 It serves the recorded responses in the fixtures folder beside it
 and honours the X-Goog-FieldMask request header the way the real
 API does, so an example only sees the fields its call asked for.
+
+This stub has a drift pair, and tests/conftest.py carries the
+same handler machinery for the test suite (audit A50-096). A fix
+to the stub API behaviour here needs its twin there, and the
+reverse.
 """
 
 from __future__ import annotations

@@ -349,15 +349,22 @@ class ConfigError(PlacesError, ValueError):
     kind = "config"
 
 
+# Built from the subclasses themselves, keyed by each class
+# kind attribute, so the Python layer holds the kind inventory
+# once (audit A50-090). A kind renamed on a class renames its
+# mapping here by construction.
 _KIND_TO_ERROR = {
-    "auth": AuthenticationError,
-    "rate_limit": RateLimitError,
-    "not_found": NotFoundError,
-    "invalid_request": InvalidRequestError,
-    "network": NetworkError,
-    "decode": DecodeError,
-    "api": ApiError,
-    "config": ConfigError,
+    cls.kind: cls
+    for cls in (
+        AuthenticationError,
+        RateLimitError,
+        NotFoundError,
+        InvalidRequestError,
+        NetworkError,
+        DecodeError,
+        ApiError,
+        ConfigError,
+    )
 }
 
 

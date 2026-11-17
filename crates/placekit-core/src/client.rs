@@ -33,6 +33,11 @@ pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(10);
 /// the error message, which is itself capped, so they stop early.
 const ERROR_BODY_CAP: usize = 256 * 1024;
 
+/// Cap on the redirects one photo fetch follows, each screened
+/// before it is followed (audit A50-075. The constant lived inside
+/// fetch_photo, where a census of this block missed it).
+const MAX_PHOTO_REDIRECTS: u32 = 10;
+
 const API_KEY_HEADER: &str = "x-goog-api-key";
 const FIELD_MASK_HEADER: &str = "x-goog-fieldmask";
 const USER_AGENT: &str = concat!("placekit/", env!("CARGO_PKG_VERSION"), " (rust core)");
@@ -81,6 +86,22 @@ impl ClientBuilder {
     pub fn max_response_bytes(mut self, max_response_bytes: usize) -> Self {
         self.max_response_bytes = max_response_bytes;
         self
+    }
+
+    /// The API root currently set, as set, before the build time
+    /// parsing the built client carries.
+    pub fn effective_base_url(&self) -> &str {
+        &self.base_url
+    }
+
+    /// The per-request timeout currently set.
+    pub fn effective_timeout(&self) -> Duration {
+        self.timeout
+    }
+
+    /// The maximum response body size currently set, in bytes.
+    pub fn effective_max_response_bytes(&self) -> usize {
+        self.max_response_bytes
     }
 
     /// Build the client. Fails on an empty API key, a key that cannot be
@@ -167,6 +188,23 @@ impl Client {
         }
     }
 
+    /// The API root this client was built with, in its built
+    /// (parsed) form.
+    pub fn effective_base_url(&self) -> &str {
+        &self.base_url
+    }
+
+    /// The maximum response body size this client enforces, in
+    /// bytes. The per-request timeout has no reader here because
+    /// it is baked into the HTTP client at build time and the
+    /// transport does not read it back. The builder's
+    /// `effective_timeout` is its reader before the build. The
+    /// API key has no reader anywhere, because it is the one
+    /// secret these types hold.
+    pub fn effective_max_response_bytes(&self) -> usize {
+        self.max_response_bytes
+    }
+
     /// Text Search: find places matching a free-form query.
     ///
     /// A `None` fields argument sends the curated default mask for
@@ -194,13 +232,11 @@ impl Client {
             validate_lat_lng(origin, "routing_parameters origin")?;
         }
         let url = format!("{}/places:searchText", self.base_url);
-        let mask = fields
-            .cloned()
-            .unwrap_or_else(FieldMask::text_search_default);
+        let mask = fields.unwrap_or_else(|| FieldMask::text_search_default());
         let builder = self
             .http
             .post(url)
-            .headers(self.headers(Some(&mask))?)
+            .headers(self.headers(Some(mask))?)
             .json(request);
         self.send_with_status(builder).await
     }
@@ -228,13 +264,11 @@ impl Client {
             validate_lat_lng(origin, "routing_parameters origin")?;
         }
         let url = format!("{}/places:searchNearby", self.base_url);
-        let mask = fields
-            .cloned()
-            .unwrap_or_else(FieldMask::nearby_search_default);
+        let mask = fields.unwrap_or_else(|| FieldMask::nearby_search_default());
         let builder = self
             .http
             .post(url)
-            .headers(self.headers(Some(&mask))?)
+            .headers(self.headers(Some(mask))?)
             .json(request);
         self.send_with_status(builder).await
     }
@@ -259,10 +293,8 @@ impl Client {
         // unusual but valid id cannot reshape the URL (F16). Valid ids are
         // URL safe already, so this is a no-op for them.
         let url = format!("{}/places/{}", self.base_url, encode_path_segment(place_id));
-        let mask = fields
-            .cloned()
-            .unwrap_or_else(FieldMask::place_details_default);
-        let mut builder = self.http.get(url).headers(self.headers(Some(&mask))?);
+        let mask = fields.unwrap_or_else(|| FieldMask::place_details_default());
+        let mut builder = self.http.get(url).headers(self.headers(Some(mask))?);
         // An empty optional value means "not supplied" and is omitted,
         // not sent as an empty query parameter (R4-23, the query side
         // of the R4-17 body rule).
@@ -393,10 +425,13 @@ impl Client {
         let status = response.status();
         let content_type = content_type_of(&response);
         let retry_after = retry_after_of(&response);
-        // The host that finally answered, after any redirects. When it
-        // is not the API host, failures belong to the image host.
-        let final_host = response.url().host_str().map(str::to_owned);
         if !status.is_success() {
+            // The host that finally answered, after any redirects.
+            // When it is not the API host, failures belong to the
+            // image host. The value is read only on this path, so
+            // it is computed here rather than on every photo call
+            // (audit A50-040).
+            let final_host = response.url().host_str().map(str::to_owned);
             let mut err = read_error_body(response, status.as_u16(), content_type.as_deref())
                 .await
                 .with_retry_after(retry_after);
@@ -459,9 +494,12 @@ impl Client {
         // A photo body must declare an image content type (R4-06).
         // Accepting bytes with no declared type let a redirect target
         // serve anything at all (an HTML error page, a metadata
-        // response) and have it handed back as a photo.
+        // response) and have it handed back as a photo. The folded
+        // media type is computed once here and shared by both
+        // judges below (audit A50-040).
+        let media_type = content_type.as_deref().map(media_type_of);
         match &content_type {
-            Some(ct) if declares_image(ct) => {}
+            Some(_) if media_type.as_deref().is_some_and(declares_image) => {}
             Some(ct) => {
                 return Err(Error::Decode {
                     detail: format!("photo endpoint returned a non-image content type: {ct}"),
@@ -477,7 +515,7 @@ impl Client {
                 });
             }
         }
-        validate_photo_magic(&bytes, content_type.as_deref(), status.as_u16())?;
+        validate_photo_magic(&bytes, media_type.as_deref(), status.as_u16())?;
         Ok((
             PhotoMedia::Bytes(PhotoResponse {
                 bytes,
@@ -505,7 +543,6 @@ impl Client {
         url: &str,
         query: &[(&str, String)],
     ) -> Result<reqwest::Response, Error> {
-        const MAX_PHOTO_REDIRECTS: u32 = 10;
         let mut current = reqwest::Url::parse(url)
             .map_err(|e| Error::config(format!("invalid photo request URL: {e}")))?;
         {
@@ -554,8 +591,9 @@ impl Client {
         }
     }
 
-    /// Read a success response body as text under the size cap, for the
-    /// JSON form of the photo endpoint. Failures keep the HTTP status.
+    /// Read a success response body as text under the size cap, for
+    /// the JSON endpoints and the JSON form of the photo endpoint.
+    /// Failures keep the HTTP status.
     async fn read_success_text(
         &self,
         response: reqwest::Response,
@@ -591,7 +629,12 @@ impl Client {
         status: reqwest::StatusCode,
         label: &str,
     ) -> Result<Vec<u8>, Error> {
-        let headers = response.headers().clone();
+        // The two gzip predicates are the only header reads this
+        // path makes, so they are judged before the response is
+        // consumed instead of cloning the whole header map for
+        // them (audit A50-039).
+        let names_gzip = content_encoding_names_gzip(response.headers());
+        let transport_decoded = transport_decoded_gzip(response.headers());
         match read_body_capped(response, self.max_response_bytes).await {
             BodyRead::Complete(bytes) => {
                 // A gzip body the transport did not decode (its
@@ -605,10 +648,7 @@ impl Client {
                 // transport not having decoded the body already
                 // (`transport_decoded_gzip`). The decode itself
                 // is one capped pass (`gunzip_capped`).
-                if bytes.starts_with(&GZIP_MAGIC)
-                    && content_encoding_names_gzip(&headers)
-                    && !transport_decoded_gzip(&headers)
-                {
+                if bytes.starts_with(&GZIP_MAGIC) && names_gzip && !transport_decoded {
                     match gunzip_capped(&bytes, self.max_response_bytes) {
                         Gunzip::Done(out) => Ok(out),
                         Gunzip::OverCap(_) => Err(Error::Decode {
@@ -665,7 +705,7 @@ impl Client {
             .map_err(|_| Error::config("API key cannot be sent in an HTTP header"))?;
         headers.insert(API_KEY_HEADER, key);
         if let Some(mask) = mask {
-            let value = HeaderValue::from_str(&mask.header_value())
+            let value = HeaderValue::from_str(mask.header_value())
                 .map_err(|_| Error::config("field mask cannot be sent in an HTTP header"))?;
             headers.insert(FIELD_MASK_HEADER, value);
         }
@@ -696,19 +736,7 @@ impl Client {
                     .with_retry_after(retry_after),
             );
         }
-        let bytes = self
-            .read_capped_body(response, status, "response body")
-            .await?;
-        let body = match String::from_utf8(bytes) {
-            Ok(text) => text,
-            Err(e) => {
-                return Err(Error::Decode {
-                    detail: format!("response body was not valid UTF-8: {e}"),
-                    status: Some(status.as_u16()),
-                    source: Some(Box::new(e)),
-                });
-            }
-        };
+        let body = self.read_success_text(response, status).await?;
         // An error envelope on a success status is an error, exactly
         // as if it had arrived on its own HTTP code.
         if let Some(err) =
@@ -839,7 +867,12 @@ async fn read_error_body(
     content_type: Option<&str>,
 ) -> Error {
     use futures_util::StreamExt;
-    let headers = response.headers().clone();
+    // The two gzip predicates are the only header reads this
+    // path makes, so they are judged before the response is
+    // consumed instead of cloning the whole header map for
+    // them (audit A50-039).
+    let names_gzip = content_encoding_names_gzip(response.headers());
+    let transport_decoded = transport_decoded_gzip(response.headers());
     let mut stream = response.bytes_stream();
     let mut buf = Vec::new();
     let mut capped = false;
@@ -924,10 +957,7 @@ async fn read_error_body(
     // construction the transport route gives the same body
     // under the exact lowercase declaration its own decoder
     // refuses.
-    let gunzipped = if buf.starts_with(&GZIP_MAGIC)
-        && content_encoding_names_gzip(&headers)
-        && !transport_decoded_gzip(&headers)
-    {
+    let gunzipped = if buf.starts_with(&GZIP_MAGIC) && names_gzip && !transport_decoded {
         match gunzip_capped(&buf, ERROR_BODY_CAP) {
             Gunzip::Done(out) => Some((out, capped)),
             Gunzip::OverCap(out) => Some((out, true)),
@@ -1604,30 +1634,40 @@ fn encode_path_segment(segment: &str) -> String {
 /// encoding is the second line of defense, so a future validator gap
 /// still cannot change the request path.
 fn encode_photo_name(photo_name: &str) -> String {
-    photo_name
-        .split('/')
-        .map(encode_path_segment)
-        .collect::<Vec<_>>()
-        .join("/")
+    let mut out = String::new();
+    for (index, segment) in photo_name.split('/').enumerate() {
+        if index > 0 {
+            out.push('/');
+        }
+        out.push_str(&encode_path_segment(segment));
+    }
+    out
 }
 
-/// Whether a declared content type claims an image at all, judged
-/// the same way the signature check behind this gate judges the
-/// same value (R20-RT1). The media type is the part before any
-/// parameters, trimmed and case folded, because media types are
-/// case insensitive. The gate previously tested the raw header
-/// text for a lowercase prefix while the signature check folded
-/// case, so a legal IMAGE/PNG carrying a genuine image was refused
-/// at the gate even though the check behind it would have accepted
-/// the same value.
-fn declares_image(content_type: &str) -> bool {
+/// The media type of a declared content type, the part before
+/// any parameters, trimmed and case folded, because media types
+/// are case insensitive. Both photo content type judges read
+/// this one folded form, computed once at the photo seat
+/// (audit A50-040).
+fn media_type_of(content_type: &str) -> String {
     content_type
         .split(';')
         .next()
         .unwrap_or("")
         .trim()
         .to_ascii_lowercase()
-        .starts_with("image/")
+}
+
+/// Whether a declared content type claims an image at all, judged
+/// the same way the signature check behind this gate judges the
+/// same value (R20-RT1). The input is the folded media type from
+/// [`media_type_of`]. The gate previously tested the raw header
+/// text for a lowercase prefix while the signature check folded
+/// case, so a legal IMAGE/PNG carrying a genuine image was refused
+/// at the gate even though the check behind it would have accepted
+/// the same value.
+fn declares_image(media_type: &str) -> bool {
+    media_type.starts_with("image/")
 }
 
 /// Check a downloaded photo body against the format its content type
@@ -1640,19 +1680,8 @@ fn declares_image(content_type: &str) -> bool {
 /// described Round 2 design; the script bearing SVG probe in Round
 /// 18 is the evidence that reopened it. A body shorter than the
 /// signature or not matching it is a decode failure, not an image.
-fn validate_photo_magic(
-    bytes: &[u8],
-    content_type: Option<&str>,
-    status: u16,
-) -> Result<(), Error> {
-    let claimed = content_type.map(|ct| {
-        ct.split(';')
-            .next()
-            .unwrap_or("")
-            .trim()
-            .to_ascii_lowercase()
-    });
-    let matches_claim = match claimed.as_deref() {
+fn validate_photo_magic(bytes: &[u8], media_type: Option<&str>, status: u16) -> Result<(), Error> {
+    let matches_claim = match media_type {
         Some("image/jpeg") => bytes.starts_with(&[0xFF, 0xD8, 0xFF]),
         Some("image/png") => bytes.starts_with(&[0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]),
         Some("image/gif") => bytes.starts_with(b"GIF8"),
@@ -1682,7 +1711,7 @@ fn validate_photo_magic(
         Err(Error::Decode {
             detail: format!(
                 "photo body does not match its declared content type {}",
-                claimed.unwrap_or_default()
+                media_type.unwrap_or_default()
             ),
             status: Some(status),
             source: None,
@@ -1770,6 +1799,27 @@ mod tests {
         // constant, and the builder carries it untouched.
         assert_eq!(DEFAULT_TIMEOUT, Duration::from_secs(10));
         assert_eq!(Client::builder("test-key").timeout, DEFAULT_TIMEOUT);
+    }
+
+    #[test]
+    fn configuration_reads_back_from_builder_and_client() {
+        // Audit A50-030 (getters half): the effective configuration
+        // reads back from the builder and from the built client.
+        // The API key never reads back. It is the one secret these
+        // types hold, and the Debug impls redact it on the same
+        // terms.
+        let builder = Client::builder("test-key")
+            .base_url("http://127.0.0.1:9")
+            .timeout(Duration::from_secs(3))
+            .max_response_bytes(1024);
+        assert_eq!(builder.effective_base_url(), "http://127.0.0.1:9");
+        assert_eq!(builder.effective_timeout(), Duration::from_secs(3));
+        assert_eq!(builder.effective_max_response_bytes(), 1024);
+        let client = builder.build().unwrap();
+        assert_eq!(client.effective_max_response_bytes(), 1024);
+        assert!(client
+            .effective_base_url()
+            .starts_with("http://127.0.0.1:9"));
     }
 
     #[test]
@@ -2355,10 +2405,7 @@ mod tests {
         assert_eq!(sent.path, "/v1/places:searchText");
         assert_eq!(sent.header("x-goog-api-key"), Some("test-key"));
         let mask = FieldMask::text_search_default();
-        assert_eq!(
-            sent.header("x-goog-fieldmask"),
-            Some(mask.header_value().as_str())
-        );
+        assert_eq!(sent.header("x-goog-fieldmask"), Some(mask.header_value()));
         let body: serde_json::Value = serde_json::from_slice(&sent.body).unwrap();
         assert_eq!(body["textQuery"], "pizza in Sydney");
     }
@@ -2474,6 +2521,9 @@ mod tests {
         // Differently cased spellings of an image type claim an
         // image (R20-RT1), as do parameterized and padded spellings
         // the signature check behind the gate already tolerates.
+        // The fold lives in media_type_of and the gate reads its
+        // output, the same folded form the magic check reads
+        // (audit A50-040).
         for claimed in [
             "image/png",
             "IMAGE/PNG",
@@ -2483,12 +2533,12 @@ mod tests {
             "IMAGE/PNG; CHARSET=BINARY",
             " image/webp ",
         ] {
-            assert!(declares_image(claimed), "{claimed}");
+            assert!(declares_image(&media_type_of(claimed)), "{claimed}");
         }
         // A refused type stays refused in any case spelling, and a
         // value with no image prefix at all never claims an image.
         for claimed in ["text/html", "TEXT/HTML", "application/json", "image", ""] {
-            assert!(!declares_image(claimed), "{claimed}");
+            assert!(!declares_image(&media_type_of(claimed)), "{claimed}");
         }
     }
 
@@ -2496,7 +2546,10 @@ mod tests {
     fn photo_magic_must_match_the_declared_type() {
         let png = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 1, 2];
         assert!(validate_photo_magic(&png, Some("image/png"), 200).is_ok());
-        assert!(validate_photo_magic(&png, Some("image/png; charset=binary"), 200).is_ok());
+        assert!(
+            validate_photo_magic(&png, Some(&media_type_of("image/png; charset=binary")), 200)
+                .is_ok()
+        );
         // A one byte body claims PNG and matches nothing.
         assert_eq!(
             validate_photo_magic(&[0x89], Some("image/png"), 200)

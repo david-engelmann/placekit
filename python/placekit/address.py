@@ -769,10 +769,13 @@ def _country_code_from_components(
     plain: Sequence[
         tuple[Optional[str], Optional[str], tuple[Optional[str], ...]]
     ],
+    encoded: list[
+        tuple[Optional[bytes], Optional[bytes], tuple[Optional[bytes], ...]]
+    ],
 ) -> Optional[str]:
     _exercise_membership(checked, types.TYPE_COUNTRY)
     indices = _placekit.address_matching_indices(
-        _core_components(plain), _encode_text(types.TYPE_COUNTRY)
+        encoded, _encode_text(types.TYPE_COUNTRY)
     )
     for index in indices:
         if checked[index].short_text:
@@ -792,7 +795,9 @@ def country_code_from_components(
     mapped to another code.
     """
     checked, plain = _checked_components_and_plain(components)
-    return _country_code_from_components(checked, plain)
+    return _country_code_from_components(
+        checked, plain, _core_components(plain)
+    )
 
 
 def _country_code(
@@ -801,8 +806,11 @@ def _country_code(
     plain: Sequence[
         tuple[Optional[str], Optional[str], tuple[Optional[str], ...]]
     ],
+    encoded: list[
+        tuple[Optional[bytes], Optional[bytes], tuple[Optional[bytes], ...]]
+    ],
 ) -> Optional[str]:
-    code = _country_code_from_components(checked, plain)
+    code = _country_code_from_components(checked, plain, encoded)
     if code is not None:
         return code
     return postal_region_code(place.postal_address)
@@ -818,7 +826,7 @@ def country_code(place: Place) -> Optional[str]:
     returns None when neither carrier yields a value.
     """
     checked, plain = _checked_place_and_plain(place)
-    return _country_code(place, checked, plain)
+    return _country_code(place, checked, plain, _core_components(plain))
 
 
 @_entry_guard
@@ -869,15 +877,18 @@ def _postal_code(
     plain: Sequence[
         tuple[Optional[str], Optional[str], tuple[Optional[str], ...]]
     ],
+    encoded: list[
+        tuple[Optional[bytes], Optional[bytes], tuple[Optional[bytes], ...]]
+    ],
 ) -> PostalCodeResult:
-    country = _country_code(place, checked, plain)
+    country = _country_code(place, checked, plain, encoded)
     # The old postal read never routed and never tested a
     # sublocality needle, so no routing read and no district
     # exercise stands here. Its own scan is the postal code
     # long text scan, exercised on its own terms.
     _exercise_text_scan(checked, types.TYPE_POSTAL_CODE)
     index = _placekit.address_first_long_text_index(
-        _core_components(plain), _encode_text(types.TYPE_POSTAL_CODE)
+        encoded, _encode_text(types.TYPE_POSTAL_CODE)
     )
     component_text = plain[index][0] if index is not None else None
     component_object = checked[index].long_text if index is not None else None
@@ -923,7 +934,7 @@ def postal_code(place: Place) -> PostalCodeResult:
     can be a property of a country rather than a gap.
     """
     checked, plain = _checked_place_and_plain(place)
-    return _postal_code(place, checked, plain)
+    return _postal_code(place, checked, plain, _core_components(plain))
 
 
 def _city_resolutions(
@@ -932,8 +943,11 @@ def _city_resolutions(
     plain: Sequence[
         tuple[Optional[str], Optional[str], tuple[Optional[str], ...]]
     ],
+    encoded: list[
+        tuple[Optional[bytes], Optional[bytes], tuple[Optional[bytes], ...]]
+    ],
 ) -> tuple[CityResolution, ...]:
-    country = _country_code(place, checked, plain)
+    country = _country_code(place, checked, plain, encoded)
     route = _routing_country(country)
     # Each chain exercises the scans the old chain ran, on
     # their own terms. The British chain ran both of its text
@@ -987,7 +1001,6 @@ def _city_resolutions(
         ):
             if land(type_name, carrier):
                 break
-    encoded = _core_components(plain)
     needs_postal, rows = _placekit.address_city_resolutions(
         encoded, False, _encode_text(country), None
     )
@@ -1039,7 +1052,7 @@ def city_resolutions(place: Place) -> tuple[CityResolution, ...]:
     order and each carries the other in its competing fields.
     """
     checked, plain = _checked_place_and_plain(place)
-    return _city_resolutions(place, checked, plain)
+    return _city_resolutions(place, checked, plain, _core_components(plain))
 
 
 @_entry_guard
@@ -1065,8 +1078,11 @@ def _resolve_district(
     plain: Sequence[
         tuple[Optional[str], Optional[str], tuple[Optional[str], ...]]
     ],
+    encoded: list[
+        tuple[Optional[bytes], Optional[bytes], tuple[Optional[bytes], ...]]
+    ],
 ) -> DistrictResolution:
-    country = _country_code(place, checked, plain)
+    country = _country_code(place, checked, plain, encoded)
     route = _routing_country(country)
     type_name = None
     carrier = None
@@ -1087,7 +1103,7 @@ def _resolve_district(
         if index is not None:
             live_value = checked[index].long_text
     row = _placekit.address_district_resolution(
-        _core_components(plain), _encode_text(country)
+        encoded, _encode_text(country)
     )
     # The core echoes the country code as a plain value and the
     # result carries the code as sent, as in the city reading.
@@ -1108,7 +1124,7 @@ def resolve_district(place: Place) -> DistrictResolution:
     circumstance.
     """
     checked, plain = _checked_place_and_plain(place)
-    return _resolve_district(place, checked, plain)
+    return _resolve_district(place, checked, plain, _core_components(plain))
 
 
 @_entry_guard
@@ -1141,11 +1157,11 @@ def has_subpremise(components: Sequence[AddressComponent]) -> bool:
 
 
 def _flags_core(
-    plain: Sequence[
-        tuple[Optional[str], Optional[str], tuple[Optional[str], ...]]
+    encoded: list[
+        tuple[Optional[bytes], Optional[bytes], tuple[Optional[bytes], ...]]
     ],
 ) -> tuple[bool, ...]:
-    """Ask the core for the component flag row over the plain
+    """Ask the core for the component flag row over the encoded
     capture.
 
     The exercise at each site runs over the caller objects on
@@ -1154,7 +1170,7 @@ def _flags_core(
     street number presence through the no street level flag,
     in the order the AddressFlags fields consume them.
     """
-    return _placekit.address_component_flags(_core_components(plain))
+    return _placekit.address_component_flags(encoded)
 
 
 def _exercise_flag_helpers(
@@ -1200,7 +1216,7 @@ def spans_multiple_routes(components: Sequence[AddressComponent]) -> bool:
     checked, plain = _checked_components_and_plain(components)
     _exercise_membership(checked, types.TYPE_ROUTE)
     _exercise_route_texts(checked, plain)
-    return _flags_core(plain)[5]
+    return _flags_core(_core_components(plain))[5]
 
 
 @_entry_guard
@@ -1216,7 +1232,7 @@ def has_no_street_level(components: Sequence[AddressComponent]) -> bool:
         if not _exercise_first_match(checked, types.TYPE_ROUTE):
             if not _exercise_first_match(checked, types.TYPE_PREMISE):
                 _exercise_first_match(checked, types.TYPE_SUBPREMISE)
-    return _flags_core(plain)[6]
+    return _flags_core(_core_components(plain))[6]
 
 
 @_entry_guard
@@ -1232,7 +1248,7 @@ def is_premise_level(place: Place) -> bool:
     if _exercise_first_match(checked, types.TYPE_PREMISE):
         if not _exercise_first_match(checked, types.TYPE_STREET_NUMBER):
             _exercise_first_match(checked, types.TYPE_ROUTE)
-    return _flags_core(plain)[4]
+    return _flags_core(_core_components(plain))[4]
 
 
 @_entry_guard
@@ -1247,6 +1263,9 @@ def address_flags(place: Place) -> AddressFlags:
     """
     checked, plain = _checked_place_and_plain(place)
     _exercise_flag_helpers(checked, plain)
+    # One encoding of the component list serves every reading
+    # the composite makes (audit A50-045).
+    encoded = _core_components(plain)
     (
         street_number,
         route,
@@ -1255,7 +1274,7 @@ def address_flags(place: Place) -> AddressFlags:
         premise_level,
         spans,
         no_street_level,
-    ) = _flags_core(plain)
+    ) = _flags_core(encoded)
     return AddressFlags(
         has_street_number=street_number,
         has_route=route,
@@ -1265,12 +1284,13 @@ def address_flags(place: Place) -> AddressFlags:
         spans_multiple_routes=spans,
         has_no_street_level=no_street_level,
         has_postal_code=(
-            _postal_code(place, checked, plain).status == POSTAL_PRESENT
+            _postal_code(place, checked, plain, encoded).status == POSTAL_PRESENT
         ),
         has_postal_address=place.postal_address is not None,
-        has_country=_country_code(place, checked, plain) is not None,
+        has_country=_country_code(place, checked, plain, encoded) is not None,
         has_city_carrier=(
-            _city_resolutions(place, checked, plain)[0].value is not None
+            _city_resolutions(place, checked, plain, encoded)[0].value
+            is not None
         ),
     )
 

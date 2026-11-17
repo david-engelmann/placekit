@@ -223,20 +223,12 @@ fn stored_json<T>(result: Result<(T, String, u16), CoreError>) -> CallOutput
 where
     T: serde::Serialize,
 {
-    let stored = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        result.and_then(|(value, body, status)| {
-            serde_json::to_value(&value)
-                .map(|json| (json, body, status))
-                .map_err(|e| CoreError::Decode {
-                    detail: e.to_string(),
-                    status: None,
-                    source: Some(Box::new(e)),
-                })
-        })
-    })) {
-        Ok(stored) => stored,
-        Err(payload) => Err(runtime_panic_error(&*payload)),
-    };
+    // The conversion routes through the one guarded helper
+    // (audit A50-092). This seat carried its own inline copy of
+    // the same catch and conversion before the fold.
+    let stored = result.and_then(|(value, body, status)| {
+        to_value_guarded(&value).map(|json| (json, body, status))
+    });
     CallOutput::Json(stored)
 }
 
@@ -541,6 +533,20 @@ type PyCityResolution = (
     Option<String>,
 );
 
+/// A postal code result as a plain tuple for the Python layer
+/// to wrap in its `PostalCodeResult` dataclass, in field order.
+/// The shape matches the city row's, but the third slot is the
+/// postal status, not a confidence, so the two contracts carry
+/// separate names (audit A50-091).
+type PyPostalCodeResult = (
+    Option<Vec<u8>>,
+    Option<String>,
+    String,
+    Option<Vec<u8>>,
+    Option<Vec<u8>>,
+    Option<String>,
+);
+
 /// A district resolution as a plain tuple for the Python layer
 /// to wrap in its `DistrictResolution` dataclass, in field
 /// order, on the same crossing terms as the city row.
@@ -673,7 +679,7 @@ fn address_postal_code_result(
     country_code: Option<Vec<u8>>,
     component_value: Option<Vec<u8>>,
     postal_value: Option<Vec<u8>>,
-) -> PyCityResolution {
+) -> PyPostalCodeResult {
     let result =
         placekit_core::address::postal_code_result(country_code, component_value, postal_value);
     (
@@ -759,7 +765,11 @@ fn models_payload_depth_within_limit(trace: Vec<(u8, u32)>) -> bool {
 /// descends through dicts, lists and tuples up to a hard depth
 /// bound (MAX_BODY_DEPTH); anything deeper, including the infinite
 /// descent of a self-referential structure, is a config error
-/// instead of a stack overflow in the host interpreter.
+/// instead of a stack overflow in the host interpreter. The table's
+/// source is the set of boolean fields on the core's typed request
+/// structs in placekit-core's models module, which names this table
+/// in return (audit A50-094). A boolean field added on either side
+/// must be added on both.
 const BOOL_BODY_FIELDS: &[&str] = &[
     "openNow",
     "strictTypeFiltering",
@@ -1029,7 +1039,15 @@ fn photo_to_py(
             // the raw source. The core returns the body on this form
             // by construction. An absent body is a conversion failure
             // of this layer, never an empty raw.
-            let json = serde_json::to_value(&media).map_err(|e| photo_conversion_err(py, e))?;
+            let json = to_value_guarded(&media).map_err(|e| match e {
+                // The mapper renders its input into a fresh decode
+                // detail, so a decode error passes its bare detail
+                // rather than its rendered form, which already
+                // carries the decode prefix (audit A50-092, red
+                // team repair).
+                CoreError::Decode { detail, .. } => photo_conversion_err(py, detail),
+                other => photo_conversion_err(py, other),
+            })?;
             let typed = value_to_py(py, &json).map_err(|e| photo_conversion_err(py, e))?;
             let body = body.ok_or_else(|| {
                 photo_conversion_err(py, "photo URI result carried no response body")
@@ -1066,6 +1084,12 @@ fn build_core_client(
     }
     builder.build()
 }
+
+/// The one timeout cap every layer states, in seconds. The
+/// Python wrapper names it `_MAX_TIMEOUT_SECONDS` and the
+/// bindings name it here (audit A50-093), so the rule has one
+/// spelling per layer instead of a bare literal at the check.
+const MAX_TIMEOUT_SECONDS: f64 = 3600.0;
 
 /// The Rust client handle wrapped for Python.
 ///
@@ -1122,7 +1146,7 @@ impl PyClient {
             // value far from the range where Duration::from_secs_f64
             // panics (at or above 2^64 seconds), which used to escape
             // as a PanicException outside the exception hierarchy.
-            if !timeout.is_finite() || timeout <= 0.0 || timeout > 3600.0 {
+            if !timeout.is_finite() || timeout <= 0.0 || timeout > MAX_TIMEOUT_SECONDS {
                 return Err(PyValueError::new_err(
                     "timeout must be a positive, finite number of seconds, at most 3600",
                 ));
