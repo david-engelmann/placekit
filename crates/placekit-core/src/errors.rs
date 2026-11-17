@@ -91,24 +91,24 @@ fn field_violation_pair(violation: &serde_json::Value) -> Option<(&str, &str)> {
 pub enum Error {
     /// The API key was rejected or lacks permission (HTTP 401/403,
     /// `UNAUTHENTICATED`, `PERMISSION_DENIED`).
-    #[error("authentication failed (HTTP {0.status}): {0.message}")]
-    Auth(ApiError),
+    #[error("authentication failed (HTTP {parts.status}): {parts.message}")]
+    Auth { parts: ApiError },
     /// Quota exhausted or rate limit hit (HTTP 429, `RESOURCE_EXHAUSTED`).
-    #[error("rate limit or quota exceeded (HTTP {0.status}): {0.message}")]
-    RateLimit(ApiError),
+    #[error("rate limit or quota exceeded (HTTP {parts.status}): {parts.message}")]
+    RateLimit { parts: ApiError },
     /// The requested resource does not exist (HTTP 404, `NOT_FOUND`).
-    #[error("not found (HTTP {0.status}): {0.message}")]
-    NotFound(ApiError),
+    #[error("not found (HTTP {parts.status}): {parts.message}")]
+    NotFound { parts: ApiError },
     /// The request itself was malformed (HTTP 400, `INVALID_ARGUMENT`,
     /// `FAILED_PRECONDITION` or `OUT_OF_RANGE`).
-    #[error("invalid request (HTTP {0.status}): {0.message}")]
-    InvalidRequest(ApiError),
+    #[error("invalid request (HTTP {parts.status}): {parts.message}")]
+    InvalidRequest { parts: ApiError },
     /// Any other error response from the API.
     #[error(
-        "places API error (HTTP {0.status}{segment}): {0.message}",
-        segment = google_status_segment(&0.google_status)
+        "places API error (HTTP {parts.status}{segment}): {parts.message}",
+        segment = google_status_segment(&parts.google_status)
     )]
-    Api(ApiError),
+    Api { parts: ApiError },
     /// The request never produced an HTTP response (DNS, connect, TLS,
     /// timeout, or a dropped connection).
     #[error("network error: {detail}")]
@@ -149,11 +149,11 @@ impl Error {
     /// `invalid_request`, `api`, `network`, `decode`, `config`.
     pub fn kind(&self) -> &'static str {
         match self {
-            Error::Auth(_) => "auth",
-            Error::RateLimit(_) => "rate_limit",
-            Error::NotFound(_) => "not_found",
-            Error::InvalidRequest(_) => "invalid_request",
-            Error::Api(_) => "api",
+            Error::Auth { .. } => "auth",
+            Error::RateLimit { .. } => "rate_limit",
+            Error::NotFound { .. } => "not_found",
+            Error::InvalidRequest { .. } => "invalid_request",
+            Error::Api { .. } => "api",
             Error::Network { .. } => "network",
             Error::Decode { .. } => "decode",
             Error::Config { .. } => "config",
@@ -165,11 +165,11 @@ impl Error {
     /// through this one seat (audit A50-063).
     fn api_parts(&self) -> Option<&ApiError> {
         match self {
-            Error::Auth(parts)
-            | Error::RateLimit(parts)
-            | Error::NotFound(parts)
-            | Error::InvalidRequest(parts)
-            | Error::Api(parts) => Some(parts),
+            Error::Auth { parts }
+            | Error::RateLimit { parts }
+            | Error::NotFound { parts }
+            | Error::InvalidRequest { parts }
+            | Error::Api { parts } => Some(parts),
             _ => None,
         }
     }
@@ -179,11 +179,11 @@ impl Error {
     /// construction.
     fn api_parts_mut(&mut self) -> Option<&mut ApiError> {
         match self {
-            Error::Auth(parts)
-            | Error::RateLimit(parts)
-            | Error::NotFound(parts)
-            | Error::InvalidRequest(parts)
-            | Error::Api(parts) => Some(parts),
+            Error::Auth { parts }
+            | Error::RateLimit { parts }
+            | Error::NotFound { parts }
+            | Error::InvalidRequest { parts }
+            | Error::Api { parts } => Some(parts),
             _ => None,
         }
     }
@@ -256,8 +256,8 @@ impl Error {
             return true;
         }
         match self {
-            Error::RateLimit(_) => true,
-            Error::Api(parts) => matches!(
+            Error::RateLimit { .. } => true,
+            Error::Api { parts } => matches!(
                 parts.google_status.as_str(),
                 "UNAVAILABLE" | "INTERNAL" | "DEADLINE_EXCEEDED"
             ),
@@ -612,22 +612,22 @@ impl Error {
             server_message,
         };
         match parts.google_status.as_str() {
-            "UNAUTHENTICATED" | "PERMISSION_DENIED" => Error::Auth(parts),
-            "RESOURCE_EXHAUSTED" => Error::RateLimit(parts),
-            "NOT_FOUND" => Error::NotFound(parts),
+            "UNAUTHENTICATED" | "PERMISSION_DENIED" => Error::Auth { parts },
+            "RESOURCE_EXHAUSTED" => Error::RateLimit { parts },
+            "NOT_FOUND" => Error::NotFound { parts },
             "INVALID_ARGUMENT" | "FAILED_PRECONDITION" | "OUT_OF_RANGE" => {
-                Error::InvalidRequest(parts)
+                Error::InvalidRequest { parts }
             }
             // A canonical server side status classifies as a plain API
             // error whatever the HTTP code says; it must never fall
             // through to the client side HTTP classes below.
-            "UNAVAILABLE" | "INTERNAL" | "DEADLINE_EXCEEDED" => Error::Api(parts),
+            "UNAVAILABLE" | "INTERNAL" | "DEADLINE_EXCEEDED" => Error::Api { parts },
             _ => match class_status {
-                401 | 403 => Error::Auth(parts),
-                429 => Error::RateLimit(parts),
-                404 => Error::NotFound(parts),
-                400 => Error::InvalidRequest(parts),
-                _ => Error::Api(parts),
+                401 | 403 => Error::Auth { parts },
+                429 => Error::RateLimit { parts },
+                404 => Error::NotFound { parts },
+                400 => Error::InvalidRequest { parts },
+                _ => Error::Api { parts },
             },
         }
     }
@@ -1991,7 +1991,7 @@ mod tests {
         assert_eq!(err.kind(), "invalid_request");
         assert_eq!(err.status_code(), Some(400));
         assert_eq!(err.google_status(), Some("INVALID_ARGUMENT"));
-        assert!(matches!(err, Error::InvalidRequest(..)));
+        assert!(matches!(err, Error::InvalidRequest { .. }));
     }
 
     #[test]
@@ -1999,7 +1999,7 @@ mod tests {
         let body = r#"{"error": {"code": 429, "message": "Quota exceeded", "status": "RESOURCE_EXHAUSTED"}}"#;
         let err = Error::from_response(429, body);
         assert_eq!(err.kind(), "rate_limit");
-        assert!(matches!(err, Error::RateLimit(..)));
+        assert!(matches!(err, Error::RateLimit { .. }));
     }
 
     #[test]
@@ -2007,7 +2007,7 @@ mod tests {
         let body = r#"{"error": {"code": 403, "message": "API not enabled", "status": "PERMISSION_DENIED"}}"#;
         let err = Error::from_response(403, body);
         assert_eq!(err.kind(), "auth");
-        assert!(matches!(err, Error::Auth(..)));
+        assert!(matches!(err, Error::Auth { .. }));
     }
 
     #[test]
@@ -2015,7 +2015,7 @@ mod tests {
         let body = r#"{"error": {"code": 404, "message": "No such place", "status": "NOT_FOUND"}}"#;
         let err = Error::from_response(404, body);
         assert_eq!(err.kind(), "not_found");
-        assert!(matches!(err, Error::NotFound(..)));
+        assert!(matches!(err, Error::NotFound { .. }));
     }
 
     #[test]
