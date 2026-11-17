@@ -75,7 +75,7 @@ Harbour Espresso 4.4 45 Circular Quay W, The Rocks NSW 2000, Australia
 
 The examples folder runs the search and details calls offline against the recorded responses, so the output above is reproducible without a key.
 
-The photo call downloads the image itself by default. Pass `skip_http_redirect=True` to `place_photo` instead and the call returns a `PhotoUriResult` whose `photo_uri` attribute carries the photo URI, for callers who would rather fetch the image themselves or hand the URI to something else. The size is set with `max_width_px`, with `max_height_px` as the other member of the size pair beside it, and each value runs from 1 to 4800. At least one of the pair is required, and a call with neither raises `ConfigError` before any request.
+The photo call downloads the image itself by default. Pass `skip_http_redirect=True` to `place_photo` instead and the call returns a `PhotoUriResult` whose `photo_uri` attribute carries the photo URI, for callers who would rather fetch the image themselves or hand the URI to something else. The size is set with `max_width_px`, with `max_height_px` as the other member of the size pair beside it, and each value runs from 1 to 4800. At least one of the pair is required when the photo is passed by name, and a call by name with neither raises `ConfigError` before any request. Pass a `Photo` object instead of its name and one size defaults from the photo itself when neither is given.
 
 An `AsyncClient` with the identical method set is included for async code.
 

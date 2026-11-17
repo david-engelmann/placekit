@@ -71,6 +71,10 @@ def test_error_handling_example_carries_the_recorded_envelope(capsys):
     _load("error_handling").main()
     out = capsys.readouterr().out
     # The recorded quota envelope answers 429 with a Retry-After
-    # of 7, and the recorded not found envelope answers 404.
+    # of 7, and the recorded not found envelope answers 404. The
+    # quota envelope also carries the bare server message and one
+    # QuotaFailure violation the typed entries surface.
     assert "quota 429 RESOURCE_EXHAUSTED 7.0" in out
+    assert "quota message Resource has been exhausted (e.g. check quota)." in out
+    assert "quota violation places.googleapis.com/default 1000" in out
     assert "not found 404 NOT_FOUND" in out
