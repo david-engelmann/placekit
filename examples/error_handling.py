@@ -28,6 +28,9 @@ def main():
             client.text_search("TRIGGER_QUOTA cafes")
         except RateLimitError as exc:
             print("quota", exc.status_code, exc.google_status, exc.retry_after)
+            print("quota message", exc.server_message)
+            for entry in exc.quota_violation_entries:
+                print("quota violation", entry["quota_metric"], entry["quota_value"])
         try:
             client.place_details("missing-place")
         except NotFoundError as exc:
