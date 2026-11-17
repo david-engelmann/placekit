@@ -1053,7 +1053,7 @@ def test_latlng_float_conversion_raise_becomes_config_error():
     with pytest.raises(ConfigError) as caught:
         LatLng(FloatMethodRaiseInt(3), 0.0)
     assert str(caught.value) == (
-        "LatLng latitude must be a finite real number, got 3"
+        "LatLng latitude must be a finite int or float, got 3"
     )
 
 
@@ -1061,23 +1061,23 @@ def test_latlng_huge_int_becomes_config_error():
     with pytest.raises(ConfigError) as caught:
         LatLng(10 ** 400, 0.0)
     assert str(caught.value).startswith(
-        "LatLng latitude must be a finite real number, got 1000")
+        "LatLng latitude must be a finite int or float, got 1000")
 
 
 def test_latlng_nan_with_raising_repr_becomes_config_error():
     with pytest.raises(ConfigError) as caught:
         LatLng(NanReprFloat("nan"), 0.0)
     assert str(caught.value) == (
-        "LatLng latitude must be a finite real number, got "
+        "LatLng latitude must be a finite int or float, got "
         "<unrepresentable NanReprFloat>"
     )
 
 
-def test_latlng_honest_message_unchanged():
+def test_latlng_message_states_the_enforced_rule():
     with pytest.raises(ConfigError) as caught:
         LatLng("1.0", 0.0)
     assert str(caught.value) == (
-        "LatLng latitude must be a finite real number, got '1.0'"
+        "LatLng latitude must be a finite int or float, got '1.0'"
     )
 
 

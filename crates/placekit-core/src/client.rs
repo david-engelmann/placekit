@@ -1199,9 +1199,9 @@ fn content_type_of(response: &reqwest::Response) -> Option<String> {
 /// form before this runs (red team R3), so a check on the raw
 /// string would misread exactly the spellings worth catching. An
 /// IPv6 literal that embeds an IPv4 address is judged by the
-/// address it embeds, so the mapped, compatible and
-/// translation spellings of a loopback address read as loopback
-/// here.
+/// address it embeds, so the mapped, compatible,
+/// translation and tunneling spellings of a loopback address
+/// read as loopback here.
 fn host_is_loopback(url: &reqwest::Url) -> bool {
     match url.host() {
         Some(url::Host::Domain(name)) => {
@@ -1246,10 +1246,20 @@ fn host_ip(url: &reqwest::Url) -> Option<std::net::IpAddr> {
 /// loopback address first, a non-public address next, and the
 /// unspecified address ahead of a public one, because its
 /// dotted form is refused for naming the local host and a
-/// zero position is the only cover it could hide behind. The
-/// unspecified address and the IPv6 loopback address are not
-/// embeddings, they are addresses in their own right, so they
-/// return None here and keep their IPv6 reading.
+/// zero position is the only cover it could hide behind.
+/// The tunneling forms name an IPv4 address too, and the
+/// tunnel delivers to it: the 6to4 prefix 2002::/16 carries
+/// the site address in segments 1 and 2, and the Teredo
+/// prefix 2001:0000::/32 carries two addresses, the server
+/// address in plain form in segments 2 and 3 and the client
+/// address, the host a connection to the address is
+/// delivered to, in the last 32 bits XORed with all ones,
+/// the pair judged by the same ladder as the local-use
+/// form with the client address as the primary (audit
+/// A50-006). The unspecified address and the IPv6 loopback
+/// address are not embeddings, they are addresses in their
+/// own right, so they return None here and keep their IPv6
+/// reading.
 fn ipv6_embedded_ipv4(ip: std::net::Ipv6Addr) -> Option<std::net::Ipv4Addr> {
     if ip.is_unspecified() || ip.is_loopback() {
         return None;
@@ -1285,21 +1295,52 @@ fn ipv6_embedded_ipv4(ip: std::net::Ipv6Addr) -> Option<std::net::Ipv4Addr> {
                     | (((segments[4] as u32) & 0xff) << 8)
                     | ((segments[5] as u32) >> 8),
             );
-            if routed.is_loopback() {
-                Some(routed)
-            } else if low.is_loopback() {
-                Some(low)
-            } else if ipv4_is_non_public(routed) && !routed.is_unspecified() {
-                Some(routed)
-            } else if ipv4_is_non_public(low) && !low.is_unspecified() {
-                Some(low)
-            } else if routed.is_unspecified() || low.is_unspecified() {
-                Some(std::net::Ipv4Addr::UNSPECIFIED)
-            } else {
-                Some(routed)
-            }
+            Some(judge_embedded_pair(routed, low))
+        }
+        // The 6to4 prefix carries the site address in
+        // segments 1 and 2 (audit A50-006).
+        [0x2002, _, _, _, _, _, _, _] => Some(from_pair(segments[1], segments[2])),
+        // The Teredo prefix carries two addresses (audit
+        // A50-006), the server address in plain form in
+        // segments 2 and 3 and the client address in the
+        // last 32 bits XORed with all ones. The pair is
+        // judged by the same ladder as the local-use form,
+        // with the client address, the delivery host, as
+        // the primary.
+        [0x2001, 0x0000, _, _, _, _, _, _] => {
+            let server = from_pair(segments[2], segments[3]);
+            let client = from_pair(segments[6] ^ 0xffff, segments[7] ^ 0xffff);
+            Some(judge_embedded_pair(client, server))
         }
         _ => None,
+    }
+}
+
+/// Judge the two candidate addresses of one spelling that
+/// carries an IPv4 address in two positions. The address a
+/// screen must act on wins, a loopback address first, a
+/// non-public address next, and the unspecified address
+/// ahead of a public one, because its dotted form is
+/// refused for naming the local host and a zero position
+/// is the only cover it could hide behind. When neither
+/// position escalates, the primary stands, as the position
+/// the spelling delivers to by default.
+fn judge_embedded_pair(
+    primary: std::net::Ipv4Addr,
+    secondary: std::net::Ipv4Addr,
+) -> std::net::Ipv4Addr {
+    if primary.is_loopback() {
+        primary
+    } else if secondary.is_loopback() {
+        secondary
+    } else if ipv4_is_non_public(primary) && !primary.is_unspecified() {
+        primary
+    } else if ipv4_is_non_public(secondary) && !secondary.is_unspecified() {
+        secondary
+    } else if primary.is_unspecified() || secondary.is_unspecified() {
+        std::net::Ipv4Addr::UNSPECIFIED
+    } else {
+        primary
     }
 }
 
@@ -1325,9 +1366,9 @@ fn ipv4_is_non_public(v4: std::net::Ipv4Addr) -> bool {
 /// is judged separately by [`host_is_loopback`], because its
 /// treatment depends on the configured base. An IPv6 literal that
 /// embeds an IPv4 address is judged by the address it embeds, so
-/// the mapped, compatible and translation spellings of a private
-/// address cannot walk past the screen their dotted spelling
-/// fails (Round 18 landing red team).
+/// the mapped, compatible, translation and tunneling spellings
+/// of a private address cannot walk past the screen their
+/// dotted spelling fails (Round 18 landing red team).
 fn ip_is_non_public(ip: std::net::IpAddr) -> bool {
     match ip {
         std::net::IpAddr::V4(v4) => ipv4_is_non_public(v4),
@@ -3295,6 +3336,87 @@ mod tests {
     }
 
     #[test]
+    fn redirect_tunneling_spellings_are_judged_by_the_embedded_address() {
+        // Audit A50-006: the 6to4 and Teredo spellings of a
+        // private or loopback address passed the screen
+        // unjudged, because the embedded address recovery had
+        // no arm for either prefix. Each prefix is allocated
+        // to exactly one mechanism, so the screen now judges
+        // these spellings by the address they embed, as it
+        // already judged the translation spellings.
+        let api = reqwest::Url::parse("https://places.googleapis.com/v1").unwrap();
+        let at = |target: &str| screen_redirect_target(&api, &reqwest::Url::parse(target).unwrap());
+        // The 6to4 spelling of the private address 10.0.0.1,
+        // a Teredo spelling whose client address is 10.0.0.1
+        // under a public server, and a Teredo spelling whose
+        // server address is private under a public client
+        // are all refused with the non-public reason.
+        for target in [
+            "https://[2002:a00:1::]/x",
+            "https://[2001:0:808:808:0:0:f5ff:fffe]/x",
+            "https://[2001:0:c0a8:101:0:0:f7f7:f7f7]/x",
+        ] {
+            let err = at(target).unwrap_err();
+            assert!(
+                err.to_string()
+                    .contains("the target is a non-public IP address"),
+                "{target}: {err}"
+            );
+        }
+        // The loopback address under either tunneling
+        // spelling is refused with the loopback reason.
+        for target in [
+            "https://[2002:7f00:1::]/x",
+            "https://[2001:0:808:808:0:0:80ff:fffe]/x",
+        ] {
+            let err = at(target).unwrap_err();
+            assert!(
+                err.to_string().contains("the target is a loopback address"),
+                "{target}: {err}"
+            );
+        }
+        // Tunneling spellings of public addresses are
+        // followed, not refused: 2002:808:808:: embeds
+        // 8.8.8.8, and the Teredo spelling below delivers
+        // to 9.9.9.9 under a public server.
+        assert!(at("https://[2002:808:808::]/x").is_ok());
+        assert!(at("https://[2001:0:808:808:0:0:f6f6:f6f6]/x").is_ok());
+    }
+
+    #[test]
+    fn base_url_tunneling_spellings_are_judged_by_the_embedded_address() {
+        // Audit A50-006: base URL parsing reads the same
+        // embedded address recovery, so a plain http base
+        // naming a tunneling spelling of a private address
+        // is refused at construction, and a tunneling
+        // spelling of the loopback address builds as the
+        // loopback it names.
+        for bad in [
+            "http://[2002:a00:1::]/v1",
+            "http://[2001:0:808:808:0:0:f5ff:fffe]/v1",
+        ] {
+            assert_eq!(
+                Client::builder("k")
+                    .base_url(bad)
+                    .build()
+                    .unwrap_err()
+                    .kind(),
+                "config",
+                "{bad}"
+            );
+        }
+        for good in [
+            "http://[2002:7f00:1::]:8080/v1",
+            "http://[2001:0:808:808:0:0:80ff:fffe]:8080/v1",
+        ] {
+            assert!(
+                Client::builder("k").base_url(good).build().is_ok(),
+                "{good}"
+            );
+        }
+    }
+
+    #[test]
     fn embedded_ipv4_extraction_returns_the_rfc_address() {
         // The Round 78 verdict pins judge spellings by the
         // predicates on the extracted address, and every
@@ -3306,7 +3428,7 @@ mod tests {
         // spelling families, including the segment 5 shapes
         // where the RFC 6052 layout puts the fourth octet in
         // the high byte and the low byte carries nothing.
-        let cases: [(&str, Option<std::net::Ipv4Addr>); 15] = [
+        let cases: [(&str, Option<std::net::Ipv4Addr>); 22] = [
             ("64:ff9b::a00:1", Some(std::net::Ipv4Addr::new(10, 0, 0, 1))),
             (
                 "64:ff9b::7f00:1",
@@ -3363,6 +3485,30 @@ mod tests {
             (
                 "64:ff9b:1:808:800:100:808:808",
                 Some(std::net::Ipv4Addr::new(8, 8, 0, 1)),
+            ),
+            // Audit A50-006: the 6to4 form reads segments 1
+            // and 2, and the Teredo form judges its pair,
+            // the plaintext server address against the
+            // de-obfuscated client address, under the same
+            // ladder as the local-use form.
+            ("2002:7f00:1::", Some(std::net::Ipv4Addr::new(127, 0, 0, 1))),
+            ("2002:a00:1::", Some(std::net::Ipv4Addr::new(10, 0, 0, 1))),
+            ("2002:808:808::", Some(std::net::Ipv4Addr::new(8, 8, 8, 8))),
+            (
+                "2001:0:808:808:0:0:f5ff:fffe",
+                Some(std::net::Ipv4Addr::new(10, 0, 0, 1)),
+            ),
+            (
+                "2001:0:808:808:0:0:80ff:fffe",
+                Some(std::net::Ipv4Addr::new(127, 0, 0, 1)),
+            ),
+            (
+                "2001:0:c0a8:101:0:0:f7f7:f7f7",
+                Some(std::net::Ipv4Addr::new(192, 168, 1, 1)),
+            ),
+            (
+                "2001:0:808:808:0:0:f6f6:f6f6",
+                Some(std::net::Ipv4Addr::new(9, 9, 9, 9)),
             ),
         ];
         for (spelling, expected) in cases {
