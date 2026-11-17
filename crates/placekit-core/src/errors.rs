@@ -181,8 +181,12 @@ impl std::fmt::Display for Error {
 impl std::error::Error for Error {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
-            Error::Network { source, .. } => source.as_deref(),
-            Error::Decode { source, .. } => source.as_deref(),
+            Error::Network { source, .. } => source
+                .as_deref()
+                .map(|source| source as &(dyn std::error::Error + 'static)),
+            Error::Decode { source, .. } => source
+                .as_deref()
+                .map(|source| source as &(dyn std::error::Error + 'static)),
             _ => None,
         }
     }
