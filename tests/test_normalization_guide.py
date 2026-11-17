@@ -73,6 +73,15 @@ def test_guide_example_1_lookup_and_scanning_text_forms():
     assert address.component_long_texts(
         components, types.TYPE_SUBLOCALITY
     ) == ("６", "２丁目", "浅草")
+    # A50-111: the short text twin reads the short field, proven
+    # where the two fields disagree, the country component whose
+    # short text is the code and whose long text is the name.
+    assert address.component_short_texts(
+        components, types.TYPE_SUBLOCALITY
+    ) == ("６", "２丁目", "浅草")
+    assert address.component_short_texts(components, types.TYPE_COUNTRY) == (
+        "JP",
+    )
     assert (
         address.component_long_text(
             components, types.TYPE_SUBLOCALITY_LEVEL_2

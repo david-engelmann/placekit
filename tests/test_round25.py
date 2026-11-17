@@ -27,6 +27,7 @@ from pathlib import Path
 
 import pytest
 
+from conftest import nested as _nested
 from placekit import AsyncClient, Client, address
 from placekit.exceptions import (
     ApiError,
@@ -45,11 +46,6 @@ from placekit.models import LatLng, Place
 QUOTA_MESSAGE = "Quota exceeded for this key"
 
 
-@pytest.fixture()
-def client(api_key, base_url) -> Client:
-    return Client(api_key, base_url=base_url)
-
-
 def _envelope(status_text: str, code: int, message: str, detail: str = "") -> str:
     details = (
         '[{"@type": "type.googleapis.com/google.rpc.DebugInfo", '
@@ -61,13 +57,6 @@ def _envelope(status_text: str, code: int, message: str, detail: str = "") -> st
         f'{{"error": {{"code": {code}, "message": {json.dumps(message)}, '
         f'"status": "{status_text}", "details": {details}}}}}'
     )
-
-
-def _nested(depth: int):
-    value = "x"
-    for _ in range(depth):
-        value = [value]
-    return value
 
 
 # --- Major 1 and the red team depth Major: classification survives

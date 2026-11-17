@@ -15,7 +15,8 @@ from pathlib import Path
 
 import pytest
 
-from placekit import Client, types
+from conftest import header as _header
+from placekit import types
 from placekit.models import (
     AutocompleteResult,
     PhotoMedia,
@@ -35,19 +36,6 @@ CASSETTES = (
 )
 
 SESSION_TOKEN = "guide-session-token"
-
-
-@pytest.fixture()
-def client(api_key, base_url) -> Client:
-    return Client(api_key, base_url=base_url)
-
-
-def _header(stub_server, name: str) -> str | None:
-    headers = stub_server.last_request["headers"]
-    for key, value in headers.items():
-        if key.lower() == name.lower():
-            return value
-    return None
 
 
 def _flagship_search(client):

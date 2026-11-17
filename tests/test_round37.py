@@ -11,17 +11,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
-
-from placekit import Client, address
+from placekit import address
 from placekit.models import FormattedText
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-
-
-@pytest.fixture()
-def client(api_key, base_url) -> Client:
-    return Client(api_key, base_url=base_url)
 
 
 def test_readme_addresses_example_reads_city_and_country(client):

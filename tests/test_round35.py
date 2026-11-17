@@ -15,44 +15,17 @@ untouched.
 
 from __future__ import annotations
 
-import json
-
 import pytest
 
-from placekit import Client
-from placekit.exceptions import InvalidRequestError, RateLimitError
+from conftest import envelope as _envelope, raised as _raised
+from placekit.exceptions import RateLimitError
 
 BADREQ = "type.googleapis.com/google.rpc.BadRequest"
 QUOTA = "type.googleapis.com/google.rpc.QuotaFailure"
 
 
-@pytest.fixture()
-def client(api_key, base_url) -> Client:
-    return Client(api_key, base_url=base_url)
-
-
-def _envelope(details, code=400, status_text="INVALID_ARGUMENT", message="fv probe"):
-    return json.dumps(
-        {
-            "error": {
-                "code": code,
-                "message": message,
-                "status": status_text,
-                "details": details,
-            }
-        }
-    )
-
-
 def _badreq_body(violations):
     return _envelope([{"@type": BADREQ, "fieldViolations": violations}])
-
-
-def _raised(client, raw_response, body, http_status=400, exc_type=InvalidRequestError):
-    raw_response(http_status, body)
-    with pytest.raises(exc_type) as excinfo:
-        client.text_search("anything")
-    return excinfo.value
 
 
 # The nineteen single entry shapes of the Round 35 extension
