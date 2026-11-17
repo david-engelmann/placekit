@@ -4,86 +4,121 @@
 //! bindings translate these into a matching Python exception hierarchy using
 //! [`Error::kind`].
 
+/// The field set every API error variant carries, shared so the
+/// five variants cannot drift apart. The set was written out
+/// five times before this struct existed (audit A50-063), and
+/// the `..` patterns in every accessor made a future drift
+/// silent. The variants of [`Error`] wrap this struct, and the
+/// accessors read through it. Field order is the order the
+/// variants always carried, with the bare server message
+/// appended by audit A50-027.
+#[derive(Debug)]
+pub struct ApiError {
+    /// The HTTP status of the response. Always the HTTP status,
+    /// whichever rule classified the error.
+    pub status: u16,
+    /// The Google RPC status string of the envelope, empty when
+    /// the response carried none.
+    pub google_status: String,
+    /// The envelope message, or the fixed text standing in for
+    /// one the envelope did not carry.
+    pub message: String,
+    /// The envelope `code`, when the response carried one.
+    pub code: Option<i64>,
+    /// The parsed `details` array of the envelope.
+    pub details: Vec<serde_json::Value>,
+    /// The parsed `Retry-After` value of the response, when one
+    /// was attached after construction.
+    pub retry_after: Option<f64>,
+    /// The envelope message exactly as the server sent it,
+    /// capped at the same bound as `message` and captured at
+    /// construction, before any note the library appends to
+    /// `message`. `None` when the response carried no readable
+    /// envelope message, where `message` holds the fixed text
+    /// standing in for one instead.
+    pub server_message: Option<String>,
+}
+
+/// One well formed field violation of a `google.rpc.BadRequest`
+/// detail, as the typed view returns it (audit A50-027). Entries
+/// that are not objects with both members as strings never
+/// appear here. The raw view on [`Error::field_violations`]
+/// carries them verbatim instead.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FieldViolation {
+    /// The wire (JSON) field name, for example `textQuery`.
+    pub field: String,
+    /// The server's description of the violation.
+    pub description: String,
+}
+
+/// One well formed violation of a `google.rpc.QuotaFailure`
+/// detail, as the typed view returns it (audit A50-027). The
+/// member set is the recorded wire shape
+/// (tests/fixtures/error_quota.json), which is wider than the
+/// pair the protocol book names. Every member is optional on
+/// the wire. An entry whose present known members are not
+/// strings never appears here, and the raw view on
+/// [`Error::quota_violations`] carries it verbatim instead.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct QuotaViolation {
+    /// The subject the violation names, when it carries one.
+    pub subject: Option<String>,
+    /// The server's description of the violation, when it
+    /// carries one.
+    pub description: Option<String>,
+    /// The quota identifier, when the entry carries one.
+    pub quota_id: Option<String>,
+    /// The quota metric, when the entry carries one.
+    pub quota_metric: Option<String>,
+    /// The quota limit value, when the entry carries one.
+    pub quota_value: Option<String>,
+}
+
+/// The well formed field and description pair of one field
+/// violation entry, both members present as strings (audit
+/// A50-027). The raw and typed field violation views share
+/// this one reader, so the pair rule stands in a single seat.
+fn field_violation_pair(violation: &serde_json::Value) -> Option<(&str, &str)> {
+    violation
+        .get("field")
+        .and_then(|v| v.as_str())
+        .zip(violation.get("description").and_then(|v| v.as_str()))
+}
+
 /// Errors returned by every `placekit-core` operation.
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug)]
 pub enum Error {
     /// The API key was rejected or lacks permission (HTTP 401/403,
     /// `UNAUTHENTICATED`, `PERMISSION_DENIED`).
-    #[error("authentication failed (HTTP {status}): {message}")]
-    Auth {
-        status: u16,
-        google_status: String,
-        message: String,
-        code: Option<i64>,
-        details: Vec<serde_json::Value>,
-        retry_after: Option<f64>,
-    },
+    Auth { parts: Box<ApiError> },
     /// Quota exhausted or rate limit hit (HTTP 429, `RESOURCE_EXHAUSTED`).
-    #[error("rate limit or quota exceeded (HTTP {status}): {message}")]
-    RateLimit {
-        status: u16,
-        google_status: String,
-        message: String,
-        code: Option<i64>,
-        details: Vec<serde_json::Value>,
-        retry_after: Option<f64>,
-    },
+    RateLimit { parts: Box<ApiError> },
     /// The requested resource does not exist (HTTP 404, `NOT_FOUND`).
-    #[error("not found (HTTP {status}): {message}")]
-    NotFound {
-        status: u16,
-        google_status: String,
-        message: String,
-        code: Option<i64>,
-        details: Vec<serde_json::Value>,
-        retry_after: Option<f64>,
-    },
+    NotFound { parts: Box<ApiError> },
     /// The request itself was malformed (HTTP 400, `INVALID_ARGUMENT`,
     /// `FAILED_PRECONDITION` or `OUT_OF_RANGE`).
-    #[error("invalid request (HTTP {status}): {message}")]
-    InvalidRequest {
-        status: u16,
-        google_status: String,
-        message: String,
-        code: Option<i64>,
-        details: Vec<serde_json::Value>,
-        retry_after: Option<f64>,
-    },
+    InvalidRequest { parts: Box<ApiError> },
     /// Any other error response from the API.
-    #[error(
-        "places API error (HTTP {status}{}): {message}",
-        google_status_segment(google_status)
-    )]
-    Api {
-        status: u16,
-        google_status: String,
-        message: String,
-        code: Option<i64>,
-        details: Vec<serde_json::Value>,
-        retry_after: Option<f64>,
-    },
+    Api { parts: Box<ApiError> },
     /// The request never produced an HTTP response (DNS, connect, TLS,
     /// timeout, or a dropped connection).
-    #[error("network error: {detail}")]
     Network {
         detail: String,
         /// The underlying transport error, kept typed as the source
         /// instead of being flattened into the message (R4-16). Absent
         /// when there is no concrete cause or when the cause's own
         /// rendering would leak a secret (see `network_redacted`).
-        #[source]
         source: Option<Box<dyn std::error::Error + Send + Sync>>,
     },
     /// The API returned a success status with a body that did not decode
     /// into the expected shape. `status` carries the HTTP status of that
     /// response when there was one.
-    #[error("failed to decode response: {detail}")]
     Decode {
         detail: String,
         status: Option<u16>,
         /// The underlying decode failure, kept typed as the source
         /// (R4-16), when a concrete one exists.
-        #[source]
         source: Option<Box<dyn std::error::Error + Send + Sync>>,
     },
     /// The client itself was configured or called incorrectly. This is a
@@ -92,8 +127,69 @@ pub enum Error {
     /// a fixed prefix saying the configuration or call was invalid
     /// repeated the classification the type already carries into
     /// every message built from this variant.
-    #[error("{detail}")]
     Config { detail: String },
+}
+
+// The rendering and the source chain are written by hand rather
+// than derived (audit A50-063). The five API headlines read two
+// members of the shared struct each, and the format machinery
+// refuses member access on a captured argument in every form the
+// derive accepts, so the derive cannot state these headlines.
+impl std::fmt::Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Error::Auth { parts } => {
+                write!(
+                    f,
+                    "authentication failed (HTTP {}): {}",
+                    parts.status, parts.message
+                )
+            }
+            Error::RateLimit { parts } => {
+                write!(
+                    f,
+                    "rate limit or quota exceeded (HTTP {}): {}",
+                    parts.status, parts.message
+                )
+            }
+            Error::NotFound { parts } => {
+                write!(f, "not found (HTTP {}): {}", parts.status, parts.message)
+            }
+            Error::InvalidRequest { parts } => {
+                write!(
+                    f,
+                    "invalid request (HTTP {}): {}",
+                    parts.status, parts.message
+                )
+            }
+            Error::Api { parts } => {
+                write!(
+                    f,
+                    "places API error (HTTP {}{}): {}",
+                    parts.status,
+                    google_status_segment(&parts.google_status),
+                    parts.message
+                )
+            }
+            Error::Network { detail, .. } => write!(f, "network error: {detail}"),
+            Error::Decode { detail, .. } => write!(f, "failed to decode response: {detail}"),
+            Error::Config { detail } => write!(f, "{detail}"),
+        }
+    }
+}
+
+impl std::error::Error for Error {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Error::Network { source, .. } => source
+                .as_deref()
+                .map(|source| source as &(dyn std::error::Error + 'static)),
+            Error::Decode { source, .. } => source
+                .as_deref()
+                .map(|source| source as &(dyn std::error::Error + 'static)),
+            _ => None,
+        }
+    }
 }
 
 impl Error {
@@ -113,14 +209,40 @@ impl Error {
         }
     }
 
+    /// The shared field set, when this error is one of the five
+    /// API variants. Every accessor over those fields reads
+    /// through this one seat (audit A50-063).
+    fn api_parts(&self) -> Option<&ApiError> {
+        match self {
+            Error::Auth { parts }
+            | Error::RateLimit { parts }
+            | Error::NotFound { parts }
+            | Error::InvalidRequest { parts }
+            | Error::Api { parts } => Some(parts.as_ref()),
+            _ => None,
+        }
+    }
+
+    /// The mutable form of [`Error::api_parts`], for the two
+    /// attachment seats that adjust an API error after
+    /// construction.
+    fn api_parts_mut(&mut self) -> Option<&mut ApiError> {
+        match self {
+            Error::Auth { parts }
+            | Error::RateLimit { parts }
+            | Error::NotFound { parts }
+            | Error::InvalidRequest { parts }
+            | Error::Api { parts } => Some(parts.as_mut()),
+            _ => None,
+        }
+    }
+
     /// HTTP status code, when the error came from an API response.
     pub fn status_code(&self) -> Option<u16> {
+        if let Some(parts) = self.api_parts() {
+            return Some(parts.status);
+        }
         match self {
-            Error::Auth { status, .. }
-            | Error::RateLimit { status, .. }
-            | Error::NotFound { status, .. }
-            | Error::InvalidRequest { status, .. }
-            | Error::Api { status, .. } => Some(*status),
             Error::Decode { status, .. } => *status,
             _ => None,
         }
@@ -130,19 +252,25 @@ impl Error {
     /// the error came from an API response. `None` when the response
     /// carried no parseable envelope status, never an empty string.
     pub fn google_status(&self) -> Option<&str> {
-        let raw = match self {
-            Error::Auth { google_status, .. }
-            | Error::RateLimit { google_status, .. }
-            | Error::NotFound { google_status, .. }
-            | Error::InvalidRequest { google_status, .. }
-            | Error::Api { google_status, .. } => google_status.as_str(),
-            _ => return None,
-        };
+        let raw = self.api_parts()?.google_status.as_str();
         if raw.is_empty() {
             None
         } else {
             Some(raw)
         }
+    }
+
+    /// The bare message of the Google error envelope, without the
+    /// classification the rendered headline prepends and without
+    /// any note the library appended after construction (audit
+    /// A50-027). The rendered text stays the form callers log.
+    /// This accessor carries the server text alone for callers
+    /// that need it as a value. `None` for errors that did not
+    /// come from an API response, and for API errors whose
+    /// envelope carried no readable message.
+    pub fn server_message(&self) -> Option<&str> {
+        self.api_parts()
+            .and_then(|parts| parts.server_message.as_deref())
     }
 
     /// True when the envelope `code` and the HTTP status disagree. The
@@ -178,8 +306,8 @@ impl Error {
         }
         match self {
             Error::RateLimit { .. } => true,
-            Error::Api { google_status, .. } => matches!(
-                google_status.as_str(),
+            Error::Api { parts } => matches!(
+                parts.google_status.as_str(),
                 "UNAVAILABLE" | "INTERNAL" | "DEADLINE_EXCEEDED"
             ),
             _ => false,
@@ -208,14 +336,7 @@ impl Error {
     /// the failing response carried one. Fractional header values keep
     /// their fraction (Round 24); the declared Python type is `float`.
     pub fn retry_after(&self) -> Option<f64> {
-        match self {
-            Error::Auth { retry_after, .. }
-            | Error::RateLimit { retry_after, .. }
-            | Error::NotFound { retry_after, .. }
-            | Error::InvalidRequest { retry_after, .. }
-            | Error::Api { retry_after, .. } => *retry_after,
-            _ => None,
-        }
+        self.api_parts().and_then(|parts| parts.retry_after)
     }
 
     /// The `Retry-After` value as a duration, for callers that would
@@ -230,23 +351,8 @@ impl Error {
     /// Attach a parsed `Retry-After` value to an API error. Other
     /// variants have nowhere to carry it and are returned unchanged.
     pub(crate) fn with_retry_after(mut self, retry_after: Option<f64>) -> Error {
-        match &mut self {
-            Error::Auth {
-                retry_after: slot, ..
-            }
-            | Error::RateLimit {
-                retry_after: slot, ..
-            }
-            | Error::NotFound {
-                retry_after: slot, ..
-            }
-            | Error::InvalidRequest {
-                retry_after: slot, ..
-            }
-            | Error::Api {
-                retry_after: slot, ..
-            } => *slot = retry_after,
-            _ => {}
+        if let Some(parts) = self.api_parts_mut() {
+            parts.retry_after = retry_after;
         }
         self
     }
@@ -255,17 +361,10 @@ impl Error {
     /// learned outside the body (an unreadable body, the content type,
     /// which host actually answered). Other variants are unchanged.
     pub(crate) fn with_note(mut self, note: &str) -> Error {
-        match &mut self {
-            Error::Auth { message, .. }
-            | Error::RateLimit { message, .. }
-            | Error::NotFound { message, .. }
-            | Error::InvalidRequest { message, .. }
-            | Error::Api { message, .. } => {
-                message.push_str(" (");
-                message.push_str(note);
-                message.push(')');
-            }
-            _ => {}
+        if let Some(parts) = self.api_parts_mut() {
+            parts.message.push_str(" (");
+            parts.message.push_str(note);
+            parts.message.push(')');
         }
         self
     }
@@ -274,27 +373,28 @@ impl Error {
     /// carried one. Cross checked against the HTTP status by callers; a
     /// mismatch is visible here rather than silently trusted.
     pub fn error_code(&self) -> Option<i64> {
-        match self {
-            Error::Auth { code, .. }
-            | Error::RateLimit { code, .. }
-            | Error::NotFound { code, .. }
-            | Error::InvalidRequest { code, .. }
-            | Error::Api { code, .. } => *code,
-            _ => None,
-        }
+        self.api_parts().and_then(|parts| parts.code)
     }
 
     /// The parsed `details` array of the Google error envelope (the
     /// `google.rpc` detail objects), empty when the response carried none.
     pub fn details(&self) -> &[serde_json::Value] {
-        match self {
-            Error::Auth { details, .. }
-            | Error::RateLimit { details, .. }
-            | Error::NotFound { details, .. }
-            | Error::InvalidRequest { details, .. }
-            | Error::Api { details, .. } => details,
-            _ => &[],
+        match self.api_parts() {
+            Some(parts) => &parts.details,
+            None => &[],
         }
+    }
+
+    /// The detail objects whose `@type` member ends with the
+    /// given suffix, in wire order. The one walk every violation
+    /// view reads through (audit A50-074).
+    fn details_of_type(&self, type_suffix: &str) -> Vec<&serde_json::Value> {
+        self.details()
+            .iter()
+            .filter(|detail| {
+                matches!(detail.get("@type").and_then(|v| v.as_str()), Some(t) if t.ends_with(type_suffix))
+            })
+            .collect()
     }
 
     /// Field violations from a `google.rpc.BadRequest` detail. A
@@ -307,18 +407,10 @@ impl Error {
     /// 35, ruling on Round 25 Minor 9).
     pub fn field_violations(&self) -> Vec<serde_json::Value> {
         let mut out = Vec::new();
-        for detail in self.details() {
-            let type_url = detail.get("@type").and_then(|v| v.as_str());
-            if !matches!(type_url, Some(t) if t.ends_with("google.rpc.BadRequest")) {
-                continue;
-            }
+        for detail in self.details_of_type("google.rpc.BadRequest") {
             if let Some(violations) = detail.get("fieldViolations").and_then(|v| v.as_array()) {
                 for violation in violations {
-                    let pair = violation
-                        .get("field")
-                        .and_then(|v| v.as_str())
-                        .zip(violation.get("description").and_then(|v| v.as_str()));
-                    match pair {
+                    match field_violation_pair(violation) {
                         Some((field, description)) => out.push(serde_json::json!({
                             "field": field,
                             "description": description,
@@ -334,13 +426,80 @@ impl Error {
     /// Violation objects from a `google.rpc.QuotaFailure` detail.
     pub fn quota_violations(&self) -> Vec<serde_json::Value> {
         let mut out = Vec::new();
-        for detail in self.details() {
-            let type_url = detail.get("@type").and_then(|v| v.as_str());
-            if !matches!(type_url, Some(t) if t.ends_with("google.rpc.QuotaFailure")) {
-                continue;
-            }
+        for detail in self.details_of_type("google.rpc.QuotaFailure") {
             if let Some(violations) = detail.get("violations").and_then(|v| v.as_array()) {
                 out.extend(violations.iter().cloned());
+            }
+        }
+        out
+    }
+
+    /// The well formed field violations as typed values (audit
+    /// A50-027): only the entries that are objects whose `field`
+    /// and `description` members are both strings. Entries of any
+    /// other shape are absent here and present verbatim in
+    /// [`Error::field_violations`], so the two views together
+    /// lose nothing.
+    pub fn field_violation_entries(&self) -> Vec<FieldViolation> {
+        let mut out = Vec::new();
+        for detail in self.details_of_type("google.rpc.BadRequest") {
+            if let Some(violations) = detail.get("fieldViolations").and_then(|v| v.as_array()) {
+                for violation in violations {
+                    if let Some((field, description)) = field_violation_pair(violation) {
+                        out.push(FieldViolation {
+                            field: field.to_owned(),
+                            description: description.to_owned(),
+                        });
+                    }
+                }
+            }
+        }
+        out
+    }
+
+    /// The well formed quota violations as typed values (audit
+    /// A50-027): only the entries that are objects whose present
+    /// known members are strings. Entries of any other shape are
+    /// absent here and present verbatim in
+    /// [`Error::quota_violations`].
+    pub fn quota_violation_entries(&self) -> Vec<QuotaViolation> {
+        fn member(violation: &serde_json::Value, name: &str) -> Option<Option<String>> {
+            match violation.get(name) {
+                None => Some(None),
+                Some(value) => value.as_str().map(|s| Some(s.to_owned())),
+            }
+        }
+        let mut out = Vec::new();
+        for detail in self.details_of_type("google.rpc.QuotaFailure") {
+            if let Some(violations) = detail.get("violations").and_then(|v| v.as_array()) {
+                for violation in violations {
+                    if !violation.is_object() {
+                        continue;
+                    }
+                    let read = (
+                        member(violation, "subject"),
+                        member(violation, "description"),
+                        member(violation, "quotaId"),
+                        member(violation, "quotaMetric"),
+                        member(violation, "quotaValue"),
+                    );
+                    if let (
+                        Some(subject),
+                        Some(description),
+                        Some(quota_id),
+                        Some(quota_metric),
+                        Some(quota_value),
+                    ) = read
+                    {
+                        out.push(QuotaViolation {
+                            subject,
+                            description,
+                            quota_id,
+                            quota_metric,
+                            quota_value,
+                        });
+                    }
+                }
             }
         }
         out
@@ -382,20 +541,16 @@ impl Error {
     /// is an explicit failure signal from the server; silently
     /// returning the result half would hide it.
     pub fn from_response(status: u16, body: &str) -> Error {
-        Self::from_response_detailed(status, body, None)
+        Self::from_response_detailed(status, body)
     }
 
-    /// [`Error::from_response`] with the response content type, which
-    /// the callers read off the response on every error path. The
-    /// value no longer shapes the message built from a non-envelope
-    /// body (R18-A6); it stays on the signature so the construction
-    /// paths keep one shape.
-    pub(crate) fn from_response_detailed(
-        status: u16,
-        body: &str,
-        content_type: Option<&str>,
-    ) -> Error {
-        Self::from_response_read(status, body, content_type, None)
+    /// [`Error::from_response`] for a body already in hand. Until
+    /// audit A50-073 this seat also took the response content
+    /// type, which no longer shapes the message built from a
+    /// non-envelope body (R18-A6). It was accepted, passed down
+    /// and discarded before this round. The parameter is gone.
+    pub(crate) fn from_response_detailed(status: u16, body: &str) -> Error {
+        Self::from_response_read(status, body, None)
     }
 
     /// [`Error::from_response_detailed`] for an error body whose read
@@ -405,23 +560,13 @@ impl Error {
     /// than reporting the prefix length as the body size it used to
     /// claim. The envelope path is unaffected: a truncated envelope
     /// parses or fails on its own contents either way.
-    pub(crate) fn from_capped_error_body(
-        status: u16,
-        body: &str,
-        content_type: Option<&str>,
-        read_cap: usize,
-    ) -> Error {
-        Self::from_response_read(status, body, content_type, Some(read_cap))
+    pub(crate) fn from_capped_error_body(status: u16, body: &str, read_cap: usize) -> Error {
+        Self::from_response_read(status, body, Some(read_cap))
     }
 
-    fn from_response_read(
-        status: u16,
-        body: &str,
-        content_type: Option<&str>,
-        read_cap: Option<usize>,
-    ) -> Error {
+    fn from_response_read(status: u16, body: &str, read_cap: Option<usize>) -> Error {
         let parsed = parse_envelope(body);
-        Self::from_envelope_parts(status, body, content_type, read_cap, parsed)
+        Self::from_envelope_parts(status, body, read_cap, parsed)
     }
 
     /// Build the mapped error from an envelope parse already in
@@ -432,11 +577,10 @@ impl Error {
     fn from_envelope_parts(
         status: u16,
         body: &str,
-        content_type: Option<&str>,
         read_cap: Option<usize>,
         parsed: Option<EnvelopeParts>,
     ) -> Error {
-        let (google_status, message, code, details, class_status) = match parsed {
+        let (google_status, message, code, details, class_status, server_message) = match parsed {
             Some(parts) => {
                 // Classification follows the envelope status first.
                 // With no status string, an envelope that still carries
@@ -452,6 +596,14 @@ impl Error {
                 } else {
                     status
                 };
+                // The bare server message is the envelope message
+                // capped at the same bound, captured here, before
+                // the substitute below or any note appended later
+                // can stand in for it (audit A50-027).
+                let server_message: Option<String> = parts
+                    .message
+                    .as_ref()
+                    .map(|m| m.chars().take(ENVELOPE_TEXT_CAP_CHARS).collect());
                 (
                     // The status truncates at the same bound as the
                     // message (Round 28, Finding 1). The cap lands
@@ -486,101 +638,62 @@ impl Error {
                     parts.code,
                     parts.details,
                     class_status,
+                    server_message,
                 )
             }
             None => (
                 String::new(),
-                non_envelope_message(status, body, content_type, read_cap),
+                non_envelope_message(status, body, read_cap),
                 None,
                 Vec::new(),
                 status,
+                None,
             ),
         };
 
-        match google_status.as_str() {
+        let parts = ApiError {
+            status,
+            google_status,
+            message,
+            code,
+            details,
+            retry_after: None,
+            server_message,
+        };
+        match parts.google_status.as_str() {
             "UNAUTHENTICATED" | "PERMISSION_DENIED" => Error::Auth {
-                status,
-                google_status,
-                message,
-                code,
-                details,
-                retry_after: None,
+                parts: Box::new(parts),
             },
             "RESOURCE_EXHAUSTED" => Error::RateLimit {
-                status,
-                google_status,
-                message,
-                code,
-                details,
-                retry_after: None,
+                parts: Box::new(parts),
             },
             "NOT_FOUND" => Error::NotFound {
-                status,
-                google_status,
-                message,
-                code,
-                details,
-                retry_after: None,
+                parts: Box::new(parts),
             },
             "INVALID_ARGUMENT" | "FAILED_PRECONDITION" | "OUT_OF_RANGE" => Error::InvalidRequest {
-                status,
-                google_status,
-                message,
-                code,
-                details,
-                retry_after: None,
+                parts: Box::new(parts),
             },
             // A canonical server side status classifies as a plain API
             // error whatever the HTTP code says; it must never fall
             // through to the client side HTTP classes below.
             "UNAVAILABLE" | "INTERNAL" | "DEADLINE_EXCEEDED" => Error::Api {
-                status,
-                google_status,
-                message,
-                code,
-                details,
-                retry_after: None,
+                parts: Box::new(parts),
             },
             _ => match class_status {
                 401 | 403 => Error::Auth {
-                    status,
-                    google_status,
-                    message,
-                    code,
-                    details,
-                    retry_after: None,
+                    parts: Box::new(parts),
                 },
                 429 => Error::RateLimit {
-                    status,
-                    google_status,
-                    message,
-                    code,
-                    details,
-                    retry_after: None,
+                    parts: Box::new(parts),
                 },
                 404 => Error::NotFound {
-                    status,
-                    google_status,
-                    message,
-                    code,
-                    details,
-                    retry_after: None,
+                    parts: Box::new(parts),
                 },
                 400 => Error::InvalidRequest {
-                    status,
-                    google_status,
-                    message,
-                    code,
-                    details,
-                    retry_after: None,
+                    parts: Box::new(parts),
                 },
                 _ => Error::Api {
-                    status,
-                    google_status,
-                    message,
-                    code,
-                    details,
-                    retry_after: None,
+                    parts: Box::new(parts),
                 },
             },
         }
@@ -590,12 +703,8 @@ impl Error {
     /// read at all. The HTTP status is the one fact that survives, so
     /// the class comes from the HTTP fallback and the read failure is
     /// recorded in the message rather than dropped.
-    pub(crate) fn from_unreadable_body(
-        status: u16,
-        read_error: &str,
-        content_type: Option<&str>,
-    ) -> Error {
-        Self::from_response_detailed(status, "", content_type)
+    pub(crate) fn from_unreadable_body(status: u16, read_error: &str) -> Error {
+        Self::from_response_detailed(status, "")
             .with_note(&format!("error body unreadable: {read_error}"))
     }
 
@@ -617,11 +726,7 @@ impl Error {
     /// response, once to detect and once to build, which doubled
     /// the price of the whole parse failure Round 29 measured
     /// (Finding 1).
-    pub(crate) fn from_success_body(
-        status: u16,
-        body: &str,
-        content_type: Option<&str>,
-    ) -> Option<Error> {
+    pub(crate) fn from_success_body(status: u16, body: &str) -> Option<Error> {
         let head = parse_envelope_head(body)?;
         if head.status.is_none() && head.code.is_none() && head.message.is_none() {
             return None;
@@ -630,13 +735,7 @@ impl Error {
         if parts.status.is_none() && parts.code.is_none() && parts.message.is_none() {
             return None;
         }
-        Some(Self::from_envelope_parts(
-            status,
-            body,
-            content_type,
-            None,
-            Some(parts),
-        ))
+        Some(Self::from_envelope_parts(status, body, None, Some(parts)))
     }
 
     pub(crate) fn network(err: reqwest::Error) -> Error {
@@ -727,7 +826,10 @@ fn google_status_segment(google_status: &str) -> String {
 
 /// The stable class token for a transport failure, shared by the
 /// error mappings so the wording cannot drift between them.
-fn transport_class(err: &reqwest::Error) -> &'static str {
+/// Crate-visible so the body readers can build the redacted form
+/// of a read failure on the photo path from the same token
+/// (audit A50-098).
+pub(crate) fn transport_class(err: &reqwest::Error) -> &'static str {
     if err.is_timeout() {
         "timeout"
     } else if err.is_connect() {
@@ -751,14 +853,9 @@ fn transport_class(err: &reqwest::Error) -> &'static str {
 /// already carries it (Round 25, Minor 1). A parsed envelope is a
 /// different case and keeps its own message and attributes: those
 /// are the API's structured diagnostic, not raw body text. The
-/// status and content type are accepted so every error construction
-/// path takes the same inputs; neither shapes the message.
-fn non_envelope_message(
-    _status: u16,
-    body: &str,
-    _content_type: Option<&str>,
-    read_cap: Option<usize>,
-) -> String {
+/// status is accepted so every error construction path takes the
+/// same inputs. It does not shape the message.
+fn non_envelope_message(_status: u16, body: &str, read_cap: Option<usize>) -> String {
     if body.trim().is_empty() {
         return "no error body".to_owned();
     }
@@ -1989,6 +2086,98 @@ mod tests {
     }
 
     #[test]
+    fn server_message_and_typed_violation_entries() {
+        // Audit A50-027: the bare envelope message reads as its
+        // own value beside the classified rendering, and the
+        // typed violation views hold only the well formed
+        // entries, which the raw views keep verbatim either way.
+        let body = r#"{"error": {"code": 400, "message": "Request contains an invalid argument.", "status": "INVALID_ARGUMENT", "details": [{"@type": "type.googleapis.com/google.rpc.BadRequest", "fieldViolations": [{"field": "textQuery", "description": "Request contains an invalid argument."}, {"field": 7, "description": "not a pair"}]}]}}"#;
+        let err = Error::from_response(400, body);
+        assert_eq!(
+            err.server_message(),
+            Some("Request contains an invalid argument.")
+        );
+        assert_eq!(
+            err.to_string(),
+            "invalid request (HTTP 400): Request contains an invalid argument."
+        );
+        let entries = err.field_violation_entries();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].field, "textQuery");
+        assert_eq!(
+            entries[0].description,
+            "Request contains an invalid argument."
+        );
+        assert_eq!(err.field_violations().len(), 2);
+
+        let body = r#"{"error": {"code": 429, "message": "Resource has been exhausted (e.g. check quota).", "status": "RESOURCE_EXHAUSTED", "details": [{"@type": "type.googleapis.com/google.rpc.QuotaFailure", "violations": [{"description": "Quota exceeded.", "quotaId": "default", "quotaMetric": "places.googleapis.com/default", "quotaValue": "1000", "subject": "clientip:203.0.113.10"}, "not an object"]}]}}"#;
+        let err = Error::from_response(429, body);
+        let entries = err.quota_violation_entries();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].subject.as_deref(), Some("clientip:203.0.113.10"));
+        assert_eq!(entries[0].description.as_deref(), Some("Quota exceeded."));
+        assert_eq!(entries[0].quota_id.as_deref(), Some("default"));
+        assert_eq!(
+            entries[0].quota_metric.as_deref(),
+            Some("places.googleapis.com/default")
+        );
+        assert_eq!(entries[0].quota_value.as_deref(), Some("1000"));
+        assert_eq!(err.quota_violations().len(), 2);
+
+        // A note appended after construction rides the rendered
+        // headline. It never reaches the bare server message,
+        // which was captured at construction.
+        let body = r#"{"error": {"code": 400, "message": "Request contains an invalid argument.", "status": "INVALID_ARGUMENT"}}"#;
+        let err = Error::from_response(400, body).with_note("content type application/json");
+        assert!(err.to_string().contains("content type application/json"));
+        assert_eq!(
+            err.server_message(),
+            Some("Request contains an invalid argument.")
+        );
+
+        // An unreadable body carried no envelope, so there is no
+        // server message. The substitute and the note are library
+        // prose, not server text.
+        let err = Error::from_unreadable_body(500, "connection closed");
+        assert_eq!(err.server_message(), None);
+
+        // A non-API error carries no server message and no entries.
+        let err = Error::config("bad input");
+        assert_eq!(err.server_message(), None);
+        assert!(err.field_violation_entries().is_empty());
+        assert!(err.quota_violation_entries().is_empty());
+    }
+
+    #[test]
+    fn api_headlines_render_for_each_variant() {
+        // The A50-063 restructure rewrote the five headline
+        // formats onto the shared struct. Each one is pinned in
+        // full here, so a spelling drift in any variant fails.
+        let cases = [
+            (
+                401,
+                "UNAUTHENTICATED",
+                "authentication failed (HTTP 401): m",
+            ),
+            (
+                429,
+                "RESOURCE_EXHAUSTED",
+                "rate limit or quota exceeded (HTTP 429): m",
+            ),
+            (404, "NOT_FOUND", "not found (HTTP 404): m"),
+            (400, "INVALID_ARGUMENT", "invalid request (HTTP 400): m"),
+            (500, "INTERNAL", "places API error (HTTP 500 INTERNAL): m"),
+        ];
+        for (status, google_status, headline) in cases {
+            let body = format!(
+                r#"{{"error": {{"code": {status}, "message": "m", "status": "{google_status}"}}}}"#
+            );
+            let err = Error::from_response(status, &body);
+            assert_eq!(err.to_string(), headline, "status {google_status}");
+        }
+    }
+
+    #[test]
     fn falls_back_to_http_status_when_body_is_not_google_json() {
         let err = Error::from_response(429, "slow down");
         assert_eq!(err.kind(), "rate_limit");
@@ -2307,7 +2496,7 @@ mod tests {
             {"field": 9, "description": "nine"},
         ]);
         let body = fv_probe_body(wire);
-        let err = Error::from_success_body(200, &body, None)
+        let err = Error::from_success_body(200, &body)
             .expect("an envelope on a success status is an error");
         assert_eq!(
             err.field_violations(),
@@ -2490,7 +2679,7 @@ mod tests {
             "{{\"@type\": \"type.googleapis.com/google.rpc.DebugInfo\", \"detail\": {digits}}}"
         );
         let body = giant_probe_envelope(&member, 403, "PERMISSION_DENIED");
-        let err = Error::from_success_body(200, &body, None)
+        let err = Error::from_success_body(200, &body)
             .expect("an envelope on a success status is an error");
         assert_eq!(err.kind(), "auth");
         assert_eq!(err.google_status(), Some("PERMISSION_DENIED"));
@@ -2704,14 +2893,14 @@ mod tests {
         // R18-A6: an unparsed body reaches the message at no length;
         // the status and the body size are what it carries.
         let body = "y".repeat(600);
-        let err = Error::from_response_detailed(503, &body, Some("text/html"));
+        let err = Error::from_response_detailed(503, &body);
         let text = err.to_string();
         assert!(text.contains("HTTP 503"), "{text}");
         assert!(text.contains("600 bytes"), "{text}");
         assert!(!text.contains("yyyy"), "{text}");
         // A short body is not quoted either; quoting was never a
         // property of length.
-        let err = Error::from_response_detailed(500, "upstream exploded", Some("text/plain"));
+        let err = Error::from_response_detailed(500, "upstream exploded");
         let text = err.to_string();
         assert!(!text.contains("upstream exploded"), "{text}");
         assert!(text.contains("HTTP 500"), "{text}");
@@ -2725,7 +2914,7 @@ mod tests {
         // the full size is unknown; the prefix length appears only
         // as the cap figure itself.
         let prefix = "y".repeat(256 * 1024);
-        let err = Error::from_capped_error_body(500, &prefix, Some("text/html"), 256 * 1024);
+        let err = Error::from_capped_error_body(500, &prefix, 256 * 1024);
         let text = err.to_string();
         assert!(text.contains("HTTP 500"), "{text}");
         assert!(text.contains("stopped at the 262144 byte cap"), "{text}");
@@ -2736,13 +2925,13 @@ mod tests {
 
     #[test]
     fn unreadable_body_keeps_the_http_class_and_the_failure() {
-        let err = Error::from_unreadable_body(500, "connection closed", None);
+        let err = Error::from_unreadable_body(500, "connection closed");
         assert_eq!(err.kind(), "api");
         assert_eq!(err.status_code(), Some(500));
         assert!(err
             .to_string()
             .contains("error body unreadable: connection closed"));
-        let err = Error::from_unreadable_body(429, "connection closed", None);
+        let err = Error::from_unreadable_body(429, "connection closed");
         assert_eq!(err.kind(), "rate_limit");
     }
 
@@ -2754,29 +2943,25 @@ mod tests {
         let err = Error::from_success_body(
             200,
             r#"{"error": {"code": 403, "message": "m", "status": "PERMISSION_DENIED"}}"#,
-            None,
         )
         .expect("a full envelope builds an error");
         assert_eq!(err.kind(), "auth");
         assert_eq!(err.status_code(), Some(200));
         assert_eq!(err.google_status(), Some("PERMISSION_DENIED"));
-        assert!(Error::from_success_body(200, r#"{"places": []}"#, None).is_none());
-        assert!(Error::from_success_body(200, "not json", None).is_none());
+        assert!(Error::from_success_body(200, r#"{"places": []}"#).is_none());
+        assert!(Error::from_success_body(200, "not json").is_none());
         // A code or a message makes the envelope an error signal even
         // without a status string; a bare error object carries neither
         // and is not one.
-        assert!(Error::from_success_body(200, r#"{"error": {"code": 403}}"#, None).is_some());
-        assert!(
-            Error::from_success_body(200, r#"{"error": {"message": "denied"}}"#, None).is_some()
-        );
-        assert!(Error::from_success_body(200, r#"{"error": {}}"#, None).is_none());
+        assert!(Error::from_success_body(200, r#"{"error": {"code": 403}}"#).is_some());
+        assert!(Error::from_success_body(200, r#"{"error": {"message": "denied"}}"#).is_some());
+        assert!(Error::from_success_body(200, r#"{"error": {}}"#).is_none());
         // The details of a parseable envelope survive the shared
         // parse; they are part of the built error, not a casualty
         // of the detection sharing it.
         let err = Error::from_success_body(
             200,
             r#"{"error": {"code": 429, "message": "Quota", "status": "RESOURCE_EXHAUSTED", "details": [{"@type": "t", "reason": "r"}]}}"#,
-            None,
         )
         .expect("an envelope with details builds an error");
         assert_eq!(err.details().len(), 1);
@@ -2795,13 +2980,7 @@ mod tests {
             if parts.status.is_none() && parts.code.is_none() && parts.message.is_none() {
                 return None;
             }
-            Some(Error::from_envelope_parts(
-                status,
-                body,
-                None,
-                None,
-                Some(parts),
-            ))
+            Some(Error::from_envelope_parts(status, body, None, Some(parts)))
         }
         let bodies = [
             r#"{"places": []}"#,
@@ -2825,7 +3004,7 @@ mod tests {
             r#"{"error": {"code": 403, "message": "m", "status": "PERMISSION_DENIED"#,
         ];
         for body in bodies {
-            let got = Error::from_success_body(200, body, None);
+            let got = Error::from_success_body(200, body);
             let want = reference(200, body);
             assert_eq!(got.is_some(), want.is_some(), "verdict differs: {body}");
             if let (Some(got), Some(want)) = (got, want) {
@@ -2899,8 +3078,7 @@ mod tests {
         assert!(err.details().is_empty());
         assert!(Error::from_success_body(
             200,
-            r#"{"error": {"code": "x", "status": "NOT_FOUND"}}"#,
-            None
+            r#"{"error": {"code": "x", "status": "NOT_FOUND"}}"#
         )
         .is_some());
     }
@@ -3152,7 +3330,7 @@ mod tests {
             "z".repeat(300_000)
         );
         let prefix = &body[..256 * 1024];
-        let err = Error::from_capped_error_body(400, prefix, None, 256 * 1024);
+        let err = Error::from_capped_error_body(400, prefix, 256 * 1024);
         assert_eq!(err.kind(), "rate_limit");
         assert_eq!(err.google_status(), Some("RESOURCE_EXHAUSTED"));
         assert_eq!(err.error_code(), Some(429));
@@ -3167,7 +3345,7 @@ mod tests {
             "z".repeat(300_000)
         );
         let prefix = &body[..256 * 1024];
-        let err = Error::from_capped_error_body(429, prefix, None, 256 * 1024);
+        let err = Error::from_capped_error_body(429, prefix, 256 * 1024);
         assert_eq!(err.kind(), "invalid_request");
         assert_eq!(err.google_status(), Some("INVALID_ARGUMENT"));
     }
@@ -3552,8 +3730,8 @@ mod tests {
                 r#"{{"error": {{"code": 429, "message": "quota", "status": "RESOURCE_EXHAUSTED"}}, "error": "tail", "junk": {junk}}}"#
             )
         };
-        assert!(Error::from_success_body(200, &body(&deep_fragment()), None).is_none());
-        assert!(Error::from_success_body(200, &body("0"), None).is_none());
+        assert!(Error::from_success_body(200, &body(&deep_fragment())).is_none());
+        assert!(Error::from_success_body(200, &body("0")).is_none());
     }
 
     #[test]
@@ -3754,9 +3932,9 @@ mod tests {
         // raised the discarded envelope as an error where its
         // completed twin returns its result.
         let cut = format!(r#"{{"error": {ENV}, "error": null"#);
-        assert!(Error::from_success_body(200, &cut, None).is_none());
+        assert!(Error::from_success_body(200, &cut).is_none());
         let completed = format!(r#"{{"error": {ENV}, "error": null}}"#);
-        assert!(Error::from_success_body(200, &completed, None).is_none());
+        assert!(Error::from_success_body(200, &completed).is_none());
         // The uncut envelope alone still classifies, so the
         // family above is the clearing and not the envelope.
         let plain = format!(r#"{{"error": {ENV}}}"#);
@@ -3783,7 +3961,7 @@ mod tests {
             tail
         );
         assert_eq!(body.len(), CAP);
-        let err = Error::from_capped_error_body(400, &body, None, CAP);
+        let err = Error::from_capped_error_body(400, &body, CAP);
         assert_eq!(err.kind(), "invalid_request");
         assert_eq!(err.google_status(), None);
         let completed = format!("{body}}}");
@@ -3796,7 +3974,7 @@ mod tests {
             r#"{{"error": {ENV}, "error": null, "pad": "{}"#,
             "x".repeat(CAP)
         );
-        let err = Error::from_capped_error_body(400, &full[..CAP], None, CAP);
+        let err = Error::from_capped_error_body(400, &full[..CAP], CAP);
         assert_eq!(err.kind(), "invalid_request");
         assert_eq!(err.google_status(), None);
         let closed = format!("{full}\"}}");
@@ -3905,7 +4083,7 @@ mod tests {
         let err = Error::from_response(400, body);
         assert_eq!(err.kind(), "invalid_request");
         assert_eq!(err.google_status(), None);
-        assert!(Error::from_success_body(200, body, None).is_none());
+        assert!(Error::from_success_body(200, body).is_none());
     }
 
     #[test]
@@ -3922,7 +4100,7 @@ mod tests {
         let err = Error::from_response(400, &body);
         assert_eq!(err.kind(), "invalid_request");
         assert_eq!(err.google_status(), None);
-        assert!(Error::from_success_body(200, &body, None).is_none());
+        assert!(Error::from_success_body(200, &body).is_none());
         // And the decoy family the earlier rounds held is
         // untouched: a decoy inside a closed junk object with
         // the real envelope behind it classifies by the real
@@ -3997,7 +4175,7 @@ mod tests {
             "x".repeat(400_000)
         );
         let prefix = &body[..256 * 1024];
-        let err = Error::from_capped_error_body(400, prefix, None, 256 * 1024);
+        let err = Error::from_capped_error_body(400, prefix, 256 * 1024);
         assert_eq!(err.kind(), "rate_limit");
         assert_eq!(err.google_status(), Some("RESOURCE_EXHAUSTED"));
         let text = err.to_string();
