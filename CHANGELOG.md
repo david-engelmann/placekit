@@ -4,6 +4,19 @@ All notable changes to placekit are recorded here. The format follows Keep a Cha
 
 ## [Unreleased]
 
+### Changed
+
+- **Breaking.** The direct model decoders refuse a string or bytes value in a numeric slot instead of converting it. A rating sent as "4.5" or a count sent as "42" through `from_api` now raises `DecodeError`, matching the refusal the string and boolean decoders already gave wrong types. The money units keep accepting their wire form, a JSON string holding an integer, through a dedicated decoder that refuses any other string shape and values outside the int64 range. Callers who fed numeric strings into `from_api` and relied on the silent conversion must send numbers.
+
+### Fixed
+
+- `PlacesError` constructed with a NaN, infinite, or negative `retry_after` now stores None for the attribute, matching the core parser's rule that only a finite non-negative delta is a retry delay. The stored value could previously raise inside a caller's sleep.
+- An error envelope carrying a details array and no status, message, or code keeps its details when the body also defeats the whole-document parse and is recovered by the tolerant head scan. The scan's keep rule discarded the whole envelope there, and the caller got the bare HTTP fallback with an empty details list where the whole-parse route kept the details and the envelope wording.
+- Photo resource name validation refuses whitespace, matching the place id check. A name carrying a space previously passed validation and reached the wire percent-encoded, where the API answered with its own not-found error instead of the local refusal the other invalid shapes get.
+- The Rust core's `FieldMask` constructor refuses the wildcard character anywhere in a path segment, not only as a whole segment. Segments such as `places.*x` previously passed every constructor check although no grammar the crate states admits them.
+- Aborting an in-flight async call now settles its handle as aborted. The completion write lived inside the aborted task, so an aborted call never marked its handle done, and collecting its result answered with a not-ready decode error instead of an aborted answer.
+- A serialization panic on the sync result conversion now settles as the runtime panic network error, matching the async path. It previously crossed the boundary as a PanicException outside the exception hierarchy. No shipped response type can produce the panic.
+
 ## [0.1.1] - 2026-11-15
 
 ### Added

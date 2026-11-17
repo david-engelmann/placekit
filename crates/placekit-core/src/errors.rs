@@ -955,14 +955,23 @@ fn cap_detail_strings(value: &mut serde_json::Value) {
 /// value that is not an object and stands before any envelope
 /// is skipped like any other value rather than ending the scan.
 /// One limit stands where the data runs out: a later error
-/// object cut off before it yields a head field does not erase
-/// an earlier complete one, because the first readable value is
-/// the only data there is, and a later non object value cut off
+/// object cut off before it yields a head field or a complete
+/// details array does not erase an earlier complete one,
+/// because the first readable value is the only data there is,
+/// and a later non object value cut off
 /// before it is fully read does not clear one either, for the
 /// same reason. A scan that recovers no head field
-/// at all reports no envelope, the same verdict the whole parse
-/// gives an error object with no usable field, so the caller
-/// takes the bare HTTP fallback and its wording.
+/// at all and no details reports no envelope, the same verdict
+/// the whole parse gives an error object with no usable field,
+/// so the caller takes the bare HTTP fallback and its wording.
+/// A recovered nonempty details array makes an envelope on its
+/// own (A50-009): an error object carrying details and no head
+/// field is still the server's error report, and the details
+/// are the diagnostic the envelope exists to carry. The
+/// recorded empty-object wording divergence stands apart from
+/// this rule, because an empty object carries no details
+/// either, so it still reports no envelope exactly as it did
+/// before.
 ///
 /// When the walk finds nothing and did not complete, one
 /// recovery pass runs ([`HeadScan::recover_envelope`]): a
@@ -995,17 +1004,22 @@ fn parse_envelope_head(body: &str) -> Option<EnvelopeParts> {
     let mut completed = false;
     // Whether the walk cleared an envelope it had found: a
     // later `error` value read whole, an object holding no
-    // head field or one that is not an object at all, displaced
-    // a usable envelope and left no envelope in its place. The
-    // fact is carried on its own because the state it leaves
-    // behind, no envelope found and the walk incomplete, is
-    // otherwise indistinguishable from having found nothing,
-    // and a walk cut short after a clearing must stay as
-    // authoritative as a completed one (Round 31 landing
-    // repair, red team Minor 2).
+    // head field and no details or one that is not an object
+    // at all, displaced a usable envelope and left no envelope
+    // in its place. The fact is carried on its own because the
+    // state it leaves behind, no envelope found and the walk
+    // incomplete, is otherwise indistinguishable from having
+    // found nothing, and a walk cut short after a clearing
+    // must stay as authoritative as a completed one (Round 31
+    // landing repair, red team Minor 2).
     let mut cleared = false;
-    let has_head = |parts: &EnvelopeParts| {
-        parts.status.is_some() || parts.message.is_some() || parts.code.is_some()
+    // The keep rule the scan answers by (A50-009): a head field
+    // or a nonempty details array makes the object an envelope.
+    let is_envelope = |parts: &EnvelopeParts| {
+        parts.status.is_some()
+            || parts.message.is_some()
+            || parts.code.is_some()
+            || !parts.details.is_empty()
     };
     loop {
         scan.skip_ws();
@@ -1023,9 +1037,9 @@ fn parse_envelope_head(body: &str) -> Option<EnvelopeParts> {
         scan.skip_ws();
         if key == "error" && scan.peek() == Some(b'{') {
             let (parts, closed) = scan.error_object();
-            let usable = has_head(&parts);
+            let usable = is_envelope(&parts);
             if closed || usable {
-                if !usable && found.as_ref().is_some_and(has_head) {
+                if !usable && found.as_ref().is_some_and(is_envelope) {
                     cleared = true;
                 }
                 found = Some(parts);
@@ -1041,7 +1055,7 @@ fn parse_envelope_head(body: &str) -> Option<EnvelopeParts> {
             // value was read whole; a value cut off by the read
             // cap does not erase an earlier complete envelope.
             if scan.skip_value() {
-                if found.as_ref().is_some_and(has_head) {
+                if found.as_ref().is_some_and(is_envelope) {
                     cleared = true;
                 }
                 found = None;
@@ -1061,7 +1075,7 @@ fn parse_envelope_head(body: &str) -> Option<EnvelopeParts> {
         completed = scan.eat(b'}');
         break;
     }
-    let found = found.filter(has_head);
+    let found = found.filter(is_envelope);
     if found.is_some() || completed || cleared {
         return found;
     }
@@ -1878,9 +1892,14 @@ impl<'a> HeadScan<'a> {
                                 self.skip_ws();
                                 if self.peek() == Some(b'{') {
                                     let (parts, closed) = self.error_object();
+                                    // The same keep rule as the head
+                                    // scan (A50-009). A head field or a
+                                    // nonempty details array keeps the
+                                    // object.
                                     if parts.status.is_some()
                                         || parts.message.is_some()
                                         || parts.code.is_some()
+                                        || !parts.details.is_empty()
                                     {
                                         found = Some(parts);
                                     }
@@ -3496,6 +3515,81 @@ mod tests {
             control.to_string().contains("carried no message"),
             "{control}"
         );
+    }
+
+    #[test]
+    fn head_scan_details_only_envelope_keeps_its_details() {
+        // A50-009: an error object carrying a details array and
+        // no head field is an envelope on both routes. The whole
+        // parse kept the details while the head scan dropped the
+        // object at its keep filter, so the same body classified
+        // with its details on one route and lost them on the
+        // other.
+        const DETAILS: &str =
+            r#"[{"@type": "type.googleapis.com/google.rpc.DebugInfo", "detail": "kept"}]"#;
+        let body = |junk: &str| format!(r#"{{"error": {{"details": {DETAILS}}}, "junk": {junk}}}"#);
+        let err = Error::from_response(400, &body(&deep_fragment()));
+        assert_eq!(err.kind(), "invalid_request");
+        assert_eq!(err.details().len(), 1);
+        assert_eq!(err.details()[0]["detail"], "kept");
+        assert!(err.to_string().contains("carried no message"), "{err}");
+        let control = Error::from_response(400, &body("0"));
+        assert_eq!(control.kind(), "invalid_request");
+        assert_eq!(control.details().len(), 1);
+        assert_eq!(control.details()[0]["detail"], "kept");
+        assert!(
+            control.to_string().contains("carried no message"),
+            "{control}"
+        );
+    }
+
+    #[test]
+    fn head_scan_cleared_details_only_envelope_stays_cleared() {
+        // The clearing coherence of the same repair. A later
+        // value that clears a details-only envelope must be
+        // recorded as a clearing under the widened keep rule, or
+        // the recovery pass runs behind the walk and resurrects
+        // the details the later value removed.
+        const DETAILS: &str =
+            r#"[{"@type": "type.googleapis.com/google.rpc.DebugInfo", "detail": "kept"}]"#;
+        for tail in ["null", "{}"] {
+            let body = format!(
+                r#"{{"error": {{"details": {DETAILS}}}, "error": {tail}, "junk": {}}}"#,
+                deep_fragment()
+            );
+            let err = Error::from_response(400, &body);
+            assert_eq!(err.kind(), "invalid_request", "tail {tail}");
+            assert!(err.details().is_empty(), "tail {tail}");
+            assert!(
+                err.to_string().contains("not a Places error envelope"),
+                "tail {tail}: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn head_scan_cut_details_only_object_displaces_an_earlier_envelope() {
+        // The displacement seat of the same repair, completed by
+        // the red team pass. A later error object cut off after
+        // yielding a complete details array displaces an earlier
+        // envelope exactly as its completed twin does, because
+        // an object read recovers a details array whole or not
+        // at all, so the cut cannot leave the array in doubt.
+        const FIRST: &str = r#"{"code": 429, "message": "quota", "status": "RESOURCE_EXHAUSTED"}"#;
+        let cut = format!(
+            r#"{{"error": {FIRST}, "error": {{"details": [{{"@type": "t", "detail": "second"}}]"#
+        );
+        let err = Error::from_response(400, &cut);
+        assert_eq!(err.kind(), "invalid_request");
+        assert_eq!(err.details().len(), 1);
+        assert_eq!(err.details()[0]["detail"], "second");
+        let completed = format!(
+            r#"{{"error": {FIRST}, "error": {{"details": [{{"@type": "t", "detail": "second"}}]}}}}"#
+        );
+        let err = Error::from_response(400, &completed);
+        assert_eq!(err.kind(), "invalid_request");
+        assert_eq!(err.details().len(), 1);
+        assert_eq!(err.details()[0]["detail"], "second");
     }
 
     #[test]

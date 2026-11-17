@@ -91,6 +91,11 @@ pub(crate) fn a8_tokyo_japanese() -> FixturePlace {
     }
 }
 
+// One recorded place serves both the A5 and A6 corpus cases: the
+// corpus record in docs/NORMALIZATION.md states the A5 recording
+// was filed also as A6 and counted as one item, so this fixture
+// and a6_block_addressing below carry the same recorded place on
+// purpose (audit round 2, A50-011).
 pub(crate) fn a5_sublocality_chains() -> FixturePlace {
     FixturePlace {
         components: vec![
@@ -113,6 +118,8 @@ pub(crate) fn a5_sublocality_chains() -> FixturePlace {
     }
 }
 
+// The same recorded place as a5_sublocality_chains above.
+// See the note there.
 pub(crate) fn a6_block_addressing() -> FixturePlace {
     FixturePlace {
         components: vec![
@@ -334,6 +341,10 @@ pub(crate) fn p1_no_address() -> FixturePlace {
     }
 }
 
+// The emptiness is this fixture's content: the A12 case pins the
+// no-carrier-set-at-all reading, so the component list and the
+// postal record are empty on purpose despite the name (audit
+// round 2, A50-011).
 pub(crate) fn a12_long_village() -> FixturePlace {
     FixturePlace {
         components: vec![
