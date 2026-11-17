@@ -68,7 +68,7 @@ def make_release_ready(tree: Path) -> Path:
     heading and its date, and the Unreleased entries join its
     section, so the fold lands exactly one release heading either
     way. The fold has to move the entries themselves, not just
-    add a heading: while Unreleased held nothing the heading
+    add a heading. While Unreleased held nothing the heading
     alone sufficed, but entries parked there for a future release
     (the audit programme's, for one) are exactly what the publish
     guard refuses to tag over.
