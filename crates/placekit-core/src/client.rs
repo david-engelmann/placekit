@@ -1696,9 +1696,14 @@ fn validate_photo_params(
     }
     // Nothing in a valid name can reshape the URL or the query string,
     // and no segment may be a dot segment that collapses the path.
+    // Whitespace is refused on the same terms as the place id check:
+    // no valid resource name carries it, and accepting it sent the
+    // name to the wire percent-encoded where the API answered with
+    // its own not-found error instead of the local refusal the other
+    // invalid shapes get (audit round 2, A50-007).
     if photo_name
         .chars()
-        .any(|c| matches!(c, '?' | '#' | '%' | '\\') || c.is_control())
+        .any(|c| matches!(c, '?' | '#' | '%' | '\\') || c.is_control() || c.is_whitespace())
         || segments.iter().any(|seg| *seg == ".." || *seg == ".")
     {
         return Err(Error::config(format!(
@@ -2392,6 +2397,27 @@ mod tests {
         // Malformed resource names.
         assert!(validate_photo_params("ChIJ", Some(1), None).is_err());
         assert!(validate_photo_params("places/ChIJ", Some(1), None).is_err());
+    }
+
+    #[test]
+    fn photo_name_validation_rejects_whitespace() {
+        // Audit round 2, A50-007: the place id check refuses any
+        // whitespace, and the photo name check refuses it on the
+        // same terms, where a spaced name used to pass validation
+        // and reach the wire percent-encoded inside one segment.
+        for spaced in [
+            "places/Ch IJ/photos/ref",
+            "places/ChIJ/photos/re f",
+            "places/ChIJ/photos/ref ",
+        ] {
+            assert_eq!(
+                validate_photo_params(spaced, Some(1), None)
+                    .unwrap_err()
+                    .kind(),
+                "config",
+                "{spaced}"
+            );
+        }
     }
 
     #[test]

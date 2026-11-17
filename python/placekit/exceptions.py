@@ -8,6 +8,7 @@ the error came from an API response.
 
 from __future__ import annotations
 
+from math import isfinite
 from typing import Any, NoReturn, Optional
 
 
@@ -199,6 +200,15 @@ class PlacesError(Exception):
                 retry_after_value = float(retry_after)
             except Exception:
                 retry_after_value = None
+        # A converted value the core parser would refuse is
+        # refused here on the same terms. A NaN, an infinity, or
+        # a negative is not a count of seconds to wait, and
+        # storing one handed the caller's retry loop a value
+        # that raises inside a sleep (audit round 2, A50-001).
+        if retry_after_value is not None and (
+            not isfinite(retry_after_value) or retry_after_value < 0.0
+        ):
+            retry_after_value = None
         #: Seconds from the response's ``Retry-After`` header, when
         #: the failing response carried one. Both header forms are
         #: read: delta seconds (a fraction is kept) and the HTTP
@@ -214,7 +224,11 @@ class PlacesError(Exception):
         #: An admitted numeric whose conversion itself fails, an
         #: int too large to convert or a numeric subclass whose
         #: conversion raises, reads as None on the same terms
-        #: (Round 34).
+        #: (Round 34). A numeric that converts to a NaN, an
+        #: infinity, or a negative reads as None on the same
+        #: terms, matching the core parser's rule that only a
+        #: finite non-negative delta is a retry delay (audit
+        #: round 2, A50-001).
         self.retry_after = retry_after_value
         #: Which call failed, as an operation name plus its identifying
         #: argument where one exists (for example ``place_details

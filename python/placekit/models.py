@@ -260,6 +260,18 @@ def _as_float(value: Any, model: str, key: str) -> float:
         raise DecodeError(
             f"{model} payload key {key!r} is not a number: {_safe_repr(value)}"
         )
+    if isinstance(value, (str, bytes, bytearray)):
+        # A string in a number slot is refused, never converted.
+        # float() accepts numeric strings, so a malformed payload
+        # or a hand-built fixture carrying "4.5" in a rating slot
+        # decoded as if well formed, where the string and boolean
+        # decoders beside this one refuse wrong-type values
+        # outright (audit round 2, A50-002). The wire never
+        # encodes a float as a string, so no honest payload
+        # reaches this refusal.
+        raise DecodeError(
+            f"{model} payload key {key!r} is not a number: {_safe_repr(value)}"
+        )
     try:
         result = float(value)
     except Exception as exc:
@@ -294,6 +306,18 @@ def _as_float(value: Any, model: str, key: str) -> float:
 
 def _as_int(value: Any, model: str, key: str) -> int:
     if isinstance(value, bool):
+        raise DecodeError(
+            f"{model} payload key {key!r} is not an integer: {_safe_repr(value)}"
+        )
+    if isinstance(value, (str, bytes, bytearray)):
+        # A string in an integer slot is refused, never
+        # converted, on the same terms as the float decoder
+        # above (audit round 2, A50-002). int() accepts numeric
+        # strings, including underscored and whitespace padded
+        # forms, so a count sent as "42" decoded silently where
+        # the neighbouring decoders refuse wrong types. The one
+        # slot whose wire form is a string by design, the money
+        # units, decodes through _as_wire_int instead.
         raise DecodeError(
             f"{model} payload key {key!r} is not an integer: {_safe_repr(value)}"
         )
@@ -343,6 +367,39 @@ def _as_int(value: Any, model: str, key: str) -> int:
             f"to print: {exc}"
         ) from exc
     return result
+
+
+def _as_wire_int(value: Any, model: str, key: str) -> int:
+    """Decode the one integer slot the wire carries as a string.
+
+    The money units are an int64, and the wire encoding of an
+    int64 is a JSON string, so this decoder accepts the string
+    form where _as_int refuses strings everywhere else (audit
+    round 2, A50-002). The accepted string is an optional minus
+    sign and ASCII digits, inside the int64 range the core
+    enforces on the client path. A value
+    that already arrived as a number decodes through _as_int on
+    the usual terms, which is the shape the client path hands
+    this layer.
+    """
+    if isinstance(value, str):
+        digits = value[1:] if value.startswith("-") else value
+        # The length bound is the int64 bound in digit form, and
+        # it also keeps the conversion below the interpreter's
+        # digit limit, whose refusal would escape as a bare
+        # ValueError instead of this decoder's DecodeError.
+        if (
+            digits
+            and len(digits) <= 19
+            and all("0" <= char <= "9" for char in digits)
+        ):
+            result = int(value)
+            if -(2**63) <= result <= 2**63 - 1:
+                return result
+        raise DecodeError(
+            f"{model} payload key {key!r} is not an integer: {_safe_repr(value)}"
+        )
+    return _as_int(value, model, key)
 
 
 def _as_str(value: Any, model: str, key: str) -> Optional[str]:
@@ -1716,7 +1773,7 @@ class Money:
             currency_code=_as_str(
                 _read_or(data, "currencyCode", "", "Money"), "Money", "currencyCode"
             ),
-            units=_as_int(_read_or(data, "units", 0, "Money"), "Money", "units"),
+            units=_as_wire_int(_read_or(data, "units", 0, "Money"), "Money", "units"),
             nanos=_as_int(_read_or(data, "nanos", 0, "Money"), "Money", "nanos"),
             raw=raw,
         )

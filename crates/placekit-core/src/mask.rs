@@ -97,11 +97,15 @@ impl FieldMask {
     /// value is at most 4096 bytes; no path is duplicated (a mask
     /// is a set); every path is ASCII, contains no whitespace, comma or
     /// control character, and does not begin or end with whitespace;
-    /// no dot separated segment of a path is empty; and no segment is
-    /// the wildcard `*`, which this grammar does not use: the curated
-    /// defaults name every field explicitly, and accepting a wildcard
-    /// would let one path silently widen a request to every billable
-    /// field. Anything else would corrupt or widen the
+    /// no dot separated segment of a path is empty; and no segment
+    /// contains the wildcard `*`, which this grammar does not use: the
+    /// curated defaults name every field explicitly, and accepting a
+    /// wildcard would let one path silently widen a request to every
+    /// billable field. The refusal covers the character anywhere in a
+    /// segment, not only a segment that is exactly the wildcard,
+    /// because a segment such as `places.*x` carries the same
+    /// widening character the rule exists to exclude (audit round 2,
+    /// A50-008). Anything else would corrupt or widen the
     /// `X-Goog-FieldMask` header the paths are joined into.
     pub fn new(paths: Vec<String>) -> Result<Self, Error> {
         if paths.is_empty() {
@@ -124,7 +128,7 @@ impl FieldMask {
                 || path.chars().any(|c| c.is_control())
                 || path
                     .split('.')
-                    .any(|segment| segment.is_empty() || segment == "*")
+                    .any(|segment| segment.is_empty() || segment.contains('*'))
                 || !seen.insert(path.clone())
             {
                 return Err(Error::config(format!("invalid field mask path: {path:?}")));
@@ -331,6 +335,23 @@ mod tests {
         }
         let err = FieldMask::new(vec!["places.id".to_owned(), "places.id".to_owned()]).unwrap_err();
         assert_eq!(err.kind(), "config");
+    }
+
+    #[test]
+    fn rejects_wildcard_characters_inside_segments() {
+        // Audit round 2, A50-008: the wildcard refusal used to
+        // cover only a segment that is exactly the wildcard, so
+        // segments carrying the character in other shapes passed
+        // every check in the constructor. The refusal now covers
+        // the character anywhere in a segment, on the same
+        // widening ground the rule states. The deliberately
+        // looser call time grammar otherwise stands: a snake_case
+        // path the construction grammar refuses still builds here.
+        for bad in ["**", "a*", "places.*x", "places.display*Name"] {
+            let err = FieldMask::new(vec![bad.to_owned()]).unwrap_err();
+            assert_eq!(err.kind(), "config", "path {bad:?} should be rejected");
+        }
+        assert!(FieldMask::new(vec!["places.display_name".to_owned()]).is_ok());
     }
 
     #[test]

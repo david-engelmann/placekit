@@ -60,28 +60,76 @@ def standing_version(tree: Path) -> str:
 def make_release_ready(tree: Path) -> Path:
     """Fold the copied changelog into the shape tag day expects.
 
-    The Unreleased heading is left empty and a dated release heading
-    takes the entries that sat under it, which is the fold the release
-    checklist asks for before the tag is cut. A copy whose changelog
-    already carries the release heading past the Unreleased heading
-    stands in that shape already and is left as it is, so the fold
-    lands exactly one release heading either way.
+    The entries under the Unreleased heading move under the
+    release heading for the standing version and the Unreleased
+    heading is left empty, which is the fold the release
+    checklist asks for before the tag is cut. A copy that already
+    carries a release heading for the standing version keeps that
+    heading and its date, and the Unreleased entries join its
+    section, so the fold lands exactly one release heading either
+    way. The fold has to move the entries themselves, not just
+    add a heading. While Unreleased held nothing the heading
+    alone sufficed, but entries parked there for a future release
+    (the audit programme's, for one) are exactly what the publish
+    guard refuses to tag over.
     """
     changelog = tree / "CHANGELOG.md"
     lines = changelog.read_text().splitlines(keepends=True)
-    out = []
-    for i, line in enumerate(lines):
-        out.append(line)
-        if line.startswith("## [Unreleased]"):
-            rest = lines[i + 1 :]
-            current = standing_version(tree)
-            already_folded = any(
-                later.startswith(f"## [{current}]") for later in rest
-            )
-            if not already_folded:
-                out.append(f"\n## [{current}] - 2026-11-01\n")
-            out.extend(rest)
-            break
+    current = standing_version(tree)
+    unreleased_at = next(
+        i for i, line in enumerate(lines) if line.startswith("## [Unreleased]")
+    )
+    section_end = next(
+        (
+            i
+            for i in range(unreleased_at + 1, len(lines))
+            if lines[i].startswith("## [")
+        ),
+        len(lines),
+    )
+    entries = lines[unreleased_at + 1 : section_end]
+    release_at = next(
+        (
+            i
+            for i in range(section_end, len(lines))
+            if lines[i].startswith(f"## [{current}]")
+        ),
+        None,
+    )
+    if release_at is None:
+        heading = f"## [{current}] - 2026-11-01\n"
+        release_entries: list[str] = []
+        rest = lines[section_end:]
+    else:
+        heading = lines[release_at]
+        release_end = next(
+            (
+                i
+                for i in range(release_at + 1, len(lines))
+                if lines[i].startswith("## [")
+            ),
+            len(lines),
+        )
+        release_entries = lines[release_at + 1 : release_end]
+        rest = lines[section_end:release_at] + lines[release_end:]
+
+    def trimmed(block: list[str]) -> list[str]:
+        while block and not block[0].strip():
+            block = block[1:]
+        while block and not block[-1].strip():
+            block = block[:-1]
+        return block
+
+    out = lines[: unreleased_at + 1]
+    out.append("\n")
+    out.append(heading)
+    out.append("\n")
+    out.extend(trimmed(entries))
+    if entries and release_entries:
+        out.append("\n")
+    out.extend(trimmed(release_entries))
+    out.append("\n")
+    out.extend(rest)
     changelog.write_text("".join(out))
     return tree
 

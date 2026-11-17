@@ -18,6 +18,16 @@
 //! dropped, so no shutdown machinery ever runs against threads that
 //! no longer exist.
 //!
+//! One exception stands against that promise. The runtime slot is
+//! guarded by a mutex, and a fork that lands while another thread
+//! holds the lock leaves the child holding a lock whose owner does
+//! not exist in the child. The lock is not poisoned and the child
+//! cannot release it, so a fork inside the first runtime build, or
+//! inside a client rebuild that takes the same lock, can leave the
+//! child's first call waiting on a lock nobody will release.
+//! Forking while a build is in flight is outside the supported
+//! envelope.
+//!
 //! An async call spawns its core future onto that runtime and hands
 //! the Python layer a call handle. The future completes into Rust
 //! state only, and the Python layer collects the stored result from
@@ -177,6 +187,23 @@ where
 enum CallOutput {
     Json(Result<(serde_json::Value, String, u16), CoreError>),
     Photo(Result<(PhotoMedia, Option<String>, u16), CoreError>),
+    /// The call was aborted before it completed (A50-013). The
+    /// settle that stores this output claims the slot ahead of
+    /// the completion write, so a handle collected after an abort
+    /// reports the abort instead of answering that the result is
+    /// not ready.
+    Aborted,
+}
+
+/// The error an aborted call raises when its handle is collected
+/// (A50-013). The abort ends the call on the transport side with
+/// no HTTP response behind it, so it takes the network class,
+/// and its detail names the abort.
+fn aborted_error() -> CoreError {
+    CoreError::Network {
+        detail: "the call was aborted before it completed".to_string(),
+        source: None,
+    }
 }
 
 /// Serialize a JSON call result for storage in a call handle. A
@@ -220,6 +247,35 @@ where
 struct CallSlot {
     output: Mutex<Option<CallOutput>>,
     done: AtomicBool,
+    /// The write-once claim shared by the completion write and
+    /// the abort path (A50-013). Exactly one settle wins, and the
+    /// loser drops its output, so a call that already finished
+    /// keeps its real output when its handle is aborted or
+    /// dropped afterwards.
+    settled: AtomicBool,
+}
+
+impl CallSlot {
+    /// Claim the slot and store `output` as the call's result,
+    /// returning whether this settle won the claim. The done flag
+    /// is set only by the winning settle, after the output is
+    /// stored, so a poller that sees done always finds the output
+    /// in place.
+    fn settle(&self, output: CallOutput) -> bool {
+        if self
+            .settled
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .is_err()
+        {
+            return false;
+        }
+        match self.output.lock() {
+            Ok(mut guard) => *guard = Some(output),
+            Err(poisoned) => *poisoned.into_inner() = Some(output),
+        }
+        self.done.store(true, Ordering::SeqCst);
+        true
+    }
 }
 
 /// The handle an async method returns for one in flight call
@@ -238,11 +294,20 @@ struct PyCallHandle {
 
 impl Drop for PyCallHandle {
     fn drop(&mut self) {
-        self.abort_join();
+        self.abort_call();
     }
 }
 
 impl PyCallHandle {
+    /// Settle the handle as aborted, then abort the join. The
+    /// settle comes first, so a completion racing the abort
+    /// either claimed the slot already and keeps its output, or
+    /// loses the claim and drops its output when it lands.
+    fn abort_call(&self) {
+        self.slot.settle(CallOutput::Aborted);
+        self.abort_join();
+    }
+
     fn abort_join(&self) {
         let taken = match self.join.lock() {
             Ok(mut guard) => guard.take(),
@@ -276,6 +341,7 @@ impl PyCallHandle {
             }
             Some(CallOutput::Json(Err(err))) => Err(to_pyerr(py, err)),
             Some(CallOutput::Photo(result)) => photo_to_py(py, result),
+            Some(CallOutput::Aborted) => Err(to_pyerr(py, aborted_error())),
             None => Err(to_pyerr(
                 py,
                 CoreError::Decode {
@@ -287,10 +353,11 @@ impl PyCallHandle {
         }
     }
 
-    /// Abort the call if it is still running. The stored output of
-    /// a call that already finished is left in place.
+    /// Abort the call if it is still running, settling the handle
+    /// so a later collection reports the abort. The stored output
+    /// of a call that already finished is left in place.
     fn abort(&self) {
-        self.abort_join();
+        self.abort_call();
     }
 }
 
@@ -307,15 +374,12 @@ where
     let slot = Arc::new(CallSlot {
         output: Mutex::new(None),
         done: AtomicBool::new(false),
+        settled: AtomicBool::new(false),
     });
     let task_slot = Arc::clone(&slot);
     let join = runtime.spawn(async move {
         let output = fut.await;
-        match task_slot.output.lock() {
-            Ok(mut guard) => *guard = Some(output),
-            Err(poisoned) => *poisoned.into_inner() = Some(output),
-        }
-        task_slot.done.store(true, Ordering::SeqCst);
+        task_slot.settle(output);
     });
     Ok(PyCallHandle {
         slot,
@@ -856,6 +920,27 @@ fn json_tuple_to_py(py: Python<'_>, json: &Value, body: String, status: u16) -> 
     Ok(tuple.unbind().into_any())
 }
 
+/// Serialize one typed result value under the panic guard
+/// discipline the async path's stored form conversion already
+/// runs (A50-012). A serialization failure returns the same
+/// decode error the sync path has always raised for it. A panic
+/// settles as the runtime panic error, the same error the async
+/// path produces, instead of crossing the boundary unguarded.
+fn to_value_guarded<T>(value: &T) -> Result<Value, CoreError>
+where
+    T: serde::Serialize,
+{
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| serde_json::to_value(value))) {
+        Ok(Ok(json)) => Ok(json),
+        Ok(Err(e)) => Err(CoreError::Decode {
+            detail: e.to_string(),
+            status: None,
+            source: Some(Box::new(e)),
+        }),
+        Err(payload) => Err(runtime_panic_error(&*payload)),
+    }
+}
+
 /// A JSON result crosses the boundary as a 3-tuple of the typed
 /// dict, the response body text and the HTTP status (Round 16).
 /// Attributes decode from the typed dict, exactly as they did when
@@ -873,16 +958,7 @@ where
 {
     match result {
         Ok((value, body, status)) => {
-            let json = serde_json::to_value(&value).map_err(|e| {
-                to_pyerr(
-                    py,
-                    CoreError::Decode {
-                        detail: e.to_string(),
-                        status: None,
-                        source: Some(Box::new(e)),
-                    },
-                )
-            })?;
+            let json = to_value_guarded(&value).map_err(|e| to_pyerr(py, e))?;
             json_tuple_to_py(py, &json, body, status)
         }
         Err(e) => Err(to_pyerr(py, e)),
@@ -1360,6 +1436,64 @@ mod tests {
             }
             _ => panic!("a core error must pass through as itself"),
         }
+    }
+
+    /// The pin for the A50-012 repair. The sync conversion runs
+    /// under the same guard as the stored form conversion, so a
+    /// panicking value settles as the runtime panic error here
+    /// too. Against the unguarded conversion this test fails by
+    /// the panic escaping `to_value_guarded` itself.
+    #[test]
+    fn to_value_guarded_settles_a_serialization_panic_as_the_runtime_panic_error() {
+        match to_value_guarded(&PanickingValue) {
+            Err(CoreError::Network { detail, .. }) => {
+                assert!(
+                    detail.contains("synthetic serialization panic for the guard pin"),
+                    "{detail}"
+                );
+            }
+            _ => panic!("a conversion panic must settle as the runtime panic error"),
+        }
+        // A plain value still serializes whole.
+        let json = to_value_guarded(&Value::from("plain")).expect("a plain value serializes");
+        assert_eq!(json, Value::from("plain"));
+    }
+
+    /// The pin for the A50-013 repair. The slot settles exactly
+    /// once, whichever of the completion write and the abort
+    /// claims it first, and the losing settle drops its output.
+    #[test]
+    fn call_slot_settles_exactly_once_for_abort_and_completion() {
+        // Completion first: the abort settle loses and the real
+        // output stands.
+        let slot = CallSlot {
+            output: Mutex::new(None),
+            done: AtomicBool::new(false),
+            settled: AtomicBool::new(false),
+        };
+        assert!(slot.settle(CallOutput::Json(Ok((Value::Null, String::new(), 200)))));
+        assert!(!slot.settle(CallOutput::Aborted));
+        assert!(slot.done.load(Ordering::SeqCst));
+        let output = match slot.output.lock() {
+            Ok(mut guard) => guard.take(),
+            Err(poisoned) => poisoned.into_inner().take(),
+        };
+        assert!(matches!(output, Some(CallOutput::Json(Ok((_, _, 200))))));
+        // Abort first: the completion settle loses and the
+        // aborted output stands.
+        let slot = CallSlot {
+            output: Mutex::new(None),
+            done: AtomicBool::new(false),
+            settled: AtomicBool::new(false),
+        };
+        assert!(slot.settle(CallOutput::Aborted));
+        assert!(!slot.settle(CallOutput::Json(Ok((Value::Null, String::new(), 200)))));
+        assert!(slot.done.load(Ordering::SeqCst));
+        let output = match slot.output.lock() {
+            Ok(mut guard) => guard.take(),
+            Err(poisoned) => poisoned.into_inner().take(),
+        };
+        assert!(matches!(output, Some(CallOutput::Aborted)));
     }
 
     /// One component in the plain form the bindings consume,
