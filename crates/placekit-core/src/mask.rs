@@ -4,6 +4,12 @@
 //! `X-Goog-FieldMask` header. [`FieldMask`] validates paths once and renders
 //! the header value, and ships curated defaults per endpoint so callers who
 //! do not care still get sensible, non-surprising responses.
+//!
+//! A signpost for a Rust reader. [`FieldMask`] is the surface a
+//! Rust consumer uses. The free helper functions in this module
+//! operate on the byte form of paths because they serve the
+//! Python binding's construction checks, and they are binding
+//! plumbing rather than part of the intended Rust surface.
 
 use crate::errors::Error;
 

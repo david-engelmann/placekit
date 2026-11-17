@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import json
 import math
+import os
 import weakref
 from collections.abc import Mapping, Sequence
 from typing import Any, Callable, Iterable, NoReturn, Optional
@@ -540,11 +541,24 @@ _MAX_TIMEOUT_SECONDS = 3600
 class _Base:
     def __init__(
         self,
-        api_key: str,
+        api_key: Optional[str] = None,
         *,
         base_url: Optional[str] = None,
         timeout: Optional[float] = None,
     ) -> None:
+        # A key left unpassed falls back to the environment, so a
+        # caller can keep the key out of source code entirely. The
+        # explicit argument always wins, and a value the variable
+        # supplies goes through the same guarded validation below
+        # as one passed in code. Neither present is a configuration
+        # error naming both routes (audit A50-018).
+        if api_key is None:
+            api_key = os.environ.get("PLACEKIT_API_KEY")
+            if api_key is None:
+                raise ConfigError(
+                    "api_key is required, pass it to the client or set "
+                    "the PLACEKIT_API_KEY environment variable"
+                )
         # Every read of a caller value in this block is guarded.
         # The key is stripped, scanned and case read, and the
         # timeout is converted, compared and rendered into its
@@ -1201,6 +1215,9 @@ class Client(_Base):
     the client at a local stub server. ``timeout`` is per request, in
     seconds, and may be at most 3600; anything else about it (zero,
     negative, non-finite, a boolean, a non-number) is a ``ConfigError``.
+    The key argument may be omitted or passed as None, in which case
+    the client reads the ``PLACEKIT_API_KEY`` environment variable,
+    and construction raises ``ConfigError`` when neither is present.
 
     Concurrency and lifecycle. One client may be shared across
     threads, and calls on it run concurrently, each returning its
@@ -1436,7 +1453,9 @@ class Client(_Base):
         values, raises ``ConfigError`` before any request.
         ``location_bias`` and ``location_restriction`` accept any
         mapping. A ``fields``
-        mask is optional on this endpoint.
+        mask is optional on this endpoint. Unlike the search and
+        details calls it has no curated default, so omitting it
+        sends no field mask and the API default field set governs.
         """
         inner = self._ensure_open("autocomplete")
         self._check_no_running_loop("autocomplete")
@@ -1664,7 +1683,10 @@ class AsyncClient(_Base):
     coroutine object is created, because an async method's body only
     runs on await (A21). A ``ConfigError`` for bad arguments
     therefore surfaces at the ``await``, unlike the sync client,
-    where it surfaces at the call itself.
+    where it surfaces at the call itself. The key argument may be
+    omitted or passed as None, in which case the client reads the
+    ``PLACEKIT_API_KEY`` environment variable, and construction
+    raises ``ConfigError`` when neither is present.
 
     Concurrency and lifecycle. One client may be shared across
     tasks and used from more than one event loop. Cancelling a task
@@ -1900,7 +1922,9 @@ class AsyncClient(_Base):
         values, raises ``ConfigError`` before any request.
         ``location_bias`` and ``location_restriction`` accept any
         mapping. A ``fields``
-        mask is optional on this endpoint.
+        mask is optional on this endpoint. Unlike the search and
+        details calls it has no curated default, so omitting it
+        sends no field mask and the API default field set governs.
         """
         inner = self._ensure_open("autocomplete")
         try:

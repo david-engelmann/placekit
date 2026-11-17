@@ -63,6 +63,8 @@ photo = client.place_photo(details.photos[0], max_width_px=800)
 photo.save("cafe.jpg")
 ```
 
+The key may be omitted from the constructor, in which case the client reads the `PLACEKIT_API_KEY` environment variable, and construction refuses when neither is present.
+
 The search loop prints one line per place. Output recorded from the live API:
 
 ```
@@ -73,7 +75,7 @@ Harbour Espresso 4.4 45 Circular Quay W, The Rocks NSW 2000, Australia
 
 The examples folder runs the search and details calls offline against the recorded responses, so the output above is reproducible without a key.
 
-The photo call downloads the image itself by default. Pass `skip_http_redirect=True` to `place_photo` instead and the call returns a `PhotoUriResult` whose `photo_uri` attribute carries the photo URI, for callers who would rather fetch the image themselves or hand the URI to something else. The size is set with `max_width_px`, with `max_height_px` as the other member of the size pair beside it, and each value runs from 1 to 4800.
+The photo call downloads the image itself by default. Pass `skip_http_redirect=True` to `place_photo` instead and the call returns a `PhotoUriResult` whose `photo_uri` attribute carries the photo URI, for callers who would rather fetch the image themselves or hand the URI to something else. The size is set with `max_width_px`, with `max_height_px` as the other member of the size pair beside it, and each value runs from 1 to 4800. At least one of the pair is required, and a call with neither raises `ConfigError` before any request.
 
 An `AsyncClient` with the identical method set is included for async code.
 

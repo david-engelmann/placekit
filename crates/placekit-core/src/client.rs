@@ -26,6 +26,9 @@ pub const DEFAULT_BASE_URL: &str = "https://places.googleapis.com/v1";
 /// broken or hostile endpoint cannot grow memory without bound.
 pub const DEFAULT_MAX_RESPONSE_BYTES: usize = 32 * 1024 * 1024;
 
+/// Default per-request timeout, ten seconds.
+pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(10);
+
 /// Cap on error response bodies. Error bodies are read only to build
 /// the error message, which is itself capped, so they stop early.
 const ERROR_BODY_CAP: usize = 256 * 1024;
@@ -159,12 +162,15 @@ impl Client {
         ClientBuilder {
             api_key: api_key.into(),
             base_url: DEFAULT_BASE_URL.to_owned(),
-            timeout: Duration::from_secs(10),
+            timeout: DEFAULT_TIMEOUT,
             max_response_bytes: DEFAULT_MAX_RESPONSE_BYTES,
         }
     }
 
     /// Text Search: find places matching a free-form query.
+    ///
+    /// A `None` fields argument sends the curated default mask for
+    /// this endpoint.
     pub async fn text_search(
         &self,
         request: &TextSearchRequest,
@@ -200,6 +206,9 @@ impl Client {
     }
 
     /// Nearby Search: find places around a location.
+    ///
+    /// A `None` fields argument sends the curated default mask for
+    /// this endpoint.
     pub async fn nearby_search(
         &self,
         request: &NearbySearchRequest,
@@ -231,6 +240,9 @@ impl Client {
     }
 
     /// Place Details for a single place id.
+    ///
+    /// A `None` fields argument sends the curated default mask for
+    /// this endpoint.
     pub async fn place_details(
         &self,
         place_id: &str,
@@ -289,7 +301,10 @@ impl Client {
 
     /// Autocomplete: place and query predictions for partial input.
     /// A field mask is optional for this endpoint; when given it is sent
-    /// like on the other endpoints.
+    /// like on the other endpoints. A `None` fields argument sends no
+    /// field mask header at all, unlike the search and details methods,
+    /// which substitute their curated defaults. This endpoint has no
+    /// curated default.
     pub async fn autocomplete(
         &self,
         request: &AutocompleteRequest,
@@ -1747,6 +1762,14 @@ mod tests {
     fn builder_rejects_empty_api_key() {
         assert_eq!(Client::new("  ").unwrap_err().kind(), "config");
         assert_eq!(Client::new("").unwrap_err().kind(), "config");
+    }
+
+    #[test]
+    fn builder_default_timeout_is_the_named_constant() {
+        // Audit A50-030: the ten second default is the named
+        // constant, and the builder carries it untouched.
+        assert_eq!(DEFAULT_TIMEOUT, Duration::from_secs(10));
+        assert_eq!(Client::builder("test-key").timeout, DEFAULT_TIMEOUT);
     }
 
     #[test]

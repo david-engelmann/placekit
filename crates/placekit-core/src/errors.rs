@@ -218,6 +218,15 @@ impl Error {
         }
     }
 
+    /// The `Retry-After` value as a duration, for callers that would
+    /// rather hand it to a sleep than convert it themselves. A stored
+    /// value that cannot be a duration reads as None instead of
+    /// panicking.
+    pub fn retry_after_duration(&self) -> Option<std::time::Duration> {
+        self.retry_after()
+            .and_then(|seconds| std::time::Duration::try_from_secs_f64(seconds).ok())
+    }
+
     /// Attach a parsed `Retry-After` value to an API error. Other
     /// variants have nowhere to carry it and are returned unchanged.
     pub(crate) fn with_retry_after(mut self, retry_after: Option<f64>) -> Error {
@@ -2652,6 +2661,30 @@ mod tests {
         assert_eq!(err.retry_after(), Some(7.0));
         let err = Error::from_response(429, "");
         assert_eq!(err.retry_after(), None);
+    }
+
+    #[test]
+    fn retry_after_duration_converts_the_stored_seconds() {
+        // Audit A50-026: the duration form of the same stored value.
+        let err = Error::from_response(429, "").with_retry_after(Some(2.5));
+        assert_eq!(
+            err.retry_after_duration(),
+            Some(std::time::Duration::from_millis(2500))
+        );
+        let err = Error::from_response(429, "");
+        assert_eq!(err.retry_after_duration(), None);
+        // A variant with nowhere to carry the value reads as None.
+        let err = Error::config("bad");
+        assert_eq!(err.retry_after_duration(), None);
+        // A stored value that cannot be a duration reads as None
+        // rather than panicking, whatever seated it.
+        let err = Error::from_response(429, "").with_retry_after(Some(-1.0));
+        assert_eq!(err.retry_after_duration(), None);
+        let err = Error::from_response(429, "").with_retry_after(Some(f64::NAN));
+        assert_eq!(err.retry_after_duration(), None);
+        // Zero is a real duration, not an absence.
+        let err = Error::from_response(429, "").with_retry_after(Some(0.0));
+        assert_eq!(err.retry_after_duration(), Some(std::time::Duration::ZERO));
     }
 
     #[test]

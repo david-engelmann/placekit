@@ -18,7 +18,7 @@ from .models import (
 class Client:
     def __init__(
         self,
-        api_key: str,
+        api_key: Optional[str] = ...,
         *,
         base_url: Optional[str] = ...,
         timeout: Optional[float] = ...,
@@ -113,7 +113,7 @@ class Client:
 class AsyncClient:
     def __init__(
         self,
-        api_key: str,
+        api_key: Optional[str] = ...,
         *,
         base_url: Optional[str] = ...,
         timeout: Optional[float] = ...,

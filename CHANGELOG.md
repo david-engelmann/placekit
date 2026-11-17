@@ -4,9 +4,15 @@ All notable changes to placekit are recorded here. The format follows Keep a Cha
 
 ## [Unreleased]
 
+### Added
+
+- Four additions to the Rust core surface. `WireString` and `WireList` gain `is_null` and `is_absent` accessors with the names and semantics `WireFloat` already carried. `NearbySearchRequest` gains a `new` constructor carrying only its location restriction. The core `Error` gains `retry_after_duration`, the stored `Retry-After` value as a `Duration`. The builder's ten second default timeout is now the named public constant `DEFAULT_TIMEOUT` beside `DEFAULT_BASE_URL` and `DEFAULT_MAX_RESPONSE_BYTES`.
+
 ### Changed
 
+- **Breaking.** The client constructors take the API key as an optional argument and read the `PLACEKIT_API_KEY` environment variable when no key is passed. The explicit argument always wins, a value the variable supplies is validated on the same terms as one passed in code, and construction raises `ConfigError` naming both routes when neither is present. Callers who constructed a client with no argument and caught the `TypeError` for the missing argument, or who passed None explicitly and caught its `ConfigError`, now get the environment-backed construction or the new refusal instead. Passing a key in code behaves exactly as before.
 - **Breaking.** The direct model decoders refuse a string or bytes value in a numeric slot instead of converting it. A rating sent as "4.5" or a count sent as "42" through `from_api` now raises `DecodeError`, matching the refusal the string and boolean decoders already gave wrong types. The money units keep accepting their wire form, a JSON string holding an integer, through a dedicated decoder that refuses any other string shape and values outside the int64 range. Callers who fed numeric strings into `from_api` and relied on the silent conversion must send numbers.
+- The Endpoints reference now names the `language` and `rank_preference` parameters, describes Nearby Search's positional location and radius arguments, names the `PhotoMedia` content attributes and the photo size requirement, and names the models' public `from_api` decoders. The Errors reference now states that every `PlacesError` carries a `kind` string and that `ConfigError` is also a `ValueError`. Both client surfaces and the Endpoints reference now state that autocomplete has no curated field mask default, where the search and details calls substitute theirs.
 
 ### Fixed
 

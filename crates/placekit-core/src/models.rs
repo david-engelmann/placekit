@@ -346,6 +346,26 @@ pub struct NearbySearchRequest {
     pub include_future_opening_businesses: Option<bool>,
 }
 
+impl NearbySearchRequest {
+    /// A request carrying only its location restriction, with every
+    /// optional field absent, as request code constructs it.
+    pub fn new(location_restriction: LocationRestriction) -> Self {
+        Self {
+            location_restriction,
+            included_types: None,
+            excluded_types: None,
+            included_primary_types: None,
+            excluded_primary_types: None,
+            max_result_count: None,
+            language_code: None,
+            region_code: None,
+            rank_preference: None,
+            routing_parameters: None,
+            include_future_opening_businesses: None,
+        }
+    }
+}
+
 /// Body of a `places:autocomplete` request.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -421,6 +441,16 @@ impl WireString {
     /// which covers absence, an explicit null and an empty string.
     pub fn is_empty(&self) -> bool {
         self.as_str().is_empty()
+    }
+
+    /// True when the wire carried an explicit null.
+    pub fn is_null(&self) -> bool {
+        matches!(self.0, Some(None))
+    }
+
+    /// True when the wire carried no value at all for this field.
+    pub fn is_absent(&self) -> bool {
+        self.0.is_none()
     }
 }
 
@@ -662,6 +692,16 @@ impl<T> WireList<T> {
             Some(Some(items)) => items,
             _ => &[],
         }
+    }
+
+    /// True when the wire carried an explicit null.
+    pub fn is_null(&self) -> bool {
+        matches!(self.0, Some(None))
+    }
+
+    /// True when the wire carried no value at all for this field.
+    pub fn is_absent(&self) -> bool {
+        self.0.is_none()
     }
 }
 
@@ -1480,6 +1520,70 @@ mod tests {
         assert_eq!(
             serde_json::to_value(&point).unwrap(),
             serde_json::json!({"latitude": 0.0, "longitude": 0.0})
+        );
+    }
+
+    #[test]
+    fn wire_string_and_list_report_null_and_absent() {
+        // Audit A50-021: WireString and WireList carry the same
+        // presence accessors WireFloat has always carried, with the
+        // same names and the same three state semantics.
+        let absent = WireString::default();
+        assert!(absent.is_absent());
+        assert!(!absent.is_null());
+        let null: WireString = serde_json::from_str("null").unwrap();
+        assert!(null.is_null());
+        assert!(!null.is_absent());
+        let sent: WireString = serde_json::from_str("\"cafe\"").unwrap();
+        assert!(!sent.is_null());
+        assert!(!sent.is_absent());
+
+        let absent = WireList::<String>::default();
+        assert!(absent.is_absent());
+        assert!(!absent.is_null());
+        let null: WireList<String> = serde_json::from_str("null").unwrap();
+        assert!(null.is_null());
+        assert!(!null.is_absent());
+        let sent: WireList<String> = serde_json::from_str("[\"cafe\"]").unwrap();
+        assert!(!sent.is_null());
+        assert!(!sent.is_absent());
+    }
+
+    #[test]
+    fn nearby_search_request_new_carries_only_the_restriction() {
+        // Audit A50-022: the constructor sets the one required field
+        // and leaves every optional field absent, so the serialized
+        // body carries only the restriction.
+        let request = NearbySearchRequest::new(LocationRestriction {
+            circle: Circle {
+                center: LatLng::new(1.0, 2.0),
+                radius: 500.0,
+            },
+        });
+        // The optional fields are absent, not empty. The skip
+        // guards treat an empty vector as absent on the wire, so
+        // the serialized body alone cannot tell the two apart.
+        assert!(request.included_types.is_none());
+        assert!(request.excluded_types.is_none());
+        assert!(request.included_primary_types.is_none());
+        assert!(request.excluded_primary_types.is_none());
+        assert!(request.max_result_count.is_none());
+        assert!(request.language_code.is_none());
+        assert!(request.region_code.is_none());
+        assert!(request.rank_preference.is_none());
+        assert!(request.routing_parameters.is_none());
+        assert!(request.include_future_opening_businesses.is_none());
+        let value = serde_json::to_value(&request).unwrap();
+        assert_eq!(
+            value,
+            serde_json::json!({
+                "locationRestriction": {
+                    "circle": {
+                        "center": {"latitude": 1.0, "longitude": 2.0},
+                        "radius": 500.0
+                    }
+                }
+            })
         );
     }
 

@@ -13,7 +13,7 @@ pub mod mask;
 pub mod models;
 
 pub use address::ComponentData;
-pub use client::{Client, ClientBuilder, DEFAULT_BASE_URL};
+pub use client::{Client, ClientBuilder, DEFAULT_BASE_URL, DEFAULT_TIMEOUT};
 pub use errors::Error;
 pub use mask::FieldMask;
 

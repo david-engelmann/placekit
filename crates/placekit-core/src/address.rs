@@ -22,6 +22,13 @@
 //! unchanged, the way Python's own upper leaves a lone
 //! surrogate unchanged.
 //!
+//! A signpost for a Rust reader. This module's public surface
+//! speaks the binding's byte dialect throughout, because its
+//! one consumer today is the Python binding and the readings
+//! exist to serve `placekit.address`. It is binding plumbing,
+//! not a designed Rust address API, and a Rust consumer surface
+//! would present the same readings over ordinary strings.
+//!
 //! The readings mirror the Python module's stated rules. Which
 //! carrier holds the city changes by country, and in two
 //! recorded countries the carriers disagree on the same place,

@@ -12,10 +12,10 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 
 import pytest
 
-from placekit import PlacesError
+from placekit import AsyncClient, Client, PlacesError
 from placekit._placekit import Client as NativeClient
 from placekit._placekit import PlacesError as NativePlacesError
-from placekit.exceptions import DecodeError
+from placekit.exceptions import ConfigError, DecodeError
 from placekit.models import Money, Photo, Place
 
 
@@ -146,3 +146,59 @@ class TestAbortSettlesTheHandle:
         finally:
             server.shutdown()
             thread.join(timeout=5)
+
+
+class TestEnvironmentKeyFallback:
+    """A50-018: a client constructed without a key reads the
+    PLACEKIT_API_KEY environment variable, the explicit argument
+    always wins, and neither present is a ConfigError naming both
+    routes. A value the variable supplies is validated on the same
+    terms as one passed in code."""
+
+    def test_environment_key_is_used_when_no_argument(self, monkeypatch):
+        monkeypatch.setenv("PLACEKIT_API_KEY", "env-key")
+        client = Client()
+        client.close()
+
+    def test_explicit_key_wins_over_the_environment(self, monkeypatch):
+        # The variable holds a value construction would refuse, so
+        # a successful construction proves the explicit key was the
+        # one read.
+        monkeypatch.setenv("PLACEKIT_API_KEY", "not a valid key")
+        client = Client("explicit-key")
+        client.close()
+
+    def test_explicit_key_is_the_one_sent_when_both_are_valid(
+        self, monkeypatch, stub_server, base_url
+    ):
+        # With both keys valid, the wire itself shows which one the
+        # client carries.
+        monkeypatch.setenv("PLACEKIT_API_KEY", "env-key")
+        client = Client("explicit-key", base_url=base_url)
+        try:
+            client.text_search("cafes in Sydney")
+        finally:
+            client.close()
+        headers = stub_server.last_request["headers"]
+        sent = next(
+            value
+            for key, value in headers.items()
+            if key.lower() == "x-goog-api-key"
+        )
+        assert sent == "explicit-key"
+
+    def test_environment_value_is_validated_like_an_argument(self, monkeypatch):
+        monkeypatch.setenv("PLACEKIT_API_KEY", "not a valid key")
+        with pytest.raises(ConfigError):
+            Client()
+
+    def test_neither_present_refuses_and_names_both_routes(self, monkeypatch):
+        monkeypatch.delenv("PLACEKIT_API_KEY", raising=False)
+        with pytest.raises(ConfigError) as caught:
+            Client()
+        assert "PLACEKIT_API_KEY" in str(caught.value)
+
+    def test_async_client_reads_the_environment_too(self, monkeypatch):
+        monkeypatch.setenv("PLACEKIT_API_KEY", "env-key")
+        client = AsyncClient()
+        client.close()
