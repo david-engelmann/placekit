@@ -91,16 +91,16 @@ fn field_violation_pair(violation: &serde_json::Value) -> Option<(&str, &str)> {
 pub enum Error {
     /// The API key was rejected or lacks permission (HTTP 401/403,
     /// `UNAUTHENTICATED`, `PERMISSION_DENIED`).
-    Auth { parts: ApiError },
+    Auth { parts: Box<ApiError> },
     /// Quota exhausted or rate limit hit (HTTP 429, `RESOURCE_EXHAUSTED`).
-    RateLimit { parts: ApiError },
+    RateLimit { parts: Box<ApiError> },
     /// The requested resource does not exist (HTTP 404, `NOT_FOUND`).
-    NotFound { parts: ApiError },
+    NotFound { parts: Box<ApiError> },
     /// The request itself was malformed (HTTP 400, `INVALID_ARGUMENT`,
     /// `FAILED_PRECONDITION` or `OUT_OF_RANGE`).
-    InvalidRequest { parts: ApiError },
+    InvalidRequest { parts: Box<ApiError> },
     /// Any other error response from the API.
-    Api { parts: ApiError },
+    Api { parts: Box<ApiError> },
     /// The request never produced an HTTP response (DNS, connect, TLS,
     /// timeout, or a dropped connection).
     Network {
@@ -218,7 +218,7 @@ impl Error {
             | Error::RateLimit { parts }
             | Error::NotFound { parts }
             | Error::InvalidRequest { parts }
-            | Error::Api { parts } => Some(parts),
+            | Error::Api { parts } => Some(parts.as_ref()),
             _ => None,
         }
     }
@@ -232,7 +232,7 @@ impl Error {
             | Error::RateLimit { parts }
             | Error::NotFound { parts }
             | Error::InvalidRequest { parts }
-            | Error::Api { parts } => Some(parts),
+            | Error::Api { parts } => Some(parts.as_mut()),
             _ => None,
         }
     }
@@ -661,22 +661,40 @@ impl Error {
             server_message,
         };
         match parts.google_status.as_str() {
-            "UNAUTHENTICATED" | "PERMISSION_DENIED" => Error::Auth { parts },
-            "RESOURCE_EXHAUSTED" => Error::RateLimit { parts },
-            "NOT_FOUND" => Error::NotFound { parts },
-            "INVALID_ARGUMENT" | "FAILED_PRECONDITION" | "OUT_OF_RANGE" => {
-                Error::InvalidRequest { parts }
-            }
+            "UNAUTHENTICATED" | "PERMISSION_DENIED" => Error::Auth {
+                parts: Box::new(parts),
+            },
+            "RESOURCE_EXHAUSTED" => Error::RateLimit {
+                parts: Box::new(parts),
+            },
+            "NOT_FOUND" => Error::NotFound {
+                parts: Box::new(parts),
+            },
+            "INVALID_ARGUMENT" | "FAILED_PRECONDITION" | "OUT_OF_RANGE" => Error::InvalidRequest {
+                parts: Box::new(parts),
+            },
             // A canonical server side status classifies as a plain API
             // error whatever the HTTP code says; it must never fall
             // through to the client side HTTP classes below.
-            "UNAVAILABLE" | "INTERNAL" | "DEADLINE_EXCEEDED" => Error::Api { parts },
+            "UNAVAILABLE" | "INTERNAL" | "DEADLINE_EXCEEDED" => Error::Api {
+                parts: Box::new(parts),
+            },
             _ => match class_status {
-                401 | 403 => Error::Auth { parts },
-                429 => Error::RateLimit { parts },
-                404 => Error::NotFound { parts },
-                400 => Error::InvalidRequest { parts },
-                _ => Error::Api { parts },
+                401 | 403 => Error::Auth {
+                    parts: Box::new(parts),
+                },
+                429 => Error::RateLimit {
+                    parts: Box::new(parts),
+                },
+                404 => Error::NotFound {
+                    parts: Box::new(parts),
+                },
+                400 => Error::InvalidRequest {
+                    parts: Box::new(parts),
+                },
+                _ => Error::Api {
+                    parts: Box::new(parts),
+                },
             },
         }
     }
