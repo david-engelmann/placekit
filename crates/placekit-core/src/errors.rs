@@ -105,8 +105,8 @@ pub enum Error {
     InvalidRequest(ApiError),
     /// Any other error response from the API.
     #[error(
-        "places API error (HTTP {0.status}{}): {0.message}",
-        google_status_segment(&0.google_status)
+        "places API error (HTTP {0.status}{segment}): {0.message}",
+        segment = google_status_segment(&0.google_status)
     )]
     Api(ApiError),
     /// The request never produced an HTTP response (DNS, connect, TLS,
