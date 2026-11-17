@@ -7,11 +7,13 @@ team Minor 2: constructor validation reads no caller value bare,
 including the reads inside its own refusal messages. Caller Minor
 3 with red team Minor 1: FieldMask member validation is guarded,
 and normalize_fields judges a mask instance's state defensively,
-refusing fabricated masks at the Python layer. Decoder Minors F1
-to F4: the head scan's last wins rule is complete, a malformed
-head field costs that field only, an unclosed sibling container
-does not swallow the envelope, and gzip decoding no longer
-depends on the encoding header token's case or list position.
+refusing fabricated masks at the Python layer. Decoder Minor
+F4: gzip decoding no longer depends on the encoding header
+token's case or list position. Decoder Minors F1 to F3, the
+head scan's last wins rule, a malformed head field costing
+that field only, and an unclosed sibling container not
+swallowing the envelope, are pinned in test_round25.py, not
+in this file (audit round 6, A50-062).
 """
 
 from __future__ import annotations
@@ -103,11 +105,6 @@ class FloatSecondReturnsStrInt(int):
         if self.calls >= 2:
             return "not-a-number"  # type: ignore[return-value]
         return 5.0
-
-
-@pytest.fixture()
-def client(api_key, base_url) -> Client:
-    return Client(api_key, base_url=base_url)
 
 
 # --- Caller Minor 1: the free text check inside the guarded phase

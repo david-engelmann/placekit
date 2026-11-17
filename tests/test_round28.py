@@ -16,13 +16,8 @@ import json
 
 import pytest
 
-from placekit import Client
+from conftest import nested as _nested
 from placekit.exceptions import ApiError, InvalidRequestError
-
-
-@pytest.fixture()
-def client(api_key, base_url) -> Client:
-    return Client(api_key, base_url=base_url)
 
 
 def _envelope(status_text: str, code: int = 400, details=None) -> str:
@@ -30,13 +25,6 @@ def _envelope(status_text: str, code: int = 400, details=None) -> str:
     if details is not None:
         error["details"] = details
     return json.dumps({"error": error})
-
-
-def _nested(depth: int):
-    value = "x"
-    for _ in range(depth):
-        value = [value]
-    return value
 
 
 def test_status_at_the_cap_is_kept_whole(client, raw_response):

@@ -4,7 +4,7 @@
 // helpers read, so the core tests pin the same readings the
 // Python suite pins in tests/test_address.py.
 
-// Two fields of the postal record are never read by the core
+// Three fields of the postal record are never read by the core
 // tests. They stay because the record mirrors the decoded
 // Python postal address in full, and dropping them would
 // make the generated data lossy.
@@ -38,13 +38,6 @@ impl FixturePlace {
             .and_then(|postal| postal.locality)
             .filter(|value| !value.is_empty())
     }
-
-    pub(crate) fn postal_sublocality(&self) -> Option<&str> {
-        self.postal
-            .as_ref()
-            .and_then(|postal| postal.sublocality)
-            .filter(|value| !value.is_empty())
-    }
 }
 
 pub(crate) fn a8_tokyo_english() -> FixturePlace {
@@ -69,6 +62,15 @@ pub(crate) fn a8_tokyo_english() -> FixturePlace {
     }
 }
 
+// The same recorded place as a5_sublocality_chains below, in
+// its Japanese text form. The corpus fixtures prove the three
+// Japanese-text fixtures in this file carry one recorded place
+// (the address components and postal address of
+// recorded_A5_sublocality_chains.json,
+// recorded_A6_japanese_block_addressing.json and
+// recorded_A8_tokyo_japanese.json are identical), and the A8
+// corpus case pairs this body with a8_tokyo_english above, the
+// same place in English (audit round 6, A50-106).
 pub(crate) fn a8_tokyo_japanese() -> FixturePlace {
     FixturePlace {
         components: vec![

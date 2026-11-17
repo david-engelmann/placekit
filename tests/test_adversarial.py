@@ -26,7 +26,8 @@ from pathlib import Path
 
 import pytest
 
-from placekit import AsyncClient, Client
+from conftest import serve_details as _serve_details
+from placekit import AsyncClient
 from placekit.exceptions import ConfigError, DecodeError
 from placekit.fields import MAX_MATERIALIZED_ITEMS, FieldMask
 from placekit.models import (
@@ -44,17 +45,6 @@ FIXTURES = Path(__file__).parent / "fixtures"
 PHOTO_FIXTURE = FIXTURES / "photo.png"
 PLACE_ID = "ChIJrTLr-GyuEmsRBfy61i59si0"
 PHOTO_NAME = f"places/{PLACE_ID}/photos/ATJ83zh8vExample"
-
-
-@pytest.fixture()
-def client(api_key, base_url) -> Client:
-    return Client(api_key, base_url=base_url)
-
-
-def _serve_details(raw_response, mutate):
-    data = json.loads((FIXTURES / "place_details.json").read_bytes())
-    mutate(data)
-    raw_response(200, json.dumps(data).encode())
 
 
 # Caller lane: bounded materialisation (R20-F01 and F02).

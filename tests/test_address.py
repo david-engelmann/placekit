@@ -118,6 +118,10 @@ def test_bare_sublocality_chain_trap():
     place = recorded_place("recorded_A5_sublocality_chains.json")
     matches = address.find_components(place.address_components, "sublocality")
     assert [component.long_text for component in matches] == ["６", "２丁目", "浅草"]
+    # A50-111: this chain carries a premise and no subpremise, so
+    # the presence twins read differently on the same list.
+    assert address.has_premise(place.address_components) is True
+    assert address.has_subpremise(place.address_components) is False
     first = address.find_component(place.address_components, "sublocality")
     assert first is not None
     assert first.long_text == "６"
@@ -142,6 +146,7 @@ def test_jp_premise_duplication_shape():
     components = place.address_components
     assert len(address.find_components(components, "subpremise")) == 1
     assert address.has_premise(components) is True
+    assert address.has_subpremise(components) is True
     assert address.is_premise_level(place) is True
     assert components[0].types == []
     untyped = address.untyped_components(components)

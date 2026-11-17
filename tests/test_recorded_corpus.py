@@ -29,16 +29,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-import pytest
-
-from placekit import Client
-
 RECORDED = Path(__file__).parent / "fixtures" / "recorded"
-
-
-@pytest.fixture()
-def client(api_key, base_url) -> Client:
-    return Client(api_key, base_url=base_url)
 
 
 def fixture_bytes(name: str) -> bytes:

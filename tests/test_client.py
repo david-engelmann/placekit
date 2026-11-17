@@ -16,6 +16,7 @@ import pytest
 
 PHOTO_FIXTURE = Path(__file__).parent / "fixtures" / "photo.png"
 
+from conftest import header, serve_details as _serve_details
 from placekit import (
     AsyncClient,
     Client,
@@ -31,6 +32,7 @@ from placekit.exceptions import (
     NetworkError,
     NotFoundError,
     PlacesError,
+    QuotaError,
     RateLimitError,
 )
 from placekit.models import (
@@ -73,19 +75,6 @@ from placekit.models import (
     TimeZone,
     Viewport,
 )
-
-
-@pytest.fixture()
-def client(api_key, base_url) -> Client:
-    return Client(api_key, base_url=base_url)
-
-
-def header(stub_server, name: str) -> str | None:
-    headers = stub_server.last_request["headers"]
-    for key, value in headers.items():
-        if key.lower() == name.lower():
-            return value
-    return None
 
 
 # ---------------------------------------------------------------------------
@@ -656,12 +645,11 @@ def test_absent_and_explicit_null_read_the_same_but_raw_knows(
 
 
 def test_explicit_null_stays_in_raw_at_the_model_layer():
-    # D3: the model layer half of the raw membership claim holds
-    # today and is pinned green here. A payload carrying
-    # websiteUri as an explicit null decodes with website_uri
-    # reading None and the wire name present in raw. Through
-    # the client the key is lost, which is what the strict
-    # xfail above records.
+    # D3: the model layer half of the raw membership claim. A
+    # payload carrying websiteUri as an explicit null decodes
+    # with website_uri reading None and the wire name present
+    # in raw. The client half of the same claim stands in the
+    # test above, green since Round 16.
     place = Place.from_api({"id": "ChIJx", "websiteUri": None})
     assert place.website_uri is None
     assert "websiteUri" in place.raw
@@ -1328,6 +1316,9 @@ def test_error_carries_all_documented_attributes(client, raw_response):
         "details",
         "field_violations",
         "quota_violations",
+        "server_message",
+        "field_violation_entries",
+        "quota_violation_entries",
     ):
         assert hasattr(err, attr), attr
     assert err.kind == "not_found"
@@ -1336,6 +1327,99 @@ def test_error_carries_all_documented_attributes(client, raw_response):
     # and copied across: the envelope code, the Google status.
     assert err.error_code == 404
     assert err.google_status == "NOT_FOUND"
+
+
+def test_quota_error_is_the_rate_limit_class():
+    # A50-112: QuotaError is exported as the quota-flavoured
+    # name for the rate limit class. The identity is the whole
+    # contract, because a caller catching QuotaError must catch
+    # exactly the errors the quota path raises.
+    assert QuotaError is RateLimitError
+
+
+# A50-089: the documented attribute set, written out in full as
+# this test's own oracle. Every error a caller can catch carries
+# exactly these instance attributes, no more and no fewer,
+# whatever its kind. The set is stated here rather than read
+# from the class, so a Python seat that stops setting one, or
+# starts setting an undocumented extra, fails here. A native
+# seat that stops attaching one degrades its value to the
+# default instead, and the values themselves are pinned in
+# test_audit50.py.
+TRANSLATED_ATTRIBUTES = {
+    "message",
+    "status_code",
+    "google_status",
+    "error_code",
+    "details",
+    "field_violations",
+    "quota_violations",
+    "field_violation_entries",
+    "quota_violation_entries",
+    "status_mismatch",
+    "retryable",
+    "retry_after",
+    "server_message",
+    "context",
+}
+
+
+def test_translated_attribute_set_is_complete_for_every_kind(
+    client, raw_response, api_key
+):
+    def check(err, kind):
+        assert err.kind == kind
+        assert set(vars(err)) == TRANSLATED_ATTRIBUTES, kind
+
+    raw_response(401, fixture_bytes("error_unauthenticated.json"))
+    with pytest.raises(AuthenticationError) as excinfo:
+        client.place_details("ChIJrTLr-GyuEmsRBfy61i59si0")
+    check(excinfo.value, "auth")
+
+    raw_response(429, fixture_bytes("error_quota.json"))
+    with pytest.raises(RateLimitError) as excinfo:
+        client.place_details("ChIJrTLr-GyuEmsRBfy61i59si0")
+    check(excinfo.value, "rate_limit")
+
+    raw_response(404, fixture_bytes("error_not_found.json"))
+    with pytest.raises(NotFoundError) as excinfo:
+        client.place_details("ChIJrTLr-GyuEmsRBfy61i59si0")
+    check(excinfo.value, "not_found")
+
+    raw_response(400, fixture_bytes("error_invalid.json"))
+    with pytest.raises(InvalidRequestError) as excinfo:
+        client.place_details("ChIJrTLr-GyuEmsRBfy61i59si0")
+    check(excinfo.value, "invalid_request")
+
+    raw_response(
+        500,
+        json.dumps(
+            {
+                "error": {
+                    "code": 500,
+                    "message": "boom",
+                    "status": "INTERNAL",
+                }
+            }
+        ).encode(),
+    )
+    with pytest.raises(ApiError) as excinfo:
+        client.place_details("ChIJrTLr-GyuEmsRBfy61i59si0")
+    check(excinfo.value, "api")
+
+    raw_response(200, b'{"places": [{"id": "ChIJ1", "displayName": {"text": "Cut')
+    with pytest.raises(DecodeError) as excinfo:
+        client.text_search("cafes")
+    check(excinfo.value, "decode")
+
+    dead = Client(api_key, base_url="http://127.0.0.1:9/v1", timeout=2.0)
+    with pytest.raises(NetworkError) as excinfo:
+        dead.text_search("cafes")
+    check(excinfo.value, "network")
+
+    with pytest.raises(ConfigError) as excinfo:
+        Client("bad\nkey", base_url="http://127.0.0.1:9/v1")
+    check(excinfo.value, "config")
 
 
 def test_header_unfriendly_api_key_is_config_error(base_url):
@@ -3374,12 +3458,6 @@ def test_string_match_explicit_zero_start_offset_survives():
 # test_photo_uri_unmodelled_null_key_stays_in_raw below, and the
 # core guard pin in the Rust suite that keeps request bodies byte
 # identical.
-
-
-def _serve_details(raw_response, mutate):
-    data = json.loads(fixture_bytes("place_details.json"))
-    mutate(data)
-    raw_response(200, json.dumps(data).encode())
 
 
 def test_empty_types_list_keeps_its_key_in_raw(client, raw_response):
