@@ -16,13 +16,8 @@ import json
 
 import pytest
 
-from placekit import AsyncClient, Client
+from placekit import AsyncClient
 from placekit.exceptions import ApiError, DecodeError
-
-
-@pytest.fixture()
-def client(api_key, base_url) -> Client:
-    return Client(api_key, base_url=base_url)
 
 
 def _details_body(**place_fields) -> bytes:

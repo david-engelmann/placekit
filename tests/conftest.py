@@ -35,6 +35,9 @@ from urllib.parse import parse_qs, urlparse
 
 import pytest
 
+from placekit import Client
+from placekit.exceptions import InvalidRequestError
+
 FIXTURES = Path(__file__).parent / "fixtures"
 
 #: Photo URI the stub reports in its skipHttpRedirect JSON form. It points
@@ -345,3 +348,60 @@ def base_url(stub_server) -> str:
 @pytest.fixture()
 def api_key() -> str:
     return "test-api-key"
+
+
+@pytest.fixture()
+def client(api_key, base_url) -> Client:
+    return Client(api_key, base_url=base_url)
+
+
+# Shared test helpers, given one home in audit round 6
+# (A50-054 and A50-116). Each of these stood written out in two
+# or more test modules, where the copies could drift without
+# any test noticing. Modules import them from here by name.
+
+
+def header(stub_server, name: str) -> str | None:
+    """The recorded request header called ``name``, or None."""
+    headers = stub_server.last_request["headers"]
+    for key, value in headers.items():
+        if key.lower() == name.lower():
+            return value
+    return None
+
+
+def serve_details(raw_response, mutate) -> None:
+    """Serve the details fixture with ``mutate`` applied to it."""
+    data = json.loads(load_fixture("place_details.json"))
+    mutate(data)
+    raw_response(200, json.dumps(data).encode())
+
+
+def envelope(details, code=400, status_text="INVALID_ARGUMENT", message="fv probe"):
+    """A Google error envelope body carrying ``details``."""
+    return json.dumps(
+        {
+            "error": {
+                "code": code,
+                "message": message,
+                "status": status_text,
+                "details": details,
+            }
+        }
+    )
+
+
+def raised(client, raw_response, body, http_status=400, exc_type=InvalidRequestError, headers=None):
+    """Drive one text search against a raw body and return the error."""
+    raw_response(http_status, body, headers=headers)
+    with pytest.raises(exc_type) as excinfo:
+        client.text_search("anything")
+    return excinfo.value
+
+
+def nested(depth: int):
+    """A list nested ``depth`` levels deep around one string."""
+    value = "x"
+    for _ in range(depth):
+        value = [value]
+    return value

@@ -378,11 +378,6 @@ def _reader_text(readme):
     return re.sub(r"\x00(\d+)\x00", restore, text)
 
 
-@pytest.fixture()
-def client(api_key, base_url) -> Client:
-    return Client(api_key, base_url=base_url)
-
-
 def _keyword_names(cls, method_name):
     parameters = inspect.signature(getattr(cls, method_name)).parameters
     return {

@@ -16,16 +16,9 @@ from pathlib import Path
 
 import pytest
 
-from placekit import Client
-
 FIXTURES = Path(__file__).parent / "fixtures"
 SYNTHESIZED = FIXTURES / "synthesized"
 RECORDED = FIXTURES / "recorded"
-
-
-@pytest.fixture()
-def client(api_key, base_url) -> Client:
-    return Client(api_key, base_url=base_url)
 
 
 class EnvelopeError(ValueError):

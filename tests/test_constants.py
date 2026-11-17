@@ -10,16 +10,83 @@ dropped, doubled or mistyped by a later edit fails here.
 from __future__ import annotations
 
 import json
-
-import pytest
+import re
+from pathlib import Path
 
 import placekit
-from placekit import Client, address, lang, ranking, types
+from placekit import address, lang, ranking, types
 
 
-@pytest.fixture()
-def client(api_key, base_url) -> Client:
-    return Client(api_key, base_url=base_url)
+def _source_assignments(module) -> list[tuple[str, str, str | None]]:
+    """The module's constant assignments, read from its source.
+
+    Returns (name, value, section) triples in file order, where
+    section is the standing comment heading above the assignment
+    (for example "Table A, Automotive") or None. The vocabulary
+    modules are written one assignment per line, and the counts
+    asserted by the caller make a format change fail loudly here
+    rather than pass silently.
+    """
+    assignment = re.compile(r'^([A-Z][A-Z0-9_]*) = "([^"]*)"$')
+    rows = []
+    section = None
+    for line in Path(module.__file__).read_text(encoding="utf-8").splitlines():
+        if line.startswith("# "):
+            section = line[2:].strip()
+            continue
+        match = assignment.match(line)
+        if match:
+            rows.append((match.group(1), match.group(2), section))
+    return rows
+
+
+def test_vocabulary_tables_agree_with_the_definitions():
+    # A50-084: every vocabulary constant is written three times,
+    # as a definition under a section heading, as a name inside a
+    # table set literal, and as a name in __all__. The counts and
+    # union pins below compare the writings in bulk, so a name
+    # moved between the two type tables, or defined under one
+    # heading and listed in the other table, passes them. This
+    # pin derives each table from the definitions and their
+    # section headings, the one writing no other pin reads, and
+    # compares table for table. A value's own truth still rests
+    # on the source tables the counts pin cites. No internal pin
+    # can prove a definition's value, only that the three
+    # writings of it agree.
+    rows = _source_assignments(types)
+    derived = {"A": set(), "B": set(), "AC": set()}
+    defined_names = set()
+    for name, value, section in rows:
+        if not name.startswith("TYPE_"):
+            continue
+        defined_names.add(name)
+        if section is not None and section.startswith("Table A"):
+            derived["A"].add(value)
+        elif section == "Table B":
+            derived["B"].add(value)
+        elif section is not None and section.startswith(
+            "Address component only"
+        ):
+            derived["AC"].add(value)
+        else:
+            raise AssertionError(f"{name} stands under no table heading")
+    assert len(derived["A"]) == 478
+    assert len(derived["B"]) == 36
+    assert len(derived["AC"]) == 4
+    assert derived["A"] == types.TABLE_A_TYPES
+    assert derived["B"] == types.TABLE_B_TYPES
+    assert derived["AC"] == types.ADDRESS_COMPONENT_TYPES
+    assert defined_names == {
+        name for name in types.__all__ if name.startswith("TYPE_")
+    }
+
+    lang_rows = _source_assignments(lang)
+    lang_defined = {
+        name: value for name, value, _ in lang_rows if name != "ALL_CODES"
+    }
+    assert len(lang_defined) == 82
+    assert set(lang_defined) == set(lang.__all__) - {"ALL_CODES"}
+    assert set(lang_defined.values()) == lang.ALL_CODES
 
 
 def test_constants_counts():

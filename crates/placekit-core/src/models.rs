@@ -1463,12 +1463,11 @@ mod tests {
             "zzUnmodelled".to_owned(),
             serde_json::json!({"text": "unmodelled"}),
         );
-        let mut place: Place = serde_json::from_value(payload).unwrap();
+        let place: Place = serde_json::from_value(payload).unwrap();
         assert!(place.extra.contains_key("zzUnmodelled"));
         // And it survives a re-serialization round trip.
         let value = serde_json::to_value(&place).unwrap();
         assert!(value.get("zzUnmodelled").is_some());
-        place.extra.clear();
     }
 
     #[test]
