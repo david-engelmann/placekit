@@ -148,6 +148,7 @@ class Client:
         api_key: str,
         base_url: Optional[str] = ...,
         timeout: Optional[float] = ...,
+        max_response_bytes: Optional[int] = ...,
     ) -> "Client": ...
     def text_search(
         self, body: dict[str, Any], fields: Optional[list[str]] = ...

@@ -12,6 +12,7 @@ import asyncio
 import json
 import math
 import os
+import struct
 import weakref
 from collections.abc import Mapping, Sequence
 from typing import Any, Callable, Iterable, NoReturn, Optional
@@ -233,7 +234,14 @@ def _validate_coordinate(name: str, value: Any, low: float, high: float) -> floa
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         rendered, detonation = _guarded_repr(value)
         _refuse(f"{name} must be an int or float, got {rendered}", detonation)
-    result = float(value)
+    try:
+        result = float(value)
+    except OverflowError:
+        # A huge int passes the type gate and cannot convert;
+        # the finite check below refuses it with this seat's
+        # message instead of the builtin escaping (audit
+        # A50-133).
+        result = math.inf
     if not math.isfinite(result) or not low <= result <= high:
         rendered, detonation = _guarded_repr(value)
         _refuse(
@@ -294,27 +302,39 @@ def _validate_lat_lng(
     }
 
 
-def _point(value: LatLng | tuple[float, float]) -> dict[str, float]:
+def _point(
+    value: LatLng | tuple[float, float] | list[float] | dict[str, Any],
+) -> dict[str, float]:
     return _validate_lat_lng(value, "location")
 
 
 def _circle_body(
-    location: LatLng | tuple[float, float], radius_m: float
+    location: LatLng | tuple[float, float] | list[float] | dict[str, Any],
+    radius_m: float,
 ) -> dict[str, Any]:
-    if (
-        isinstance(radius_m, bool)
-        or not isinstance(radius_m, (int, float))
-        or not math.isfinite(float(radius_m))
-    ):
+    if isinstance(radius_m, bool) or not isinstance(radius_m, (int, float)):
         rendered, detonation = _guarded_repr(radius_m)
         _refuse(
-            f"radius_m must be a finite number, got {rendered}",
+            f"radius_m must be a finite int or float, got {rendered}",
+            detonation,
+        )
+    try:
+        radius = float(radius_m)
+    except OverflowError:
+        # A huge int cannot convert; the finite check below
+        # refuses it with this seat's message instead of the
+        # builtin escaping (audit A50-133).
+        radius = math.inf
+    if not math.isfinite(radius):
+        rendered, detonation = _guarded_repr(radius_m)
+        _refuse(
+            f"radius_m must be a finite int or float, got {rendered}",
             detonation,
         )
     return {
         "circle": {
             "center": _validate_lat_lng(location, "location"),
-            "radius": float(radius_m),
+            "radius": radius,
         }
     }
 
@@ -545,6 +565,14 @@ def _photo_result(tagged: tuple[str, Any, Any, int]) -> PhotoMedia | PhotoUriRes
 #: of being silently treated as no timeout at all.
 _MAX_TIMEOUT_SECONDS = 3600
 
+#: The largest response cap the Python clients accept, in bytes;
+#: the largest value the native size type holds, which is pointer
+#: width on every platform the package builds for. The core
+#: refuses a cap of zero at build; this ceiling only keeps an
+#: unrepresentable value from reaching the native extraction
+#: (audit A50-128).
+_MAX_RESPONSE_BYTES_CEILING = 2 ** (8 * struct.calcsize("P")) - 1
+
 
 class _Base:
     def __init__(
@@ -553,6 +581,7 @@ class _Base:
         *,
         base_url: Optional[str] = None,
         timeout: Optional[float] = None,
+        max_response_bytes: Optional[int] = None,
     ) -> None:
         # A key left unpassed falls back to the environment, so a
         # caller can keep the key out of source code entirely. The
@@ -601,8 +630,9 @@ class _Base:
                 or not 0 < timeout <= _MAX_TIMEOUT_SECONDS
             ):
                 raise ConfigError(
-                    "timeout must be a positive, finite number of seconds, "
-                    f"at most {_MAX_TIMEOUT_SECONDS}, got {_safe_repr(timeout)}"
+                    "timeout must be a positive, finite int or float, "
+                    f"at most {_MAX_TIMEOUT_SECONDS} seconds, "
+                    f"got {_safe_repr(timeout)}"
                 )
             if timeout is not None and not isinstance(timeout, float):
                 # Coerce the timeout to a plain float here, inside
@@ -622,6 +652,34 @@ class _Base:
                 # their extraction reads the string buffer and
                 # fires no dunder at all.
                 timeout = float(timeout)
+            if max_response_bytes is not None and (
+                isinstance(max_response_bytes, bool)
+                or not isinstance(max_response_bytes, int)
+                or not 1 <= max_response_bytes <= _MAX_RESPONSE_BYTES_CEILING
+            ):
+                raise ConfigError(
+                    "max_response_bytes must be a positive int, "
+                    f"got {_safe_repr(max_response_bytes)}"
+                )
+            if max_response_bytes is not None:
+                # Coerce to a plain int inside the guard, for the
+                # same reason the timeout is coerced above; the
+                # native extraction below must not run a caller
+                # conversion outside the guard (audit A50-128).
+                max_response_bytes = int(max_response_bytes)
+                # The coerced value is judged again, because the
+                # range check above read the caller's object and a
+                # two faced int can answer its comparisons honestly
+                # and coerce to a value outside the range, which
+                # the native extraction would refuse with a bare
+                # OverflowError outside the ConfigError contract.
+                # A plain int cannot misreport itself, so this
+                # second check is exact.
+                if not 1 <= max_response_bytes <= _MAX_RESPONSE_BYTES_CEILING:
+                    raise ConfigError(
+                        "max_response_bytes must be a positive int, "
+                        f"got {_safe_repr(max_response_bytes)}"
+                    )
         except ConfigError:
             raise
         except Exception as exc:
@@ -630,7 +688,9 @@ class _Base:
             ) from exc
         self._closed = False
         try:
-            self._inner = _placekit.Client(api_key, base_url, timeout)
+            self._inner = _placekit.Client(
+                api_key, base_url, timeout, max_response_bytes
+            )
         except _CorePlacesError as exc:
             raise_translated(exc, "client construction")
         except ValueError as exc:
@@ -938,23 +998,33 @@ class _Base:
     def _validate_float_range(
         name: str, value: Optional[float], low: float, high: float
     ) -> Optional[float]:
-        """Validate an optional real-number argument, bools rejected,
-        NaN and infinity rejected instead of reaching the core."""
+        """Validate an optional int or float argument, bools
+        rejected, NaN and infinity rejected instead of reaching
+        the core."""
         if value is None:
             return None
-        if (
-            isinstance(value, bool)
-            or not isinstance(value, (int, float))
-            or not math.isfinite(float(value))
-            or not low <= float(value) <= high
-        ):
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
             rendered, detonation = _guarded_repr(value)
             _refuse(
-                f"{name} must be a number between {low:g} and {high:g}, "
-                f"got {rendered}",
+                f"{name} must be an int or float between {low:g} and "
+                f"{high:g}, got {rendered}",
                 detonation,
             )
-        return float(value)
+        try:
+            converted = float(value)
+        except OverflowError:
+            # A huge int cannot convert; the range check below
+            # refuses it with this seat's message instead of
+            # the builtin escaping (audit A50-133).
+            converted = math.inf
+        if not math.isfinite(converted) or not low <= converted <= high:
+            rendered, detonation = _guarded_repr(value)
+            _refuse(
+                f"{name} must be an int or float between {low:g} and "
+                f"{high:g}, got {rendered}",
+                detonation,
+            )
+        return converted
 
     @staticmethod
     def _convert(
@@ -1085,7 +1155,7 @@ class _Base:
 
     @staticmethod
     def _nearby_search_body(
-        location: LatLng | tuple[float, float],
+        location: LatLng | tuple[float, float] | list[float] | dict[str, Any],
         radius_m: float,
         *,
         included_types: Optional[Iterable[str]],
@@ -1145,7 +1215,9 @@ class _Base:
         include_query_predictions: Optional[bool],
         location_bias: Optional[dict[str, Any]],
         location_restriction: Optional[dict[str, Any]],
-        origin: Optional[LatLng | tuple[float, float]] = None,
+        origin: Optional[
+            LatLng | tuple[float, float] | list[float] | dict[str, Any]
+        ] = None,
         input_offset: Optional[int] = None,
         included_primary_types: Optional[Iterable[str]] = None,
         include_pure_service_area_businesses: Optional[bool] = None,
@@ -1223,6 +1295,9 @@ class Client(_Base):
     the client at a local stub server. ``timeout`` is per request, in
     seconds, and may be at most 3600; anything else about it (zero,
     negative, non-finite, a boolean, a non-number) is a ``ConfigError``.
+    ``max_response_bytes`` caps the response body size in bytes and
+    defaults to 32 MiB; a value that is not a positive int is a
+    ``ConfigError``.
     The key argument may be omitted or passed as None, in which case
     the client reads the ``PLACEKIT_API_KEY`` environment variable,
     and construction raises ``ConfigError`` when neither is present.
@@ -1316,7 +1391,7 @@ class Client(_Base):
 
     def nearby_search(
         self,
-        location: LatLng | tuple[float, float],
+        location: LatLng | tuple[float, float] | list[float] | dict[str, Any],
         radius_m: float,
         *,
         fields: FieldsLike = None,
@@ -1443,7 +1518,9 @@ class Client(_Base):
         include_query_predictions: Optional[bool] = None,
         location_bias: Optional[dict[str, Any]] = None,
         location_restriction: Optional[dict[str, Any]] = None,
-        origin: Optional[LatLng | tuple[float, float]] = None,
+        origin: Optional[
+            LatLng | tuple[float, float] | list[float] | dict[str, Any]
+        ] = None,
         input_offset: Optional[int] = None,
         included_primary_types: Optional[Iterable[str]] = None,
         include_pure_service_area_businesses: Optional[bool] = None,
@@ -1785,7 +1862,7 @@ class AsyncClient(_Base):
 
     async def nearby_search(
         self,
-        location: LatLng | tuple[float, float],
+        location: LatLng | tuple[float, float] | list[float] | dict[str, Any],
         radius_m: float,
         *,
         fields: FieldsLike = None,
@@ -1912,7 +1989,9 @@ class AsyncClient(_Base):
         include_query_predictions: Optional[bool] = None,
         location_bias: Optional[dict[str, Any]] = None,
         location_restriction: Optional[dict[str, Any]] = None,
-        origin: Optional[LatLng | tuple[float, float]] = None,
+        origin: Optional[
+            LatLng | tuple[float, float] | list[float] | dict[str, Any]
+        ] = None,
         input_offset: Optional[int] = None,
         included_primary_types: Optional[Iterable[str]] = None,
         include_pure_service_area_businesses: Optional[bool] = None,

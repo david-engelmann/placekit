@@ -535,7 +535,7 @@ def test_circle_radius_bomb():
     with pytest.raises(ConfigError) as caught:
         client.nearby_search((0.0, 0.0), ReprBomb())
     assert caught.value.message == (
-        "radius_m must be a finite number, "
+        "radius_m must be a finite int or float, "
         "got <ReprBomb whose repr raised>"
     )
     assert WRAP_WORDING not in caught.value.message
@@ -654,7 +654,7 @@ def test_float_range_bomb():
     with pytest.raises(ConfigError) as caught:
         client.text_search("q", min_rating=ReprBomb())
     assert caught.value.message == (
-        "min_rating must be a number between 0 and 5, "
+        "min_rating must be an int or float between 0 and 5, "
         "got <ReprBomb whose repr raised>"
     )
     assert WRAP_WORDING not in caught.value.message
@@ -666,7 +666,7 @@ def test_float_range_subclass_bomb():
     with pytest.raises(ConfigError) as caught:
         client.text_search("q", min_rating=ReprBombFloat(99.0))
     assert caught.value.message == (
-        "min_rating must be a number between 0 and 5, "
+        "min_rating must be an int or float between 0 and 5, "
         "got <ReprBombFloat whose repr raised>"
     )
     assert WRAP_WORDING not in caught.value.message

@@ -154,7 +154,7 @@ where
 }
 
 /// A circular area, used to bias or restrict searches.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct Circle {
     #[serde(deserialize_with = "de_complete_center")]
     pub center: LatLng,
@@ -164,14 +164,14 @@ pub struct Circle {
 }
 
 /// A `locationRestriction` value holding a single circle.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct LocationRestriction {
     pub circle: Circle,
 }
 
 /// A rectangular area, bounded by its low (southwest) and high (northeast)
 /// corners. Used by location bias and restriction values.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct Viewport {
     #[serde(default, skip_serializing_if = "latlng_absent")]
     pub low: LatLng,
@@ -187,7 +187,7 @@ pub struct Viewport {
 /// on purpose, one per endpoint that names them, so an API change to
 /// one endpoint's bias does not silently rewrite the other's
 /// (audit A50-072).
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct TextSearchLocationBias {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rectangle: Option<Viewport>,
@@ -197,14 +197,14 @@ pub struct TextSearchLocationBias {
 
 /// A `locationRestriction` value for Text Search, which accepts a
 /// rectangle only (unlike the other endpoints).
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct TextSearchLocationRestriction {
     pub rectangle: Viewport,
 }
 
 /// A `locationBias` or `locationRestriction` value for Autocomplete: a
 /// rectangle or a circle, never both.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct AutocompleteLocation {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rectangle: Option<Viewport>,
@@ -213,7 +213,7 @@ pub struct AutocompleteLocation {
 }
 
 /// Electric vehicle charging filter for Text Search.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EvOptions {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -223,7 +223,7 @@ pub struct EvOptions {
 }
 
 /// A polyline in encoded or GeoJSON form, used by search along route.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Polyline {
     #[serde(default, skip_serializing_if = "none_or_empty_string")]
@@ -231,7 +231,7 @@ pub struct Polyline {
 }
 
 /// Parameters for Text Search along a route.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct SearchAlongRouteParameters {
     pub polyline: Polyline,
 }
@@ -250,7 +250,7 @@ pub struct RouteModifiers {
 
 /// Routing inputs shared by Text Search and Nearby Search. When an origin
 /// is supplied the API can return routing summaries with the results.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RoutingParameters {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -290,7 +290,7 @@ pub enum NearbySearchRankPreference {
 /// table, which names these structs in return (audit A50-094).
 /// A boolean field added on either side must be added on both,
 /// or dict-shaped bodies lose the string "false" refusal for it.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TextSearchRequest {
     pub text_query: String,
@@ -333,7 +333,7 @@ pub struct TextSearchRequest {
 }
 
 /// Body of a `places:searchNearby` request.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct NearbySearchRequest {
     pub location_restriction: LocationRestriction,
@@ -382,7 +382,7 @@ impl NearbySearchRequest {
 }
 
 /// Body of a `places:autocomplete` request.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AutocompleteRequest {
     pub input: String,
@@ -717,6 +717,19 @@ impl<T> WireList<T> {
     /// True when the wire carried no value at all for this field.
     pub fn is_absent(&self) -> bool {
         self.0.is_none()
+    }
+
+    /// True when the field carries no elements, which covers an
+    /// absent field, an explicit null, and a list the wire sent
+    /// empty (audit A50-131).
+    pub fn is_empty(&self) -> bool {
+        self.as_slice().is_empty()
+    }
+
+    /// The number of elements the wire sent, zero for an absent
+    /// or null field (audit A50-131).
+    pub fn len(&self) -> usize {
+        self.as_slice().len()
     }
 }
 
@@ -2154,5 +2167,53 @@ mod tests {
         assert!(!payload_depth_within_limit(&trace));
         let trace: Vec<(u8, u32)> = vec![(0, MAX_PAYLOAD_DEPTH + 1)];
         assert!(!payload_depth_within_limit(&trace));
+    }
+
+    #[test]
+    fn nearby_request_spreads_defaults() {
+        // Audit A50-129: the Nearby chain carries Default like its
+        // sibling requests, so a consumer sets the one required
+        // field and spreads the rest.
+        let request = NearbySearchRequest {
+            location_restriction: LocationRestriction {
+                circle: Circle {
+                    center: LatLng::new(40.0, -73.0),
+                    radius: 500.0,
+                },
+            },
+            ..Default::default()
+        };
+        assert_eq!(request.location_restriction.circle.radius, 500.0);
+        assert_eq!(request.max_result_count, None);
+        let same = NearbySearchRequest {
+            location_restriction: LocationRestriction {
+                circle: Circle {
+                    center: LatLng::new(40.0, -73.0),
+                    radius: 500.0,
+                },
+            },
+            ..Default::default()
+        };
+        assert_eq!(request, same);
+        let defaulted = NearbySearchRequest::default();
+        assert_eq!(defaulted.location_restriction.circle.center.latitude, 0.0);
+    }
+
+    #[test]
+    fn wire_list_emptiness_reads() {
+        // Audit A50-131: the list wrapper answers the emptiness
+        // question its string sibling answers by name.
+        let absent: WireList<String> = WireList(None);
+        assert!(absent.is_empty());
+        assert_eq!(absent.len(), 0);
+        let null: WireList<String> = WireList(Some(None));
+        assert!(null.is_empty());
+        assert_eq!(null.len(), 0);
+        let empty: WireList<String> = WireList(Some(Some(Vec::new())));
+        assert!(empty.is_empty());
+        assert_eq!(empty.len(), 0);
+        let filled: WireList<String> = WireList::from(vec!["a".to_string(), "b".to_string()]);
+        assert!(!filled.is_empty());
+        assert_eq!(filled.len(), 2);
     }
 }
