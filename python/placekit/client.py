@@ -594,7 +594,8 @@ class _Base:
             if api_key is None:
                 raise ConfigError(
                     "api_key is required, pass it to the client or set "
-                    "the PLACEKIT_API_KEY environment variable"
+                    "the PLACEKIT_API_KEY environment variable",
+                    context="client construction",
                 )
         # Every read of a caller value in this block is guarded.
         # The key is stripped, scanned and case read, and the
@@ -680,7 +681,13 @@ class _Base:
                         "max_response_bytes must be a positive int, "
                         f"got {_safe_repr(max_response_bytes)}"
                     )
-        except ConfigError:
+        except ConfigError as exc:
+            # The plain refusals above carry no context of their own;
+            # annotate the seat in place, the same posture the method
+            # wraps take, so every construction failure names the
+            # seat alike (audit A50-170).
+            if exc.context is None:
+                exc.context = "client construction"
             raise
         except Exception as exc:
             raise self._invalid_arguments(
@@ -698,7 +705,9 @@ class _Base:
             # example a key that cannot be sent as a header value) as
             # plain ValueError; inside this package they are
             # ConfigError, the one documented type for local misuse.
-            raise ConfigError(str(exc)) from exc
+            raise ConfigError(
+                str(exc), context="client construction"
+            ) from exc
 
     # -- lifecycle and duplication -------------------------------------
 
@@ -1055,7 +1064,7 @@ class _Base:
             raise
         except (KeyError, TypeError, ValueError, AttributeError, OverflowError) as exc:
             raise DecodeError(
-                f"response failed model conversion: {exc!r}",
+                f"response failed model conversion: {_safe_repr(exc)}",
                 context=context,
                 status_code=status,
             ) from exc

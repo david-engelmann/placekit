@@ -333,7 +333,7 @@ def _checked_components_and_plain(
             if not isinstance(long_text, str):
                 raise ConfigError(
                     "component long_text must be a string, "
-                    f"got {_safe_repr(component.long_text)}"
+                    f"got {_safe_repr(long_text)}"
                 )
         short_text = component.short_text
         if short_text is not None:
@@ -341,7 +341,7 @@ def _checked_components_and_plain(
             if not isinstance(short_text, str):
                 raise ConfigError(
                     "component short_text must be a string, "
-                    f"got {_safe_repr(component.short_text)}"
+                    f"got {_safe_repr(short_text)}"
                 )
         types_value = component.types
         if not isinstance(types_value, (list, tuple)):
@@ -353,10 +353,10 @@ def _checked_components_and_plain(
             # test in the search then raised a bare TypeError.
             raise ConfigError(
                 "component types must be a list of strings, "
-                f"got {_safe_repr(component.types)}"
+                f"got {_safe_repr(types_value)}"
             )
         type_items = []
-        for item in component.types:
+        for item in types_value:
             if item is not None and not isinstance(item, str):
                 raise ConfigError(
                     "component types must hold strings, "
@@ -448,12 +448,13 @@ def _checked_place_and_plain(
     """
     if not isinstance(place, Place):
         raise ConfigError(f"place must be a Place, got {_safe_repr(place)}")
-    if place.formatted_address is not None and not isinstance(
-        place.formatted_address, str
+    formatted_address = place.formatted_address
+    if formatted_address is not None and not isinstance(
+        formatted_address, str
     ):
         raise ConfigError(
             "place formatted_address must be a string, "
-            f"got {_safe_repr(place.formatted_address)}"
+            f"got {_safe_repr(formatted_address)}"
         )
     components = place.address_components
     if not isinstance(components, (list, tuple)):

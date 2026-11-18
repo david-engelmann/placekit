@@ -22,7 +22,14 @@ from placekit.fields import (
     TEXT_SEARCH_FIELDS,
     FieldMask,
 )
-from placekit.models import LocalizedText, Money, Photo, Place, TextSearchResult
+from placekit.models import (
+    AddressComponent,
+    LocalizedText,
+    Money,
+    Photo,
+    Place,
+    TextSearchResult,
+)
 
 
 class TestRetryAfterValueDiscipline:
@@ -658,3 +665,131 @@ class TestBulkMaskVerdict:
             "places.name",
         )
         assert [len(call) for call in calls] == [2, 1]
+
+
+class _ReprRaisesValueError(ValueError):
+    def __repr__(self):
+        raise RuntimeError("repr detonated")
+
+
+class _CountingComponent(AddressComponent):
+    """An AddressComponent whose long_text answers twice and then
+    detonates, so a refusal that re-reads the attribute instead of
+    rendering the judged value loses its message."""
+
+    def __init__(self):
+        object.__setattr__(self, "short_text", "y")
+        object.__setattr__(self, "types", ["locality"])
+        object.__setattr__(self, "_reads", 0)
+
+    @property
+    def long_text(self):  # type: ignore[override]
+        object.__setattr__(self, "_reads", self._reads + 1)
+        if self._reads == 1:
+            return "x"
+        if self._reads == 2:
+            return 42
+        raise AssertionError("a third read of long_text")
+
+
+class _RaisingLenList(list):
+    def __len__(self):
+        raise ValueError("length detonated")
+
+
+class _ShiftingTypesComponent(AddressComponent):
+    """An AddressComponent whose types getter answers a valid list
+    on the judged read and a non-iterable on any later read."""
+
+    def __init__(self):
+        object.__setattr__(self, "long_text", "x")
+        object.__setattr__(self, "short_text", "y")
+        object.__setattr__(self, "_reads", 0)
+
+    @property
+    def types(self):  # type: ignore[override]
+        object.__setattr__(self, "_reads", self._reads + 1)
+        if self._reads == 1:
+            return ["route"]
+        return 999
+
+
+class TestErrorSurfaceRepairs:
+    def test_convert_wrap_names_a_detonating_exception_safely(self):
+        # Audit A50-169: the conversion wrap named its caught
+        # exception through the raw repr, so an exception whose
+        # repr raises escaped the wrap it exists to contain.
+        from placekit.client import _Base
+
+        def convert(data):
+            raise _ReprRaisesValueError("boom")
+
+        with pytest.raises(DecodeError) as caught:
+            _Base._convert(convert, {}, "test conversion")
+        assert "<unrepresentable" in str(caught.value)
+        assert isinstance(caught.value.__cause__, _ReprRaisesValueError)
+
+    def test_plain_refusals_carry_the_construction_context(self):
+        # Audit A50-170: the plain construction refusals carried no
+        # context while a core failure at the same seat carried
+        # "client construction".
+        with pytest.raises(ConfigError) as caught:
+            Client("   ")
+        assert caught.value.context == "client construction"
+        with pytest.raises(ConfigError) as caught:
+            Client(123)  # type: ignore[arg-type]
+        assert caught.value.context == "client construction"
+
+    def test_missing_key_refusal_carries_the_construction_context(
+        self, monkeypatch
+    ):
+        # Audit A50-170, the arm the review repair completed: the
+        # missing key refusal is raised by the environment fallback
+        # ahead of the guarded try, so it names the seat itself.
+        monkeypatch.delenv("PLACEKIT_API_KEY", raising=False)
+        with pytest.raises(ConfigError) as caught:
+            Client()
+        assert caught.value.context == "client construction"
+
+    def test_address_refusal_renders_the_judged_value(self):
+        # Audit A50-171: the funnel refusal rendered a fresh read
+        # of the attribute instead of the captured value it had
+        # judged, so a third read decided the message.
+        from placekit.address import component_long_texts
+
+        component = _CountingComponent()
+        with pytest.raises(ConfigError) as caught:
+            component_long_texts([component], "locality")
+        assert "42" in str(caught.value)
+        assert component._reads == 2
+
+    def test_types_items_come_from_the_judged_read(self):
+        # Audit A50-178: the funnel judged the types container on
+        # its capture and then iterated a fresh read of the
+        # attribute, so a getter answering differently on the
+        # second read put unjudged items in the checked set, or
+        # escaped as a bare builtin when the second answer was
+        # not iterable at all. The pin sits at the funnel itself;
+        # the exercise reads downstream are the module's stated
+        # discipline and are not this seat.
+        from placekit.address import _checked_components_and_plain
+
+        component = _ShiftingTypesComponent()
+        checked, plain = _checked_components_and_plain([component])
+        assert len(checked) == 1
+        assert plain[0][2] == ("route",)
+        assert component._reads == 1
+
+    def test_raw_read_failure_keeps_its_own_framing(self):
+        # Audit A50-176: the raw source read sat inside the decode
+        # try, so its failure was re-framed as an element decode
+        # failure in front of its own message.
+        from placekit.models import _model_elements
+
+        raw = {"results": _RaisingLenList([{}])}
+        with pytest.raises(DecodeError) as caught:
+            _model_elements(
+                [{}], "Place", "results", raw, lambda item, raw_item: item
+            )
+        assert "could not be read" in str(caught.value)
+        assert "failed to decode" not in str(caught.value)

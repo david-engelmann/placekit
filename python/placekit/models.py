@@ -482,8 +482,13 @@ def _model_elements(
     """
     decoded = []
     for i, item in enumerate(_model_list(value, model, key)):
+        # The raw read sits outside the try: its own DecodeError
+        # reports the raw source could not be read, and the arm
+        # below frames only the element decoder's failures (audit
+        # A50-176).
+        raw_item = _raw_element(raw, key, i, item, model)
         try:
-            decoded.append(decode(item, _raw_element(raw, key, i, item, model)))
+            decoded.append(decode(item, raw_item))
         except DecodeError as exc:
             raise DecodeError(
                 f"{model} payload key {key!r} element {i} failed "
