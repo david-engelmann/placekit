@@ -117,12 +117,13 @@ impl ClientBuilder {
         }
         // The key travels in the x-goog-api-key header on every request.
         // Reject values that cannot be header values here, at construction,
-        // instead of letting header building drop them later (F13).
-        if HeaderValue::from_str(&self.api_key).is_err() {
-            return Err(Error::config(
-                "API key contains characters that cannot be sent in an HTTP header",
-            ));
-        }
+        // instead of letting header building drop them later (F13). The
+        // built value is stored on the client, so the per request header
+        // build clones it instead of revalidating the same standing
+        // string on every call (audit A50-142).
+        let api_key_header = HeaderValue::from_str(&self.api_key).map_err(|_| {
+            Error::config("API key contains characters that cannot be sent in an HTTP header")
+        })?;
         if self.timeout.is_zero() {
             return Err(Error::config("timeout must be greater than zero"));
         }
@@ -147,6 +148,7 @@ impl ClientBuilder {
             .map_err(|e| Error::config(format!("could not build the HTTP client: {e}")))?;
         Ok(Client {
             api_key: self.api_key,
+            api_key_header,
             base_url,
             http,
             max_response_bytes: self.max_response_bytes,
@@ -158,6 +160,7 @@ impl ClientBuilder {
 #[derive(Clone)]
 pub struct Client {
     api_key: String,
+    api_key_header: HeaderValue,
     base_url: String,
     http: reqwest::Client,
     max_response_bytes: usize,
@@ -167,6 +170,7 @@ impl std::fmt::Debug for Client {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Client")
             .field("api_key", &"<redacted>")
+            .field("api_key_header", &"<redacted>")
             .field("base_url", &self.base_url)
             .field("http", &self.http)
             .field("max_response_bytes", &self.max_response_bytes)
@@ -717,13 +721,12 @@ impl Client {
 
     /// Headers shared by every request: the API key, and the field mask
     /// when the endpoint uses one. Fails rather than silently dropping a
-    /// header that cannot be constructed (F13); the API key is validated
-    /// at build time, so a failure here means a bad mask value.
+    /// header that cannot be constructed (F13); the API key's header
+    /// value is built once at build time, so a failure here means a bad
+    /// mask value.
     fn headers(&self, mask: Option<&FieldMask>) -> Result<HeaderMap, Error> {
         let mut headers = HeaderMap::new();
-        let key = HeaderValue::from_str(&self.api_key)
-            .map_err(|_| Error::config("API key cannot be sent in an HTTP header"))?;
-        headers.insert(API_KEY_HEADER, key);
+        headers.insert(API_KEY_HEADER, self.api_key_header.clone());
         if let Some(mask) = mask {
             let value = HeaderValue::from_str(mask.header_value())
                 .map_err(|_| Error::config("field mask cannot be sent in an HTTP header"))?;
@@ -852,8 +855,15 @@ enum BodyRead {
 /// instead of buffering it whole.
 async fn read_body_capped(response: reqwest::Response, cap: usize) -> BodyRead {
     use futures_util::StreamExt;
+    // Reserve the announced body size, bounded by the cap so a
+    // hostile content length cannot force an allocation past what
+    // the cap already permits as real bytes, instead of growing
+    // from zero and copying on every reallocation (audit A50-146).
+    let reserve = response
+        .content_length()
+        .map_or(0, |n| (n as usize).min(cap));
     let mut stream = response.bytes_stream();
-    let mut buf = Vec::new();
+    let mut buf = Vec::with_capacity(reserve);
     while let Some(chunk) = stream.next().await {
         match chunk {
             Ok(chunk) => {
@@ -887,8 +897,13 @@ async fn read_error_body(response: reqwest::Response, status: u16, redact: bool)
     // them (audit A50-039).
     let names_gzip = content_encoding_names_gzip(response.headers());
     let transport_decoded = transport_decoded_gzip(response.headers());
+    // The same reservation as the success reader, bounded by this
+    // path's own cap (audit A50-146).
+    let reserve = response
+        .content_length()
+        .map_or(0, |n| (n as usize).min(ERROR_BODY_CAP));
     let mut stream = response.bytes_stream();
-    let mut buf = Vec::new();
+    let mut buf = Vec::with_capacity(reserve);
     let mut capped = false;
     while buf.len() < ERROR_BODY_CAP {
         match stream.next().await {

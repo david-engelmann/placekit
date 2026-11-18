@@ -794,6 +794,15 @@ fn mask_valid_path(path: Vec<u8>) -> bool {
     placekit_core::mask::valid_path(&path)
 }
 
+/// The index of the first invalid field path in a run, or
+/// `None` when every path is valid, so the Python layer can
+/// refuse the same path the per path verdict refused while
+/// crossing once for the run (audit A50-149).
+#[pyfunction]
+fn mask_first_invalid_path(paths: Vec<Vec<u8>>) -> Option<usize> {
+    placekit_core::mask::first_invalid_path(&paths)
+}
+
 /// The indices of the first occurrence of each distinct path,
 /// in first seen order, for the Python layer to pick its own
 /// caller objects at (Round 54).
@@ -1464,6 +1473,7 @@ fn _placekit(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(address_component_flags, m)?)?;
     m.add_function(wrap_pyfunction!(address_split_compound_code, m)?)?;
     m.add_function(wrap_pyfunction!(mask_valid_path, m)?)?;
+    m.add_function(wrap_pyfunction!(mask_first_invalid_path, m)?)?;
     m.add_function(wrap_pyfunction!(mask_unique_indices, m)?)?;
     m.add_function(wrap_pyfunction!(mask_sorted_order, m)?)?;
     m.add_function(wrap_pyfunction!(models_payload_depth_within_limit, m)?)?;

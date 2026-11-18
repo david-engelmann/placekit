@@ -54,6 +54,19 @@ pub fn valid_path(path: &[u8]) -> bool {
     })
 }
 
+/// The index of the first path that fails [`valid_path`], or
+/// `None` when every path is valid (audit A50-149).
+///
+/// This is the construction verdict the Python `FieldMask`
+/// performs, decided over the byte forms as sent in one pass,
+/// so the Python layer crosses once for a run of plain string
+/// paths instead of once per path. The verdict per path is
+/// `valid_path` itself, in order, so the first invalid index
+/// here names the path the per path crossings refused.
+pub fn first_invalid_path(paths: &[Vec<u8>]) -> Option<usize> {
+    paths.iter().position(|path| !valid_path(path))
+}
+
 /// The indices of the first occurrence of each distinct path, in
 /// first seen order (Round 54).
 ///
@@ -627,6 +640,21 @@ mod tests {
         assert!(valid_path(&long_segment));
         let many_segments = (0..150).map(|_| "ab").collect::<Vec<_>>().join(".");
         assert!(valid_path(many_segments.as_bytes()));
+    }
+
+    #[test]
+    fn first_invalid_path_names_the_first_failure() {
+        let paths: Vec<Vec<u8>> = ["places.id", "places.rating"]
+            .iter()
+            .map(|s| s.as_bytes().to_vec())
+            .collect();
+        assert_eq!(first_invalid_path(&paths), None);
+        let mixed: Vec<Vec<u8>> = ["places.id", "x", "also bad", "places.rating"]
+            .iter()
+            .map(|s| s.as_bytes().to_vec())
+            .collect();
+        assert_eq!(first_invalid_path(&mixed), Some(1));
+        assert_eq!(first_invalid_path(&[]), None);
     }
 
     #[test]
