@@ -8,9 +8,11 @@
 
 pub mod address;
 pub mod client;
+pub(crate) mod envelope;
 pub mod errors;
 pub mod mask;
 pub mod models;
+pub(crate) mod screening;
 
 // The crate root re-exports the surface a consumer needs to
 // make and configure a call. That surface is the client and

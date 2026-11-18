@@ -634,18 +634,6 @@ fn address_matching_indices(components: Vec<PyComponent>, type_name: Vec<u8>) ->
     placekit_core::address::matching_indices(&components_from(components), &type_name)
 }
 
-/// The indices of every component whose types list is empty.
-#[pyfunction]
-fn address_untyped_indices(components: Vec<PyComponent>) -> Vec<usize> {
-    placekit_core::address::untyped_indices(&components_from(components))
-}
-
-/// The first nonempty long text among the matches for a type.
-#[pyfunction]
-fn address_first_long_text(components: Vec<PyComponent>, type_name: Vec<u8>) -> Option<Vec<u8>> {
-    placekit_core::address::first_long_text(&components_from(components), &type_name)
-}
-
 /// The index of the component the first nonempty long text
 /// among the matches for a type sits on, so the Python layer
 /// can hand back the caller component's own text object.
@@ -655,30 +643,6 @@ fn address_first_long_text_index(
     type_name: Vec<u8>,
 ) -> Option<usize> {
     placekit_core::address::first_long_text_index(&components_from(components), &type_name)
-}
-
-/// The first nonempty short text among the matches for a type.
-#[pyfunction]
-fn address_first_short_text(components: Vec<PyComponent>, type_name: Vec<u8>) -> Option<Vec<u8>> {
-    placekit_core::address::first_short_text(&components_from(components), &type_name)
-}
-
-/// The nonempty long texts of every match, in list order.
-#[pyfunction]
-fn address_long_texts(components: Vec<PyComponent>, type_name: Vec<u8>) -> Vec<Vec<u8>> {
-    placekit_core::address::long_texts(&components_from(components), &type_name)
-}
-
-/// The nonempty short texts of every match, in list order.
-#[pyfunction]
-fn address_short_texts(components: Vec<PyComponent>, type_name: Vec<u8>) -> Vec<Vec<u8>> {
-    placekit_core::address::short_texts(&components_from(components), &type_name)
-}
-
-/// The short text of the first country component with one.
-#[pyfunction]
-fn address_country_code(components: Vec<PyComponent>) -> Option<Vec<u8>> {
-    placekit_core::address::country_code_from_components(&components_from(components))
 }
 
 /// Every city reading for one component set and country code.
@@ -775,14 +739,6 @@ fn address_component_flags(
         flags.spans_multiple_routes,
         flags.has_no_street_level,
     )
-}
-
-/// Split a compound plus code at its first space, returning the
-/// `(code_part, locality_text)` pair or `None` when the input is
-/// not a compound form.
-#[pyfunction]
-fn address_split_compound_code(compound_code: Vec<u8>) -> Option<(Vec<u8>, Vec<u8>)> {
-    placekit_core::address::split_compound_code(&compound_code)
 }
 
 /// Whether one field path matches the construction grammar of
@@ -1460,18 +1416,11 @@ fn _placekit(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("PlacesError", m.py().get_type::<PlacesError>())?;
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;
     m.add_function(wrap_pyfunction!(address_matching_indices, m)?)?;
-    m.add_function(wrap_pyfunction!(address_untyped_indices, m)?)?;
-    m.add_function(wrap_pyfunction!(address_first_long_text, m)?)?;
     m.add_function(wrap_pyfunction!(address_first_long_text_index, m)?)?;
-    m.add_function(wrap_pyfunction!(address_first_short_text, m)?)?;
-    m.add_function(wrap_pyfunction!(address_long_texts, m)?)?;
-    m.add_function(wrap_pyfunction!(address_short_texts, m)?)?;
-    m.add_function(wrap_pyfunction!(address_country_code, m)?)?;
     m.add_function(wrap_pyfunction!(address_city_resolutions, m)?)?;
     m.add_function(wrap_pyfunction!(address_district_resolution, m)?)?;
     m.add_function(wrap_pyfunction!(address_postal_code_result, m)?)?;
     m.add_function(wrap_pyfunction!(address_component_flags, m)?)?;
-    m.add_function(wrap_pyfunction!(address_split_compound_code, m)?)?;
     m.add_function(wrap_pyfunction!(mask_valid_path, m)?)?;
     m.add_function(wrap_pyfunction!(mask_first_invalid_path, m)?)?;
     m.add_function(wrap_pyfunction!(mask_unique_indices, m)?)?;

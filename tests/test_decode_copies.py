@@ -535,18 +535,11 @@ def test_address_flags_pays_one_scan_per_composed_reading(monkeypatch):
 
     for name in (
         "address_matching_indices",
-        "address_untyped_indices",
-        "address_first_long_text",
         "address_first_long_text_index",
-        "address_first_short_text",
-        "address_long_texts",
-        "address_short_texts",
-        "address_country_code",
         "address_city_resolutions",
         "address_district_resolution",
         "address_postal_code_result",
         "address_component_flags",
-        "address_split_compound_code",
     ):
         real = getattr(_placekit, name)
 

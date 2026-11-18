@@ -388,6 +388,45 @@ fn british_resolutions(
     }
 }
 
+fn postal_locality_resolution(
+    postal_locality: &PostalLocality,
+    confidence: &'static str,
+    country_code: Option<&[u8]>,
+) -> CityResolutions {
+    match postal_locality {
+        PostalLocality::Unread => CityResolutions::NeedsPostalLocality,
+        PostalLocality::Read(Some(value)) => CityResolutions::Done(vec![one_city(
+            value.clone(),
+            CARRIER_POSTAL_ADDRESS_LOCALITY,
+            confidence,
+            country_code,
+        )]),
+        PostalLocality::Read(None) => CityResolutions::Done(vec![no_city(country_code)]),
+    }
+}
+
+fn no_district(country_code: Option<&[u8]>) -> DistrictResolution {
+    DistrictResolution {
+        value: None,
+        carrier: None,
+        confidence: CONFIDENCE_NONE,
+        country_code: country_code.map(<[u8]>::to_vec),
+    }
+}
+
+fn one_district(
+    value: Vec<u8>,
+    carrier: &'static str,
+    country_code: Option<&[u8]>,
+) -> DistrictResolution {
+    DistrictResolution {
+        value: Some(value),
+        carrier: Some(carrier),
+        confidence: CONFIDENCE_PRIMARY,
+        country_code: country_code.map(<[u8]>::to_vec),
+    }
+}
+
 /// Every city reading the applicable rules produce for one
 /// component set and country code. The postal locality enters
 /// only on the chains that read it, under the lazy read
@@ -412,16 +451,7 @@ pub fn city_resolutions(
             )]);
         }
         if routed(b"AE") {
-            return match postal_locality {
-                PostalLocality::Unread => CityResolutions::NeedsPostalLocality,
-                PostalLocality::Read(Some(value)) => CityResolutions::Done(vec![one_city(
-                    value.clone(),
-                    CARRIER_POSTAL_ADDRESS_LOCALITY,
-                    CONFIDENCE_FALLBACK,
-                    country_code,
-                )]),
-                PostalLocality::Read(None) => CityResolutions::Done(vec![no_city(country_code)]),
-            };
+            return postal_locality_resolution(postal_locality, CONFIDENCE_FALLBACK, country_code);
         }
         return CityResolutions::Done(vec![no_city(country_code)]);
     }
@@ -441,16 +471,7 @@ pub fn city_resolutions(
             )]);
         }
     }
-    match postal_locality {
-        PostalLocality::Unread => CityResolutions::NeedsPostalLocality,
-        PostalLocality::Read(Some(value)) => CityResolutions::Done(vec![one_city(
-            value.clone(),
-            CARRIER_POSTAL_ADDRESS_LOCALITY,
-            CONFIDENCE_HEURISTIC,
-            country_code,
-        )]),
-        PostalLocality::Read(None) => CityResolutions::Done(vec![no_city(country_code)]),
-    }
+    postal_locality_resolution(postal_locality, CONFIDENCE_HEURISTIC, country_code)
 }
 
 /// The district reading for one component set and country code.
@@ -468,26 +489,11 @@ pub fn district_resolution(
     } else if route.as_deref() == Some(b"AE".as_slice()) {
         (TYPE_SUBLOCALITY_LEVEL_1, CARRIER_SUBLOCALITY_LEVEL_1)
     } else {
-        return DistrictResolution {
-            value: None,
-            carrier: None,
-            confidence: CONFIDENCE_NONE,
-            country_code: country_code.map(<[u8]>::to_vec),
-        };
+        return no_district(country_code);
     };
     match first_long_text(components, type_name) {
-        Some(value) => DistrictResolution {
-            value: Some(value),
-            carrier: Some(carrier),
-            confidence: CONFIDENCE_PRIMARY,
-            country_code: country_code.map(<[u8]>::to_vec),
-        },
-        None => DistrictResolution {
-            value: None,
-            carrier: None,
-            confidence: CONFIDENCE_NONE,
-            country_code: country_code.map(<[u8]>::to_vec),
-        },
+        Some(value) => one_district(value, carrier, country_code),
+        None => no_district(country_code),
     }
 }
 
