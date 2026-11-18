@@ -15,17 +15,10 @@ __all__ = [
     "__version__",
     "address_city_resolutions",
     "address_component_flags",
-    "address_country_code",
     "address_district_resolution",
-    "address_first_long_text",
     "address_first_long_text_index",
-    "address_first_short_text",
-    "address_long_texts",
     "address_matching_indices",
     "address_postal_code_result",
-    "address_short_texts",
-    "address_split_compound_code",
-    "address_untyped_indices",
     "mask_first_invalid_path",
     "mask_sorted_order",
     "mask_unique_indices",
@@ -42,32 +35,10 @@ def address_matching_indices(
     components: list[_Component],
     type_name: bytes,
 ) -> list[int]: ...
-def address_untyped_indices(
-    components: list[_Component]
-) -> list[int]: ...
-def address_first_long_text(
-    components: list[_Component],
-    type_name: bytes,
-) -> Optional[bytes]: ...
 def address_first_long_text_index(
     components: list[_Component],
     type_name: bytes,
 ) -> Optional[int]: ...
-def address_first_short_text(
-    components: list[_Component],
-    type_name: bytes,
-) -> Optional[bytes]: ...
-def address_long_texts(
-    components: list[_Component],
-    type_name: bytes,
-) -> list[bytes]: ...
-def address_short_texts(
-    components: list[_Component],
-    type_name: bytes,
-) -> list[bytes]: ...
-def address_country_code(
-    components: list[_Component]
-) -> Optional[bytes]: ...
 def address_city_resolutions(
     components: list[_Component],
     postal_locality_read: bool,
@@ -95,9 +66,6 @@ def address_postal_code_result(
 def address_component_flags(
     components: list[_Component]
 ) -> tuple[bool, bool, bool, bool, bool, bool, bool]: ...
-def address_split_compound_code(
-    compound_code: bytes,
-) -> Optional[tuple[bytes, bytes]]: ...
 def mask_valid_path(path: bytes) -> bool: ...
 def mask_first_invalid_path(paths: list[bytes]) -> Optional[int]: ...
 def mask_unique_indices(paths: list[bytes]) -> list[int]: ...

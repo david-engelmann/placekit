@@ -882,30 +882,43 @@ where
         .ok_or_else(|| serde::de::Error::custom("expected a non-negative integer"))
 }
 
-fn de_lenient_opt_u64<'de, D>(deserializer: D) -> Result<Option<u64>, D::Error>
+fn de_lenient_opt<'de, D, T>(
+    deserializer: D,
+    value_of: fn(&Value) -> Option<T>,
+    expected: &'static str,
+) -> Result<Option<T>, D::Error>
 where
     D: serde::Deserializer<'de>,
 {
     let value = Option::<Value>::deserialize(deserializer)?;
     match value {
         None | Some(Value::Null) => Ok(None),
-        Some(v) => lenient_u64_value(&v)
+        Some(v) => value_of(&v)
             .map(Some)
-            .ok_or_else(|| serde::de::Error::custom("expected a non-negative integer count")),
+            .ok_or_else(|| serde::de::Error::custom(expected)),
     }
+}
+
+fn de_lenient_opt_u64<'de, D>(deserializer: D) -> Result<Option<u64>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    de_lenient_opt(
+        deserializer,
+        lenient_u64_value,
+        "expected a non-negative integer count",
+    )
 }
 
 fn de_lenient_opt_u32<'de, D>(deserializer: D) -> Result<Option<u32>, D::Error>
 where
     D: serde::Deserializer<'de>,
 {
-    let value = Option::<Value>::deserialize(deserializer)?;
-    match value {
-        None | Some(Value::Null) => Ok(None),
-        Some(v) => lenient_u32_value(&v)
-            .map(Some)
-            .ok_or_else(|| serde::de::Error::custom("expected a non-negative integer")),
-    }
+    de_lenient_opt(
+        deserializer,
+        lenient_u32_value,
+        "expected a non-negative integer",
+    )
 }
 
 // Request serialization guards (R4-17): an optional string or list the

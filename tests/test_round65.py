@@ -89,7 +89,7 @@ def test_ctor_details_iter_bomb_converts():
         PlacesError("m", details=IterBomb())
     assert caught.value.message == (
         "details could not be read as an iterable: "
-        "<ReprBomb whose repr raised>"
+        "<unrepresentable ReprBomb>"
     )
     assert caught.value.context == "PlacesError"
     assert caught.value.__cause__ is BOMB
@@ -111,7 +111,7 @@ def test_ctor_details_gen_bomb_converts():
         PlacesError("m", details=bomb_details_gen())
     assert caught.value.message == (
         "details raised while being read: "
-        "<ReprBomb whose repr raised>"
+        "<unrepresentable ReprBomb>"
     )
     assert caught.value.context == "PlacesError"
     assert caught.value.__cause__ is BOMB
@@ -136,7 +136,7 @@ def test_fieldmask_of_gen_bomb_converts():
         FieldMask.of(bomb_mask_gen())
     assert caught.value.message == (
         "field paths raised while being read: "
-        "<ReprBomb whose repr raised>"
+        "<unrepresentable ReprBomb>"
     )
     assert caught.value.context == "FieldMask"
     assert caught.value.__cause__ is BOMB
@@ -185,7 +185,7 @@ def test_fieldmask_ctor_repr_bomb_value_keeps_fallback_wording():
     with pytest.raises(ConfigError) as caught:
         FieldMask(ReprBombValue())
     assert caught.value.message == (
-        "invalid field mask path: <ReprBombValue whose repr raised>"
+        "invalid field mask path: <unrepresentable ReprBombValue>"
     )
     assert caught.value.context == "FieldMask"
 
@@ -263,7 +263,7 @@ def test_text_search_routing_items_bomb_converts():
         client.text_search("coffee", routing_parameters=BombMapping())
     assert caught.value.message == (
         "routing_parameters raised while being read: "
-        "<ReprBomb whose repr raised>"
+        "<unrepresentable ReprBomb>"
     )
     assert caught.value.context == "text_search"
     assert caught.value.__cause__ is BOMB
@@ -291,7 +291,7 @@ def test_text_search_routing_stream_bomb_converts():
         )
     assert caught.value.message == (
         "routing_parameters raised while being read: "
-        "<ReprBomb whose repr raised>"
+        "<unrepresentable ReprBomb>"
     )
     assert caught.value.context == "text_search"
     assert caught.value.__cause__ is BOMB
@@ -338,7 +338,7 @@ def test_place_photo_bomb_int_converts():
         )
     assert caught.value.message == (
         "an argument for place_photo raised while it was being "
-        "validated: <ReprBomb whose repr raised>"
+        "validated: <unrepresentable ReprBomb>"
     )
     assert caught.value.context == "place_photo"
     assert caught.value.__cause__ is BOMB
@@ -369,7 +369,7 @@ def test_text_search_min_rating_float_bomb_converts():
         client.text_search("coffee", min_rating=FloatBomb(3.0))
     assert caught.value.message == (
         "an argument for text_search raised while it was being "
-        "validated: <ReprBomb whose repr raised>"
+        "validated: <unrepresentable ReprBomb>"
     )
     assert caught.value.context == "text_search"
     assert caught.value.__cause__ is BOMB
@@ -409,7 +409,7 @@ def test_address_untyped_components_bomb_converts():
         untyped_components([bomb_component()])
     assert caught.value.message == (
         "an argument for untyped_components raised while it was "
-        "being read: <ReprBomb whose repr raised>"
+        "being read: <unrepresentable ReprBomb>"
     )
     assert caught.value.context == "untyped_components"
     assert caught.value.__cause__ is BOMB
@@ -421,7 +421,7 @@ def test_address_country_code_bomb_converts():
         country_code(place)
     assert caught.value.message == (
         "an argument for country_code raised while it was "
-        "being read: <ReprBomb whose repr raised>"
+        "being read: <unrepresentable ReprBomb>"
     )
     assert caught.value.context == "country_code"
     assert caught.value.__cause__ is BOMB

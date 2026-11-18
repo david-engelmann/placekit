@@ -151,7 +151,7 @@ def test_resolver_else_repr_bomb():
         client.place_details(ReprBomb())
     assert caught.value.message == (
         "place_id must be a string, a Place or a PlacePrediction, "
-        "got <ReprBomb whose repr raised>"
+        "got <unrepresentable ReprBomb>"
     )
     assert WRAP_WORDING not in caught.value.message
     assert caught.value.context == "place_details"
@@ -164,7 +164,7 @@ def test_resolver_resolved_repr_bomb():
         client.place_details(Place(id=ReprBomb()))
     assert caught.value.message == (
         "place_id from a Place must be a string, "
-        "got <ReprBomb whose repr raised>"
+        "got <unrepresentable ReprBomb>"
     )
     assert WRAP_WORDING not in caught.value.message
     assert caught.value.context == "place_details"
@@ -248,7 +248,7 @@ def test_photo_width_repr_bomb():
         )
     assert caught.value.message == (
         "a Photo width_px must be an integer, "
-        "got <ReprBomb whose repr raised>"
+        "got <unrepresentable ReprBomb>"
     )
     assert WRAP_WORDING not in caught.value.message
     assert caught.value.context == "place_photo"
@@ -263,7 +263,7 @@ def test_photo_height_repr_bomb():
         )
     assert caught.value.message == (
         "a Photo height_px must be an integer, "
-        "got <ReprBomb whose repr raised>"
+        "got <unrepresentable ReprBomb>"
     )
     assert WRAP_WORDING not in caught.value.message
     assert caught.value.context == "place_photo"
@@ -276,7 +276,7 @@ def test_photo_else_repr_bomb():
         client.place_photo(ReprBomb(), max_width_px=100)
     assert caught.value.message == (
         "photo_name must be a string or a Photo, "
-        "got <ReprBomb whose repr raised>"
+        "got <unrepresentable ReprBomb>"
     )
     assert WRAP_WORDING not in caught.value.message
     assert caught.value.context == "place_photo"
@@ -293,7 +293,7 @@ def test_async_resolver_resolved_repr_bomb():
             await client.place_details(Place(id=ReprBomb()))
         assert caught.value.message == (
             "place_id from a Place must be a string, "
-            "got <ReprBomb whose repr raised>"
+            "got <unrepresentable ReprBomb>"
         )
         assert WRAP_WORDING not in caught.value.message
         assert caught.value.context == "place_details"
@@ -344,7 +344,7 @@ def test_async_photo_width_repr_bomb():
             )
         assert caught.value.message == (
             "a Photo width_px must be an integer, "
-            "got <ReprBomb whose repr raised>"
+            "got <unrepresentable ReprBomb>"
         )
         assert WRAP_WORDING not in caught.value.message
         assert caught.value.context == "place_photo"
@@ -382,7 +382,7 @@ def test_string_list_single_str_bomb():
         )
     assert caught.value.message == (
         "price_levels must be an iterable of strings, not a "
-        "single string: <ReprBombStr whose repr raised>"
+        "single string: <unrepresentable ReprBombStr>"
     )
     assert WRAP_WORDING not in caught.value.message
     assert caught.value.__cause__ is REPR_BOOM
@@ -394,7 +394,7 @@ def test_string_list_item_bomb():
         client.text_search("q", price_levels=[ReprBomb()])
     assert caught.value.message == (
         "price_levels items must be strings, "
-        "got <ReprBomb whose repr raised>"
+        "got <unrepresentable ReprBomb>"
     )
     assert WRAP_WORDING not in caught.value.message
     assert caught.value.__cause__ is REPR_BOOM
@@ -405,7 +405,7 @@ def test_code_string_nonstr_bomb():
     with pytest.raises(ConfigError) as caught:
         client.place_details("abc", language=ReprBomb())
     assert caught.value.message == (
-        "language must be a string, got <ReprBomb whose repr raised>"
+        "language must be a string, got <unrepresentable ReprBomb>"
     )
     assert WRAP_WORDING not in caught.value.message
     assert caught.value.__cause__ is REPR_BOOM
@@ -417,7 +417,7 @@ def test_code_string_control_bomb():
         client.place_details("abc", language=ReprBombStr("e\ud800"))
     assert caught.value.message == (
         "language must not contain control characters or "
-        "unpaired surrogates, got <ReprBombStr whose repr raised>"
+        "unpaired surrogates, got <unrepresentable ReprBombStr>"
     )
     assert WRAP_WORDING not in caught.value.message
     assert caught.value.__cause__ is REPR_BOOM
@@ -428,7 +428,7 @@ def test_require_str_nonstr_bomb():
     with pytest.raises(ConfigError) as caught:
         client.autocomplete(ReprBomb())
     assert caught.value.message == (
-        "input_text must be a string, got <ReprBomb whose repr raised>"
+        "input_text must be a string, got <unrepresentable ReprBomb>"
     )
     assert WRAP_WORDING not in caught.value.message
     assert caught.value.context == "autocomplete"
@@ -441,7 +441,7 @@ def test_require_str_surrogate_bomb():
         client.autocomplete(ReprBombStr("a\ud800"))
     assert caught.value.message == (
         "input_text must not contain unpaired surrogates, "
-        "got <ReprBombStr whose repr raised>"
+        "got <unrepresentable ReprBombStr>"
     )
     assert WRAP_WORDING not in caught.value.message
     assert caught.value.context == "autocomplete"
@@ -453,7 +453,7 @@ def test_validate_bool_bomb():
     with pytest.raises(ConfigError) as caught:
         client.text_search("q", open_now=ReprBomb())
     assert caught.value.message == (
-        "open_now must be a bool, got <ReprBomb whose repr raised>"
+        "open_now must be a bool, got <unrepresentable ReprBomb>"
     )
     assert WRAP_WORDING not in caught.value.message
     assert caught.value.__cause__ is REPR_BOOM
@@ -465,7 +465,7 @@ def test_coordinate_nonnumeric_bomb():
         client.autocomplete("x", origin=(ReprBomb(), 0.0))
     assert caught.value.message == (
         "origin latitude must be an int or float, "
-        "got <ReprBomb whose repr raised>"
+        "got <unrepresentable ReprBomb>"
     )
     assert WRAP_WORDING not in caught.value.message
     assert caught.value.context == "autocomplete"
@@ -480,7 +480,7 @@ def test_coordinate_range_bomb():
         )
     assert caught.value.message == (
         "origin latitude must be finite and within -90 to 90, "
-        "got <ReprBombFloat whose repr raised>"
+        "got <unrepresentable ReprBombFloat>"
     )
     assert WRAP_WORDING not in caught.value.message
     assert caught.value.context == "autocomplete"
@@ -495,7 +495,7 @@ def test_lat_lng_mapping_keys_bomb():
         )
     assert caught.value.message == (
         "origin must carry latitude and longitude, "
-        "got <ReprBombDict whose repr raised>"
+        "got <unrepresentable ReprBombDict>"
     )
     assert WRAP_WORDING not in caught.value.message
     assert caught.value.context == "autocomplete"
@@ -510,7 +510,7 @@ def test_lat_lng_pair_length_bomb():
         )
     assert caught.value.message == (
         "origin must be a (latitude, longitude) pair, "
-        "got <ReprBombList whose repr raised>"
+        "got <unrepresentable ReprBombList>"
     )
     assert WRAP_WORDING not in caught.value.message
     assert caught.value.context == "autocomplete"
@@ -524,7 +524,7 @@ def test_lat_lng_else_bomb():
     assert caught.value.message == (
         "origin must be a LatLng, a (latitude, longitude) pair "
         "or a latitude/longitude dict, "
-        "got <ReprBomb whose repr raised>"
+        "got <unrepresentable ReprBomb>"
     )
     assert WRAP_WORDING not in caught.value.message
     assert caught.value.__cause__ is REPR_BOOM
@@ -536,7 +536,7 @@ def test_circle_radius_bomb():
         client.nearby_search((0.0, 0.0), ReprBomb())
     assert caught.value.message == (
         "radius_m must be a finite int or float, "
-        "got <ReprBomb whose repr raised>"
+        "got <unrepresentable ReprBomb>"
     )
     assert WRAP_WORDING not in caught.value.message
     assert caught.value.__cause__ is REPR_BOOM
@@ -551,7 +551,7 @@ def test_dict_body_item_bomb():
     assert caught.value.message == (
         "ev_options field 'priceLevels' must be a list of "
         "strings, not a single string: "
-        "<ReprBombStr whose repr raised>"
+        "<unrepresentable ReprBombStr>"
     )
     assert WRAP_WORDING not in caught.value.message
     assert caught.value.__cause__ is REPR_BOOM
@@ -564,7 +564,7 @@ def test_dict_body_key_bomb():
             "q", ev_options={ReprBombStr("priceLevels"): "x"}
         )
     assert caught.value.message == (
-        "ev_options field <ReprBombStr whose repr raised> must "
+        "ev_options field <unrepresentable ReprBombStr> must "
         "be a list of strings, not a single string: 'x'"
     )
     assert WRAP_WORDING not in caught.value.message
@@ -576,7 +576,7 @@ def test_mapping_body_bomb():
     with pytest.raises(ConfigError) as caught:
         client.text_search("q", ev_options=ReprBomb())
     assert caught.value.message == (
-        "ev_options must be a dict, got <ReprBomb whose repr raised>"
+        "ev_options must be a dict, got <unrepresentable ReprBomb>"
     )
     assert WRAP_WORDING not in caught.value.message
     assert caught.value.__cause__ is REPR_BOOM
@@ -588,7 +588,7 @@ def test_location_body_bomb():
         client.text_search("q", location_bias=ReprBomb())
     assert caught.value.message == (
         "location bias or restriction must be a dict, "
-        "got <ReprBomb whose repr raised>"
+        "got <unrepresentable ReprBomb>"
     )
     assert WRAP_WORDING not in caught.value.message
     assert caught.value.context == "text_search"
@@ -601,7 +601,7 @@ def test_routing_body_bomb():
         client.text_search("q", routing_parameters=ReprBomb())
     assert caught.value.message == (
         "routing_parameters must be a dict, "
-        "got <ReprBomb whose repr raised>"
+        "got <unrepresentable ReprBomb>"
     )
     assert WRAP_WORDING not in caught.value.message
     assert caught.value.context == "text_search"
@@ -616,7 +616,7 @@ def test_int_range_bomb():
         )
     assert caught.value.message == (
         "max_width_px must be an integer between 1 and 4800, "
-        "got <ReprBomb whose repr raised>"
+        "got <unrepresentable ReprBomb>"
     )
     assert WRAP_WORDING not in caught.value.message
     assert caught.value.__cause__ is REPR_BOOM
@@ -630,7 +630,7 @@ def test_int_range_subclass_bomb():
         )
     assert caught.value.message == (
         "max_width_px must be an integer between 1 and 4800, "
-        "got <ReprBombInt whose repr raised>"
+        "got <unrepresentable ReprBombInt>"
     )
     assert WRAP_WORDING not in caught.value.message
     assert caught.value.__cause__ is REPR_BOOM
@@ -655,7 +655,7 @@ def test_float_range_bomb():
         client.text_search("q", min_rating=ReprBomb())
     assert caught.value.message == (
         "min_rating must be an int or float between 0 and 5, "
-        "got <ReprBomb whose repr raised>"
+        "got <unrepresentable ReprBomb>"
     )
     assert WRAP_WORDING not in caught.value.message
     assert caught.value.__cause__ is REPR_BOOM
@@ -667,7 +667,7 @@ def test_float_range_subclass_bomb():
         client.text_search("q", min_rating=ReprBombFloat(99.0))
     assert caught.value.message == (
         "min_rating must be an int or float between 0 and 5, "
-        "got <ReprBombFloat whose repr raised>"
+        "got <unrepresentable ReprBombFloat>"
     )
     assert WRAP_WORDING not in caught.value.message
     assert caught.value.__cause__ is REPR_BOOM
@@ -683,7 +683,7 @@ def test_skip_flag_bomb():
         )
     assert caught.value.message == (
         "skip_http_redirect must be a bool, "
-        "got <ReprBomb whose repr raised>"
+        "got <unrepresentable ReprBomb>"
     )
     assert WRAP_WORDING not in caught.value.message
     assert caught.value.__cause__ is REPR_BOOM
