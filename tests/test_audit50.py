@@ -467,3 +467,74 @@ class TestServerMessageAndTypedEntries:
         assert err.server_message is None
         assert err.field_violation_entries == []
         assert err.quota_violation_entries == []
+
+
+class TestResponseCapKeyword:
+    """A50-128: the response cap is settable from Python, with the
+    wrapper refusing the values the rule refuses before any native
+    call, and a set cap enforced by the core on the wire."""
+
+    def test_refusals(self):
+        for bad in (0, -1, True, 2.5, "1024", 2**64):
+            with pytest.raises(ConfigError):
+                Client("test-api-key", max_response_bytes=bad)
+
+    def test_refusal_message(self):
+        with pytest.raises(ConfigError) as caught:
+            Client("test-api-key", max_response_bytes=0)
+        assert caught.value.message == (
+            "max_response_bytes must be a positive int, got 0"
+        )
+
+    def test_timeout_refusal_message_states_the_rule(self):
+        # A50-134: the timeout refusal states the int or float
+        # rule it enforces, pinned exactly like its siblings.
+        with pytest.raises(ConfigError) as caught:
+            Client("test-api-key", timeout=0)
+        assert caught.value.message == (
+            "timeout must be a positive, finite int or float, "
+            "at most 3600 seconds, got 0"
+        )
+
+    def test_a_set_cap_bounds_the_body(self, raw_response, base_url):
+        raw_response(200, '{"places": []}')
+        client = Client(
+            "test-api-key", base_url=base_url, max_response_bytes=8
+        )
+        with pytest.raises(DecodeError) as caught:
+            client.text_search("pizza")
+        assert "exceeded the maximum of 8 bytes" in caught.value.message
+
+    def test_an_unset_cap_reads_the_default(self, raw_response, base_url):
+        raw_response(200, '{"places": []}')
+        client = Client("test-api-key", base_url=base_url)
+        assert client.text_search("pizza").places == []
+
+
+class TestValidatorOverflowRefusals:
+    """A50-133: a huge int at a float validator seat raises the
+    seat's ConfigError, never a bare OverflowError."""
+
+    def test_coordinate(self):
+        client = Client("test-api-key")
+        with pytest.raises(ConfigError) as caught:
+            client.nearby_search((10**400, 0.0), 100)
+        assert caught.value.message.startswith(
+            "location latitude must be finite and within -90 to 90, got "
+        )
+
+    def test_radius(self):
+        client = Client("test-api-key")
+        with pytest.raises(ConfigError) as caught:
+            client.nearby_search((0.0, 0.0), 10**400)
+        assert caught.value.message.startswith(
+            "radius_m must be a finite int or float, got "
+        )
+
+    def test_min_rating(self):
+        client = Client("test-api-key")
+        with pytest.raises(ConfigError) as caught:
+            client.text_search("q", min_rating=10**400)
+        assert caught.value.message.startswith(
+            "min_rating must be an int or float between 0 and 5, got "
+        )

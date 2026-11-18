@@ -22,6 +22,7 @@ class Client:
         *,
         base_url: Optional[str] = ...,
         timeout: Optional[float] = ...,
+        max_response_bytes: Optional[int] = ...,
     ) -> None: ...
     def close(self) -> None: ...
     def __reduce__(self) -> NoReturn: ...
@@ -59,7 +60,7 @@ class Client:
     ) -> TextSearchResult: ...
     def nearby_search(
         self,
-        location: LatLng | tuple[float, float],
+        location: LatLng | tuple[float, float] | list[float] | dict[str, Any],
         radius_m: float,
         *,
         fields: FieldsLike = ...,
@@ -95,7 +96,9 @@ class Client:
         include_query_predictions: Optional[bool] = ...,
         location_bias: Optional[dict[str, Any]] = ...,
         location_restriction: Optional[dict[str, Any]] = ...,
-        origin: Optional[LatLng | tuple[float, float]] = ...,
+        origin: Optional[
+            LatLng | tuple[float, float] | list[float] | dict[str, Any]
+        ] = ...,
         input_offset: Optional[int] = ...,
         included_primary_types: Optional[Iterable[str]] = ...,
         include_pure_service_area_businesses: Optional[bool] = ...,
@@ -117,6 +120,7 @@ class AsyncClient:
         *,
         base_url: Optional[str] = ...,
         timeout: Optional[float] = ...,
+        max_response_bytes: Optional[int] = ...,
     ) -> None: ...
     def close(self) -> None: ...
     def __reduce__(self) -> NoReturn: ...
@@ -154,7 +158,7 @@ class AsyncClient:
     ) -> TextSearchResult: ...
     async def nearby_search(
         self,
-        location: LatLng | tuple[float, float],
+        location: LatLng | tuple[float, float] | list[float] | dict[str, Any],
         radius_m: float,
         *,
         fields: FieldsLike = ...,
@@ -190,7 +194,9 @@ class AsyncClient:
         include_query_predictions: Optional[bool] = ...,
         location_bias: Optional[dict[str, Any]] = ...,
         location_restriction: Optional[dict[str, Any]] = ...,
-        origin: Optional[LatLng | tuple[float, float]] = ...,
+        origin: Optional[
+            LatLng | tuple[float, float] | list[float] | dict[str, Any]
+        ] = ...,
         input_offset: Optional[int] = ...,
         included_primary_types: Optional[Iterable[str]] = ...,
         include_pure_service_area_businesses: Optional[bool] = ...,

@@ -12,7 +12,7 @@
 /// accessors read through it. Field order is the order the
 /// variants always carried, with the bare server message
 /// appended by audit A50-027.
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ApiError {
     /// The HTTP status of the response. Always the HTTP status,
     /// whichever rule classified the error.
@@ -4212,5 +4212,26 @@ mod tests {
         let text = err.to_string();
         assert!(text.contains("not a Places error envelope"), "{text}");
         assert!(!text.contains("carried no message"), "{text}");
+    }
+
+    #[test]
+    fn api_error_clones_and_compares() {
+        // Audit A50-130: the shared parts struct carries Clone and
+        // PartialEq like the violation views below it, so a consumer
+        // can store a copy out of a borrowed error and compare two.
+        let parts = ApiError {
+            status: 429,
+            google_status: "RESOURCE_EXHAUSTED".to_string(),
+            message: "quota".to_string(),
+            code: Some(429),
+            details: Vec::new(),
+            retry_after: Some(7.5),
+            server_message: Some("quota".to_string()),
+        };
+        let cloned = parts.clone();
+        assert_eq!(parts, cloned);
+        let mut other = parts.clone();
+        other.status = 500;
+        assert_ne!(parts, other);
     }
 }

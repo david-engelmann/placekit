@@ -21,7 +21,7 @@ API exceptions also carry `server_message`, the bare message of the error envelo
 
 `QuotaError` is exported as an alias of `RateLimitError`, so either name catches a quota failure.
 
-Local validation follows one coercion rule everywhere. Numbers must be real and finite, bools are never numbers, and strings are never lists, so a value of the wrong kind fails as a `ConfigError` before any request instead of being converted into something else on the wire.
+Local validation follows one coercion rule everywhere. Numbers must be int or float and finite, bools are never numbers, and strings are never lists, so a value of the wrong kind fails as a `ConfigError` before any request instead of being converted into something else on the wire.
 
 ```python
 from placekit import Client, RateLimitError
