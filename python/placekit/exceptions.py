@@ -59,7 +59,7 @@ def _copy_list_argument(name: str, value: Optional[list[Any]]) -> list[Any]:
             return list(value)
         except Exception as exc:
             raise ConfigError(
-                f"{name} could not be copied: {exc!r}",
+                f"{name} could not be copied: {_safe_repr(exc)}",
                 context="PlacesError",
             ) from exc
     try:
