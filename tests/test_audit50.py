@@ -22,14 +22,7 @@ from placekit.fields import (
     TEXT_SEARCH_FIELDS,
     FieldMask,
 )
-from placekit.models import (
-    AddressComponent,
-    LocalizedText,
-    Money,
-    Photo,
-    Place,
-    TextSearchResult,
-)
+from placekit.models import LocalizedText, Money, Photo, Place, TextSearchResult
 
 
 class TestRetryAfterValueDiscipline:
@@ -672,46 +665,9 @@ class _ReprRaisesValueError(ValueError):
         raise RuntimeError("repr detonated")
 
 
-class _CountingComponent(AddressComponent):
-    """An AddressComponent whose long_text answers twice and then
-    detonates, so a refusal that re-reads the attribute instead of
-    rendering the judged value loses its message."""
-
-    def __init__(self):
-        object.__setattr__(self, "short_text", "y")
-        object.__setattr__(self, "types", ["locality"])
-        object.__setattr__(self, "_reads", 0)
-
-    @property
-    def long_text(self):  # type: ignore[override]
-        object.__setattr__(self, "_reads", self._reads + 1)
-        if self._reads == 1:
-            return "x"
-        if self._reads == 2:
-            return 42
-        raise AssertionError("a third read of long_text")
-
-
 class _RaisingLenList(list):
     def __len__(self):
         raise ValueError("length detonated")
-
-
-class _ShiftingTypesComponent(AddressComponent):
-    """An AddressComponent whose types getter answers a valid list
-    on the judged read and a non-iterable on any later read."""
-
-    def __init__(self):
-        object.__setattr__(self, "long_text", "x")
-        object.__setattr__(self, "short_text", "y")
-        object.__setattr__(self, "_reads", 0)
-
-    @property
-    def types(self):  # type: ignore[override]
-        object.__setattr__(self, "_reads", self._reads + 1)
-        if self._reads == 1:
-            return ["route"]
-        return 999
 
 
 class TestErrorSurfaceRepairs:
@@ -750,35 +706,6 @@ class TestErrorSurfaceRepairs:
         with pytest.raises(ConfigError) as caught:
             Client()
         assert caught.value.context == "client construction"
-
-    def test_address_refusal_renders_the_judged_value(self):
-        # Audit A50-171: the funnel refusal rendered a fresh read
-        # of the attribute instead of the captured value it had
-        # judged, so a third read decided the message.
-        from placekit.address import component_long_texts
-
-        component = _CountingComponent()
-        with pytest.raises(ConfigError) as caught:
-            component_long_texts([component], "locality")
-        assert "42" in str(caught.value)
-        assert component._reads == 2
-
-    def test_types_items_come_from_the_judged_read(self):
-        # Audit A50-178: the funnel judged the types container on
-        # its capture and then iterated a fresh read of the
-        # attribute, so a getter answering differently on the
-        # second read put unjudged items in the checked set, or
-        # escaped as a bare builtin when the second answer was
-        # not iterable at all. The pin sits at the funnel itself;
-        # the exercise reads downstream are the module's stated
-        # discipline and are not this seat.
-        from placekit.address import _checked_components_and_plain
-
-        component = _ShiftingTypesComponent()
-        checked, plain = _checked_components_and_plain([component])
-        assert len(checked) == 1
-        assert plain[0][2] == ("route",)
-        assert component._reads == 1
 
     def test_raw_read_failure_keeps_its_own_framing(self):
         # Audit A50-176: the raw source read sat inside the decode

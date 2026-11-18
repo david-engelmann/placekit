@@ -225,7 +225,9 @@ def test_constructor_timeout_second_conversion_returning_str_is_config_error():
 def test_constructor_plain_refusals_keep_their_messages():
     with pytest.raises(ConfigError) as caught:
         Client(123)  # type: ignore[arg-type]
-    assert str(caught.value) == "api_key must be a string, got 123"
+    assert str(caught.value) == (
+        "api_key must be a string, got 123 (context=client construction)"
+    )
     with pytest.raises(ConfigError) as caught:
         Client("test-key", timeout=0)
     assert "got 0" in str(caught.value)
