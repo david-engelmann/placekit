@@ -334,7 +334,37 @@ class FieldMask:
                 context="FieldMask",
             )
         encoded = []
-        for path in paths:
+        pending: list[tuple[int, bytes]] = []
+
+        def flush_pending() -> None:
+            # The verdicts of a run of plain string paths are
+            # decided in one core pass (audit A50-149). A plain
+            # string's own checks perform no caller visible
+            # operation (its reads cannot be overridden and its
+            # encoding is taken unbound), so deferring its
+            # verdict across later plain string paths is
+            # invisible to the caller. The flush therefore runs
+            # at the first member that is not a plain string,
+            # whose checks can be observed, and once after the
+            # loop, so a refusal still surfaces ahead of every
+            # observable read, exactly where the per path
+            # crossing used to raise it.
+            if not pending:
+                return
+            bad = _placekit.mask_first_invalid_path(
+                [data for _index, data in pending]
+            )
+            if bad is not None:
+                index = pending[bad][0]
+                raise ConfigError(
+                    f"invalid field mask path: {_safe_repr(paths[index])}",
+                    context="FieldMask",
+                )
+            pending.clear()
+
+        for index, path in enumerate(paths):
+            if type(path) is not str:
+                flush_pending()
             if not isinstance(path, str):
                 raise ConfigError(
                     f"invalid field mask path: {_safe_repr(path)}",
@@ -359,12 +389,15 @@ class FieldMask:
                     context="FieldMask",
                 ) from exc
             data = _encode_path(path)
-            if not _placekit.mask_valid_path(data):
+            if type(path) is str:
+                pending.append((index, data))
+            elif not _placekit.mask_valid_path(data):
                 raise ConfigError(
                     f"invalid field mask path: {_safe_repr(path)}",
                     context="FieldMask",
                 )
             encoded.append(data)
+        flush_pending()
         # A mask is a set of paths; duplicates are dropped keeping
         # first seen order so the header is stable for a given input.
         # The dedupe reads the members once more, hashing and
@@ -468,17 +501,41 @@ class FieldMask:
     @classmethod
     def text_search(cls) -> "FieldMask":
         """The curated Text Search default mask."""
+        if cls is FieldMask:
+            return _curated_default("text_search", TEXT_SEARCH_FIELDS)
         return cls(*TEXT_SEARCH_FIELDS)
 
     @classmethod
     def nearby_search(cls) -> "FieldMask":
         """The curated Nearby Search default mask."""
+        if cls is FieldMask:
+            return _curated_default("nearby_search", NEARBY_SEARCH_FIELDS)
         return cls(*NEARBY_SEARCH_FIELDS)
 
     @classmethod
     def place_details(cls) -> "FieldMask":
         """The curated Place Details default mask."""
+        if cls is FieldMask:
+            return _curated_default("place_details", PLACE_DETAILS_FIELDS)
         return cls(*PLACE_DETAILS_FIELDS)
+
+
+#: The curated default masks, built once each. A mask is a
+#: frozen dataclass over a tuple of paths, so a standing
+#: instance is safe to share, and the core keeps its own
+#: defaults the same way (audit A50-038). A caller who asks
+#: for the same default on every request otherwise repays
+#: the full construction, crossings included, every time
+#: (audit A50-148).
+_CURATED_DEFAULTS: dict[str, "FieldMask"] = {}
+
+
+def _curated_default(name: str, fields: Tuple[str, ...]) -> "FieldMask":
+    mask = _CURATED_DEFAULTS.get(name)
+    if mask is None:
+        mask = FieldMask(*fields)
+        _CURATED_DEFAULTS[name] = mask
+    return mask
 
 
 #: Accepted shapes for the ``fields`` argument of client methods.

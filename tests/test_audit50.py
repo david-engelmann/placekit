@@ -16,6 +16,12 @@ from placekit import AsyncClient, Client, PlacesError
 from placekit._placekit import Client as NativeClient
 from placekit._placekit import PlacesError as NativePlacesError
 from placekit.exceptions import ConfigError, DecodeError
+from placekit.fields import (
+    NEARBY_SEARCH_FIELDS,
+    PLACE_DETAILS_FIELDS,
+    TEXT_SEARCH_FIELDS,
+    FieldMask,
+)
 from placekit.models import LocalizedText, Money, Photo, Place, TextSearchResult
 
 
@@ -538,3 +544,117 @@ class TestValidatorOverflowRefusals:
         assert caught.value.message.startswith(
             "min_rating must be an int or float between 0 and 5, got "
         )
+
+
+class _StripRaises(str):
+    """A string whose strip read raises, the Round 54 double's
+    shape, for the FieldMask construction exercise seat."""
+
+    calls = 0
+
+    def strip(self, *args):
+        _StripRaises.calls += 1
+        raise ValueError("strip boom")
+
+
+class _PlainSubclass(str):
+    """A string subclass with no overrides, judged per path."""
+
+
+class TestCuratedDefaultMasks:
+    """A50-148: the curated default constructors return standing
+    instances instead of rebuilding the mask on every call."""
+
+    def test_defaults_are_standing_instances(self):
+        assert FieldMask.text_search() is FieldMask.text_search()
+        assert FieldMask.nearby_search() is FieldMask.nearby_search()
+        assert FieldMask.place_details() is FieldMask.place_details()
+
+    def test_defaults_equal_fresh_constructions(self):
+        assert FieldMask.text_search() == FieldMask(*TEXT_SEARCH_FIELDS)
+        assert FieldMask.nearby_search() == FieldMask(*NEARBY_SEARCH_FIELDS)
+        assert FieldMask.place_details() == FieldMask(*PLACE_DETAILS_FIELDS)
+
+    def test_a_subclass_still_builds_its_own(self):
+        class Sub(FieldMask):
+            pass
+
+        assert type(Sub.text_search()) is Sub
+        assert Sub.text_search() is not Sub.text_search()
+
+
+class TestBulkMaskVerdict:
+    """A50-149: construction decides a run of plain string paths
+    in one core pass, and every refusal still surfaces at the
+    seat and in the order the per path verdicts produced."""
+
+    def test_the_first_invalid_path_is_named(self):
+        with pytest.raises(ConfigError) as caught:
+            FieldMask("places.id", "bad path", "also bad")
+        assert "bad path" in str(caught.value)
+        assert caught.value.__cause__ is None
+
+    def test_an_invalid_path_ahead_of_a_raising_member_wins(self):
+        _StripRaises.calls = 0
+        with pytest.raises(ConfigError) as caught:
+            FieldMask("bad path", _StripRaises("places.rating"))
+        assert "bad path" in str(caught.value)
+        assert caught.value.__cause__ is None
+        assert _StripRaises.calls == 0
+
+    def test_a_raising_member_ahead_of_an_invalid_path_wins(self):
+        _StripRaises.calls = 0
+        with pytest.raises(ConfigError) as caught:
+            FieldMask(_StripRaises("places.rating"), "bad path")
+        assert isinstance(caught.value.__cause__, ValueError)
+        assert _StripRaises.calls == 1
+
+    def test_a_non_string_member_after_an_invalid_path_gets_the_verdict(self):
+        with pytest.raises(ConfigError) as caught:
+            FieldMask("bad path", 42)
+        assert "bad path" in str(caught.value)
+        assert caught.value.__cause__ is None
+
+    def test_valid_mixed_construction_still_builds(self):
+        mask = FieldMask(
+            "places.id", _PlainSubclass("places.rating"), "places.displayName"
+        )
+        assert mask.paths == (
+            "places.id",
+            "places.rating",
+            "places.displayName",
+        )
+
+    def test_a_plain_run_crosses_once(self, monkeypatch):
+        import placekit._placekit as native
+
+        real = native.mask_first_invalid_path
+        calls = []
+
+        def counting(paths):
+            calls.append(list(paths))
+            return real(paths)
+
+        monkeypatch.setattr(native, "mask_first_invalid_path", counting)
+        FieldMask("places.id", "places.rating", "places.displayName")
+        assert len(calls) == 1
+        assert len(calls[0]) == 3
+
+    def test_a_mixed_run_batches_around_a_subclass(self, monkeypatch):
+        import placekit._placekit as native
+
+        real = native.mask_first_invalid_path
+        calls = []
+
+        def counting(paths):
+            calls.append(list(paths))
+            return real(paths)
+
+        monkeypatch.setattr(native, "mask_first_invalid_path", counting)
+        FieldMask(
+            "places.id",
+            "places.rating",
+            _PlainSubclass("places.website"),
+            "places.name",
+        )
+        assert [len(call) for call in calls] == [2, 1]
