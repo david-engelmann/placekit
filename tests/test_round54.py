@@ -204,7 +204,7 @@ def test_mixed_set_renders_a_bad_repr_member_once_per_site():
     BadRepr.calls = 0
     with pytest.raises(ConfigError) as caught:
         FieldMask.of({BadRepr(), "places.id"})
-    assert "<BadRepr whose repr raised>" in str(caught.value)
+    assert "<unrepresentable BadRepr>" in str(caught.value)
     # Once for the sort key, once for the refusal message.
     assert BadRepr.calls == 2
 
