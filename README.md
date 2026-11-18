@@ -138,7 +138,7 @@ A process may fork after using placekit. The bindings detect the new process on 
 
 ## Pointing the client somewhere else
 
-`Client` and `AsyncClient` accept `base_url`, `timeout` and `max_response_bytes` keyword arguments. The base URL override is how the test suite runs fully offline against a local stub server, and it works just as well for proxies you control and regional endpoints. The response cap bounds how large a response body may grow before the request aborts with a decode error, and it defaults to 32 MiB.
+`Client` and `AsyncClient` accept `base_url`, `timeout` and `max_response_bytes` keyword arguments. The base URL override is how the test suite runs fully offline against a local stub server, and it works just as well for proxies you control and regional endpoints. The response cap bounds how large a successful response body may grow before the request aborts with a decode error, and it defaults to 32 MiB. Error response bodies keep a fixed limit of their own.
 
 ```python
 client = Client("YOUR_API_KEY", base_url="http://127.0.0.1:8080/v1", timeout=5.0)

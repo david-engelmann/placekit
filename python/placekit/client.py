@@ -1295,8 +1295,9 @@ class Client(_Base):
     the client at a local stub server. ``timeout`` is per request, in
     seconds, and may be at most 3600; anything else about it (zero,
     negative, non-finite, a boolean, a non-number) is a ``ConfigError``.
-    ``max_response_bytes`` caps the response body size in bytes and
-    defaults to 32 MiB; a value that is not a positive int is a
+    ``max_response_bytes`` caps the successful response body size in
+    bytes and defaults to 32 MiB, while error bodies keep a fixed
+    limit of their own; a value that is not a positive int is a
     ``ConfigError``.
     The key argument may be omitted or passed as None, in which case
     the client reads the ``PLACEKIT_API_KEY`` environment variable,
