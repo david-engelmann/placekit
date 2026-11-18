@@ -339,11 +339,15 @@ class FieldMask:
         def flush_pending() -> None:
             # The verdicts of a run of plain string paths are
             # decided in one core pass (audit A50-149). A plain
-            # string's own reads are inert, so deferring its
-            # verdict to the next flush point is invisible to the
-            # caller; the flush runs before the next path's own
-            # checks, so a refusal still surfaces ahead of every
-            # later path's reads, exactly where the per path
+            # string's own checks perform no caller visible
+            # operation (its reads cannot be overridden and its
+            # encoding is taken unbound), so deferring its
+            # verdict across later plain string paths is
+            # invisible to the caller. The flush therefore runs
+            # at the first member that is not a plain string,
+            # whose checks can be observed, and once after the
+            # loop, so a refusal still surfaces ahead of every
+            # observable read, exactly where the per path
             # crossing used to raise it.
             if not pending:
                 return
@@ -359,7 +363,8 @@ class FieldMask:
             pending.clear()
 
         for index, path in enumerate(paths):
-            flush_pending()
+            if type(path) is not str:
+                flush_pending()
             if not isinstance(path, str):
                 raise ConfigError(
                     f"invalid field mask path: {_safe_repr(path)}",

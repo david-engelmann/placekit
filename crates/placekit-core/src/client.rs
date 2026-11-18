@@ -859,11 +859,18 @@ async fn read_body_capped(response: reqwest::Response, cap: usize) -> BodyRead {
     // hostile content length cannot force an allocation past what
     // the cap already permits as real bytes, instead of growing
     // from zero and copying on every reallocation (audit A50-146).
+    // The reservation is fallible: a claim near a caller set cap
+    // can exceed what this process can allocate, or overflow the
+    // capacity arithmetic when the cap itself is huge, and
+    // neither may fail the read before a byte arrives. A failed
+    // reservation leaves the buffer to grow as bytes come in,
+    // and the cap checks below judge the bytes that arrive.
     let reserve = response
         .content_length()
         .map_or(0, |n| (n as usize).min(cap));
     let mut stream = response.bytes_stream();
-    let mut buf = Vec::with_capacity(reserve);
+    let mut buf: Vec<u8> = Vec::new();
+    let _ = buf.try_reserve(reserve);
     while let Some(chunk) = stream.next().await {
         match chunk {
             Ok(chunk) => {

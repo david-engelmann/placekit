@@ -624,3 +624,37 @@ class TestBulkMaskVerdict:
             "places.rating",
             "places.displayName",
         )
+
+    def test_a_plain_run_crosses_once(self, monkeypatch):
+        import placekit._placekit as native
+
+        real = native.mask_first_invalid_path
+        calls = []
+
+        def counting(paths):
+            calls.append(list(paths))
+            return real(paths)
+
+        monkeypatch.setattr(native, "mask_first_invalid_path", counting)
+        FieldMask("places.id", "places.rating", "places.displayName")
+        assert len(calls) == 1
+        assert len(calls[0]) == 3
+
+    def test_a_mixed_run_batches_around_a_subclass(self, monkeypatch):
+        import placekit._placekit as native
+
+        real = native.mask_first_invalid_path
+        calls = []
+
+        def counting(paths):
+            calls.append(list(paths))
+            return real(paths)
+
+        monkeypatch.setattr(native, "mask_first_invalid_path", counting)
+        FieldMask(
+            "places.id",
+            "places.rating",
+            _PlainSubclass("places.website"),
+            "places.name",
+        )
+        assert [len(call) for call in calls] == [2, 1]
