@@ -232,7 +232,7 @@ def _validate_bool(name: str, value: Optional[bool]) -> Optional[bool]:
 def _validate_coordinate(name: str, value: Any, low: float, high: float) -> float:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         rendered, detonation = _guarded_repr(value)
-        _refuse(f"{name} must be a real number, got {rendered}", detonation)
+        _refuse(f"{name} must be an int or float, got {rendered}", detonation)
     result = float(value)
     if not math.isfinite(result) or not low <= result <= high:
         rendered, detonation = _guarded_repr(value)
@@ -252,9 +252,10 @@ def _validate_lat_lng(
 
     Only ordered containers are accepted (LatLng, tuple, list, or a
     wire-shape dict); a set would unpack latitude and longitude in an
-    arbitrary order. Values must be real numbers, bools are not
-    numbers here, NaN and infinity are rejected instead of serializing
-    as JSON null, and the ranges match the core's.
+    arbitrary order. Values must be int or float instances,
+    bools are not numbers here, NaN and infinity are rejected
+    instead of serializing as JSON null, and the ranges match
+    the core's.
     """
     if isinstance(value, LatLng):
         latitude: Any = value.latitude
