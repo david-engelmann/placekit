@@ -1818,6 +1818,12 @@ mod tests {
         for good in [
             "http://127.0.0.1:9/v1",
             "http://localhost:8080/v1",
+            // Audit A50-182: the loopback name's other accepted
+            // shapes build as well, a subdomain of it, the
+            // trailing dot form, and the uppercase form.
+            "http://foo.localhost:9/v1",
+            "http://localhost.:9/v1",
+            "http://LOCALHOST:9/v1",
             "http://[::1]:8080/v1",
             // The mapped spelling of the loopback address is
             // judged by the address it embeds, so it builds as the
@@ -2980,6 +2986,10 @@ mod tests {
         // literal and by name, over https as much as over http.
         assert!(at(&api, "https://127.0.0.1/img").is_err());
         assert!(at(&api, "https://localhost/img").is_err());
+        // Audit A50-182: a subdomain of the loopback name is
+        // refused at this seat as well. A hostname is not an IP
+        // literal, so the refusal can only be the loopback arm.
+        assert!(at(&api, "https://foo.localhost/img").is_err());
         assert!(at(&api, "http://127.0.0.1/img").is_err());
         // Non-public IP literals are refused over https too.
         assert!(at(&api, "https://192.168.1.10/img").is_err());
@@ -3010,6 +3020,9 @@ mod tests {
         assert!(at(&api, "https://100.128.0.1/img").is_ok());
         // Userinfo is refused outright (red team R2).
         assert!(at(&api, "https://user:pass@lh3.googleusercontent.com/img").is_err());
+        // Audit A50-183: the password-only form is refused at
+        // this seat too, not only at the base URL seat.
+        assert!(at(&api, "https://:pass@lh3.googleusercontent.com/img").is_err());
         // Other schemes are refused rather than attempted.
         assert!(at(&api, "ftp://example.com/img").is_err());
         // The local stub configuration: a loopback base may steer
@@ -3156,6 +3169,29 @@ mod tests {
                 "{target}: {err}"
             );
         }
+        // Audit A50-179 and A50-180: the remaining non-public
+        // classes under both tunneling spellings, the
+        // unspecified address, a 0.0.0.0/8 member, link-local,
+        // and shared space, are refused with the non-public
+        // reason. None of the eight is loopback, so the reason
+        // text itself discriminates.
+        for target in [
+            "https://[2002::]/x",
+            "https://[2002:8:808::]/x",
+            "https://[2002:a9fe:101::]/x",
+            "https://[2002:6440:1::]/x",
+            "https://[2001:0:808:808:0:0:ffff:ffff]/x",
+            "https://[2001:0:808:808:0:0:fff7:f7f7]/x",
+            "https://[2001:0:808:808:0:0:5601:fefe]/x",
+            "https://[2001:0:808:808:0:0:9bbf:fffe]/x",
+        ] {
+            let err = at(target).unwrap_err();
+            assert!(
+                err.to_string()
+                    .contains("the target is a non-public IP address"),
+                "{target}: {err}"
+            );
+        }
         // Tunneling spellings of public addresses are
         // followed, not refused: 2002:808:808:: embeds
         // 8.8.8.8, the second Teredo spelling below delivers
@@ -3183,6 +3219,13 @@ mod tests {
             "http://[2002:a00:1::]/v1",
             "http://[2001:0:808:808:0:0:f5ff:fffe]/v1",
             "http://[2001:0:7f00:1:0:0:f5ff:fffe]/v1",
+            // Audit A50-179: a Teredo spelling whose client is
+            // the unspecified address, and one whose client is
+            // shared space, refuse at this seat as well. Two
+            // rows suffice here because the base rule turns on
+            // loopback alone.
+            "http://[2001:0:808:808:0:0:ffff:ffff]/v1",
+            "http://[2001:0:808:808:0:0:9bbf:fffe]/v1",
         ] {
             assert_eq!(
                 Client::builder("k")
@@ -3217,7 +3260,7 @@ mod tests {
         // spelling families, including the segment 5 shapes
         // where the RFC 6052 layout puts the fourth octet in
         // the high byte and the low byte carries nothing.
-        let cases: [(&str, Option<std::net::Ipv4Addr>); 22] = [
+        let cases: [(&str, Option<std::net::Ipv4Addr>); 30] = [
             ("64:ff9b::a00:1", Some(std::net::Ipv4Addr::new(10, 0, 0, 1))),
             (
                 "64:ff9b::7f00:1",
@@ -3299,6 +3342,38 @@ mod tests {
             (
                 "2001:0:808:808:0:0:f6f6:f6f6",
                 Some(std::net::Ipv4Addr::new(9, 9, 9, 9)),
+            ),
+            // Audit A50-180: the 6to4 classes the dotted pins
+            // cover, the unspecified address, a 0.0.0.0/8
+            // member, link-local, and shared space.
+            ("2002::", Some(std::net::Ipv4Addr::new(0, 0, 0, 0))),
+            ("2002:8:808::", Some(std::net::Ipv4Addr::new(0, 8, 8, 8))),
+            (
+                "2002:a9fe:101::",
+                Some(std::net::Ipv4Addr::new(169, 254, 1, 1)),
+            ),
+            (
+                "2002:6440:1::",
+                Some(std::net::Ipv4Addr::new(100, 64, 0, 1)),
+            ),
+            // Audit A50-179: the same four classes as Teredo
+            // clients under a public server, the client bits
+            // being the last 32 bits XORed with all ones.
+            (
+                "2001:0:808:808:0:0:ffff:ffff",
+                Some(std::net::Ipv4Addr::new(0, 0, 0, 0)),
+            ),
+            (
+                "2001:0:808:808:0:0:fff7:f7f7",
+                Some(std::net::Ipv4Addr::new(0, 8, 8, 8)),
+            ),
+            (
+                "2001:0:808:808:0:0:5601:fefe",
+                Some(std::net::Ipv4Addr::new(169, 254, 1, 1)),
+            ),
+            (
+                "2001:0:808:808:0:0:9bbf:fffe",
+                Some(std::net::Ipv4Addr::new(100, 64, 0, 1)),
             ),
         ];
         for (spelling, expected) in cases {
