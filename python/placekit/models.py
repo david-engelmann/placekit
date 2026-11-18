@@ -58,52 +58,8 @@ from pathlib import Path
 from typing import Any, Iterator, Optional
 
 from . import _placekit
+from ._guarded import _safe_repr, _safe_type_name
 from .exceptions import ConfigError, DecodeError, PlacesError
-
-
-def _safe_type_name(value: Any) -> Optional[str]:
-    """The type name of a payload value, safe to name in a refusal.
-
-    Refusals name the values they refuse by type as well as by
-    repr, and a class can answer its name through a property
-    that raises or with something that is not a plain string,
-    so a refusal interpolating the raw name would break on the
-    name itself and escape bare. Where the name reads as a
-    plain string it is returned unchanged, so no honest refusal
-    message moves. Where it cannot be read as one, None stands
-    in and the caller names the value by the fixed
-    unrepresentable form instead. This is the one guarded name
-    reading in the module, and every site that names a type
-    reads through it.
-    """
-    try:
-        name = type(value).__name__
-    except Exception:
-        return None
-    if type(name) is str:
-        return name
-    return None
-
-
-def _safe_repr(value: Any) -> str:
-    """The repr of a payload value, safe to name in a refusal.
-
-    Refusals interpolate the values they refuse, and a payload
-    object whose own repr raises would break the refusal itself
-    and escape bare. Where repr works its answer is returned
-    unchanged, so no honest refusal message moves. Where it
-    raises, the value is named by its type instead, through
-    the guarded name reading, and where the name cannot be
-    read as a plain string a fixed form stands in its place.
-    """
-    try:
-        return repr(value)
-    except Exception:
-        pass
-    name = _safe_type_name(value)
-    if name is not None:
-        return f"<unrepresentable {name}>"
-    return "<unrepresentable value>"
 
 
 def _safe_message(exc: DecodeError) -> str:

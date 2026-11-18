@@ -12,55 +12,6 @@ from math import isfinite
 from typing import Any, NoReturn, Optional
 
 
-def _safe_type_name(value: Any) -> Optional[str]:
-    """The type name of a caller supplied value, safe to name in
-    a refusal.
-
-    Refusals name the values they refuse by type as well as by
-    repr, and a class can answer its name through a property
-    that raises or with something that is not a plain string,
-    so a refusal interpolating the raw name would break on the
-    name itself and escape bare. Where the name reads as a
-    plain string it is returned unchanged, so no honest refusal
-    message moves. Where it cannot be read as one, None stands
-    in and the caller names the value by the fixed
-    unrepresentable form instead. This is the one guarded name
-    reading in the module, on the pattern the models module
-    settled, and every site here that names a type reads
-    through it.
-    """
-    try:
-        name = type(value).__name__
-    except Exception:
-        return None
-    if type(name) is str:
-        return name
-    return None
-
-
-def _safe_repr(value: Any) -> str:
-    """The repr of a caller supplied value or a caught
-    exception, safe to name in a refusal.
-
-    Refusals and wraps interpolate the exception a caller value
-    raised, and an exception whose own repr raises would break
-    the refusal itself and escape bare. Where repr works its
-    answer is returned unchanged, so no honest refusal message
-    moves. Where it raises, the value is named by its type
-    instead, through the guarded name reading, and where the
-    name cannot be read as a plain string a fixed form stands
-    in its place.
-    """
-    try:
-        return repr(value)
-    except Exception:
-        pass
-    name = _safe_type_name(value)
-    if name is not None:
-        return f"<unrepresentable {name}>"
-    return "<unrepresentable value>"
-
-
 def _safe_text(value: Any) -> str:
     """The text form of a stored value, safe to render.
 
@@ -111,11 +62,6 @@ def _copy_list_argument(name: str, value: Optional[list[Any]]) -> list[Any]:
                 f"{name} could not be copied: {exc!r}",
                 context="PlacesError",
             ) from exc
-    # Imported here rather than at module level, because fields
-    # imports this module for ConfigError and the bounded read
-    # helper cannot be imported the other way at module level.
-    from .fields import MAX_MATERIALIZED_ITEMS, _materialize_bounded
-
     try:
         return _materialize_bounded(name, value, MAX_MATERIALIZED_ITEMS)
     except ConfigError as exc:
@@ -377,6 +323,20 @@ class ConfigError(PlacesError, ValueError):
     """
 
     kind = "config"
+
+
+# The guarded render helpers and the bounded materialiser
+# live in ._guarded, the leaf module below this one in the
+# import graph (audit A50-081 and A50-082). The import
+# stands here, after the classes, because the leaf's
+# materialiser raises ConfigError in its turn, and this
+# placement lets either module load first.
+from ._guarded import (  # noqa: E402
+    MAX_MATERIALIZED_ITEMS,
+    _materialize_bounded,
+    _safe_repr,
+    _safe_type_name,
+)
 
 
 # Built from the subclasses themselves, keyed by each class
