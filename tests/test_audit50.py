@@ -16,7 +16,7 @@ from placekit import AsyncClient, Client, PlacesError
 from placekit._placekit import Client as NativeClient
 from placekit._placekit import PlacesError as NativePlacesError
 from placekit.exceptions import ConfigError, DecodeError
-from placekit.models import LocalizedText, Money, Photo, Place
+from placekit.models import LocalizedText, Money, Photo, Place, TextSearchResult
 
 
 class TestRetryAfterValueDiscipline:
@@ -214,6 +214,22 @@ class _CountingDict(dict):
         return super().values()
 
 
+class _RaisingDict(dict):
+    """A payload mapping whose values view raises on its
+    second exercise, so the first walk reads it and a later
+    walk at its own decoder seat converts the raise."""
+
+    def __init__(self, *args):
+        super().__init__(*args)
+        self.exercises = 0
+
+    def values(self):  # type: ignore[override]
+        self.exercises += 1
+        if self.exercises >= 2:
+            raise RuntimeError("hostile values")
+        return super().values()
+
+
 def _counting(value):
     if isinstance(value, dict):
         return _CountingDict({k: _counting(v) for k, v in value.items()})
@@ -298,6 +314,32 @@ class TestRootedDecodeValidation:
         place = Place.from_api(payload)
         assert place.id == "ChIJrTLr-GyuEmsRBfy61i59si0"
         assert _CountingDict.visits > _dict_nodes(self.PAYLOAD)
+
+    def test_a_mixed_tree_walks_the_hostile_sibling_plain_first(self):
+        # A50-121: a nested walk must not publish its own
+        # subtree's plainness. A plain sibling decoded first
+        # used to set the flag and disarm the walk for the
+        # hostile sibling after it, which then decoded
+        # silently where the settled behaviour converts.
+        plain = {"id": "p1", "location": {"latitude": 3.0, "longitude": 4.0}}
+        hostile = {
+            "id": "p2",
+            "location": _RaisingDict({"latitude": 1.0, "longitude": 2.0}),
+        }
+        with pytest.raises(DecodeError):
+            TextSearchResult.from_api({"places": [plain, hostile]})
+
+    def test_a_mixed_tree_walks_the_hostile_sibling_hostile_first(self):
+        # A50-121: the same mixed tree in the other order.
+        # The hostile sibling converts in each order, so the
+        # verdict cannot depend on sibling decode order.
+        plain = {"id": "p1", "location": {"latitude": 3.0, "longitude": 4.0}}
+        hostile = {
+            "id": "p2",
+            "location": _RaisingDict({"latitude": 1.0, "longitude": 2.0}),
+        }
+        with pytest.raises(DecodeError):
+            TextSearchResult.from_api({"places": [hostile, plain]})
 
     def test_a_direct_child_decode_validates_in_full(self):
         with pytest.raises(DecodeError):

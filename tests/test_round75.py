@@ -464,7 +464,7 @@ def test_coordinate_nonnumeric_bomb():
     with pytest.raises(ConfigError) as caught:
         client.autocomplete("x", origin=(ReprBomb(), 0.0))
     assert caught.value.message == (
-        "origin latitude must be a real number, "
+        "origin latitude must be an int or float, "
         "got <ReprBomb whose repr raised>"
     )
     assert WRAP_WORDING not in caught.value.message

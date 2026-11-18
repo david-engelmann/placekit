@@ -677,7 +677,14 @@ def _validate_payload(data: Any, model: str) -> None:
         raise DecodeError(
             f"{model} payload could not be read: {_safe_repr(exc)}"
         ) from exc
-    _decode_plain.set(plain)
+    if _decode_depth.get() == 1:
+        # Only the root walk publishes the plainness verdict.
+        # A nested walk that runs because the flag is still
+        # false must not publish its own subtree's verdict,
+        # or a plain sibling decoded first would set the flag
+        # and disarm the walk for a hostile sibling decoded
+        # after it (audit A50-121).
+        _decode_plain.set(plain)
     if not _placekit.models_payload_depth_within_limit(trace):
         raise DecodeError(
             f"{model} payload is nested deeper than "
@@ -925,8 +932,10 @@ class LocalizedText:
 class LatLng:
     """A latitude/longitude pair.
 
-    Construction validates the values are real, finite numbers
-    (bools and strings are not coordinates). Range is a request-side
+    Construction validates the values are finite numbers of
+    type int or float (bools and strings are not coordinates,
+    and the wider numeric types the decoders accept are not
+    accepted here). Range is a request-side
     rule enforced by the client at call time, so a LatLng decoded
     from a response is preserved exactly as the API sent it.
     """
@@ -950,7 +959,7 @@ class LatLng:
                 finite = False
             if not finite:
                 raise ConfigError(
-                    f"LatLng {name} must be a finite real number, "
+                    f"LatLng {name} must be a finite int or float, "
                     f"got {_safe_repr(value)}"
                 )
 
