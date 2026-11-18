@@ -360,11 +360,20 @@ impl Error {
     /// Append a parenthesised note to an API error's message, for facts
     /// learned outside the body (an unreadable body, the content type,
     /// which host actually answered). Other variants are unchanged.
+    /// The envelope cap is reapplied after the append, because a note
+    /// can carry server chosen text (the declared content type on the
+    /// photo path) and the stored message must not grow past the cap
+    /// the envelope path applied (audit A50-166).
     pub(crate) fn with_note(mut self, note: &str) -> Error {
         if let Some(parts) = self.api_parts_mut() {
             parts.message.push_str(" (");
             parts.message.push_str(note);
             parts.message.push(')');
+            parts.message = parts
+                .message
+                .chars()
+                .take(ENVELOPE_TEXT_CAP_CHARS)
+                .collect();
         }
         self
     }
@@ -985,6 +994,32 @@ mod tests {
             let err = Error::from_response(status, &body);
             assert_eq!(err.to_string(), headline, "status {google_status}");
         }
+    }
+
+    #[test]
+    fn with_note_keeps_the_stored_message_at_the_envelope_cap() {
+        // Audit A50-166: a note appended after construction used to
+        // extend the stored message past ENVELOPE_TEXT_CAP_CHARS by
+        // its own length, and one note source is server chosen text
+        // (the declared content type on the photo path). At the cap
+        // the appended note is cut with the message; under the cap
+        // the note survives whole.
+        let at_cap = "m".repeat(500);
+        let body = format!(
+            r#"{{"error": {{"code": 400, "message": "{at_cap}", "status": "INVALID_ARGUMENT"}}}}"#
+        );
+        let err = Error::from_response(400, &body).with_note(&"n".repeat(300));
+        let Error::InvalidRequest { parts } = &err else {
+            panic!("expected the invalid request variant");
+        };
+        assert_eq!(parts.message.chars().count(), 500);
+
+        let body = r#"{"error": {"code": 400, "message": "m", "status": "INVALID_ARGUMENT"}}"#;
+        let err = Error::from_response(400, body).with_note("content type text/html");
+        let Error::InvalidRequest { parts } = &err else {
+            panic!("expected the invalid request variant");
+        };
+        assert_eq!(parts.message, "m (content type text/html)");
     }
 
     #[test]

@@ -791,8 +791,7 @@ def test_raw_element_raises_at_model_level_match_the_raw_get():
             Place.from_api({"name": "x", "reviews": [review]},
                            raw={"reviews": raw_items})
         assert str(caught.value) == (
-            "Place payload key 'reviews' element 0 failed to "
-            f"decode: Place payload key 'reviews' could not be "
+            "Place payload key 'reviews' could not be "
             f"read: RuntimeError({boom!r})"
         )
 

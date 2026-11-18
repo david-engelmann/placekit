@@ -658,3 +658,65 @@ class TestBulkMaskVerdict:
             "places.name",
         )
         assert [len(call) for call in calls] == [2, 1]
+
+
+class _ReprRaisesValueError(ValueError):
+    def __repr__(self):
+        raise RuntimeError("repr detonated")
+
+
+class _RaisingLenList(list):
+    def __len__(self):
+        raise ValueError("length detonated")
+
+
+class TestErrorSurfaceRepairs:
+    def test_convert_wrap_names_a_detonating_exception_safely(self):
+        # Audit A50-169: the conversion wrap named its caught
+        # exception through the raw repr, so an exception whose
+        # repr raises escaped the wrap it exists to contain.
+        from placekit.client import _Base
+
+        def convert(data):
+            raise _ReprRaisesValueError("boom")
+
+        with pytest.raises(DecodeError) as caught:
+            _Base._convert(convert, {}, "test conversion")
+        assert "<unrepresentable" in str(caught.value)
+        assert isinstance(caught.value.__cause__, _ReprRaisesValueError)
+
+    def test_plain_refusals_carry_the_construction_context(self):
+        # Audit A50-170: the plain construction refusals carried no
+        # context while a core failure at the same seat carried
+        # "client construction".
+        with pytest.raises(ConfigError) as caught:
+            Client("   ")
+        assert caught.value.context == "client construction"
+        with pytest.raises(ConfigError) as caught:
+            Client(123)  # type: ignore[arg-type]
+        assert caught.value.context == "client construction"
+
+    def test_missing_key_refusal_carries_the_construction_context(
+        self, monkeypatch
+    ):
+        # Audit A50-170, the arm the review repair completed: the
+        # missing key refusal is raised by the environment fallback
+        # ahead of the guarded try, so it names the seat itself.
+        monkeypatch.delenv("PLACEKIT_API_KEY", raising=False)
+        with pytest.raises(ConfigError) as caught:
+            Client()
+        assert caught.value.context == "client construction"
+
+    def test_raw_read_failure_keeps_its_own_framing(self):
+        # Audit A50-176: the raw source read sat inside the decode
+        # try, so its failure was re-framed as an element decode
+        # failure in front of its own message.
+        from placekit.models import _model_elements
+
+        raw = {"results": _RaisingLenList([{}])}
+        with pytest.raises(DecodeError) as caught:
+            _model_elements(
+                [{}], "Place", "results", raw, lambda item, raw_item: item
+            )
+        assert "could not be read" in str(caught.value)
+        assert "failed to decode" not in str(caught.value)
