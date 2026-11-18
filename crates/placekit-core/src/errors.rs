@@ -847,7 +847,9 @@ pub(crate) fn transport_class(err: &reqwest::Error) -> &'static str {
 // A50-064); the names the error constructions and this
 // module's tests read are re-exported here so their paths
 // do not move, and the client reaches the preflight pair
-// through this module as it always has.
+// through this module as it always has. The facade is
+// kept whole even where a name is read only by tests.
+#[allow(unused_imports)]
 pub(crate) use crate::envelope::{
     non_envelope_message, opening_bracket_count, parse_envelope, parse_envelope_head,
     preflight_trip, recursion_trip, EnvelopeParts, ENVELOPE_TEXT_CAP_CHARS,

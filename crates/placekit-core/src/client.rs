@@ -1273,7 +1273,9 @@ fn content_type_of(response: &reqwest::Response) -> Option<String> {
 // The redirect and base URL screening family lives in its
 // own module (audit A50-160); the names the client and its
 // tests read are re-exported here so their paths do not
-// move.
+// move. The facade is kept whole even where a name is
+// read only by tests.
+#[allow(unused_imports)]
 pub(crate) use crate::screening::{ipv6_embedded_ipv4, parse_base_url, screen_redirect_target};
 
 fn validate_place_id(place_id: &str) -> Result<(), Error> {
