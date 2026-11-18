@@ -715,4 +715,50 @@ mod tests {
         // Re-validating a default through the checked constructor succeeds.
         assert!(FieldMask::new(details.paths().to_vec()).is_ok());
     }
+
+    #[test]
+    fn defaults_carry_their_full_header_values() {
+        // Audit A50-181: the defaults' full contents are pinned as
+        // literals, transcribed against the Python tuples in
+        // fields.py, so a one-sided edit to a core default list
+        // fails here instead of moving a derived expectation with
+        // it.
+        assert_eq!(
+            FieldMask::text_search_default().header_value(),
+            "places.id,places.name,places.displayName,places.formattedAddress,\
+             places.location,places.rating,places.userRatingCount,places.types,\
+             places.primaryType,places.priceLevel,places.businessStatus,\
+             places.photos,nextPageToken"
+        );
+        assert_eq!(
+            FieldMask::nearby_search_default().header_value(),
+            "places.id,places.name,places.displayName,places.formattedAddress,\
+             places.location,places.rating,places.userRatingCount,places.types,\
+             places.primaryType,places.priceLevel,places.businessStatus,\
+             places.photos"
+        );
+        assert_eq!(
+            FieldMask::place_details_default().header_value(),
+            "id,name,displayName,formattedAddress,shortFormattedAddress,\
+             location,rating,userRatingCount,types,primaryType,priceLevel,\
+             businessStatus,photos,nationalPhoneNumber,\
+             internationalPhoneNumber,websiteUri,googleMapsUri,\
+             regularOpeningHours,currentOpeningHours,\
+             currentSecondaryOpeningHours,regularSecondaryOpeningHours,\
+             addressComponents,adrFormatAddress,plusCode,postalAddress,\
+             primaryTypeDisplayName,viewport,attributions,\
+             googleMapsTypeLabel,editorialSummary,iconMaskBaseUri,\
+             iconBackgroundColor,openingDate,utcOffsetMinutes,\
+             pureServiceAreaBusiness,movedPlace,movedPlaceId,reviews,\
+             takeout,delivery,dineIn,curbsidePickup,reservable,\
+             servesBreakfast,servesLunch,servesDinner,servesBeer,servesWine,\
+             servesBrunch,servesVegetarianFood,outdoorSeating,liveMusic,\
+             menuForChildren,servesCocktails,servesDessert,servesCoffee,\
+             goodForChildren,allowsDogs,restroom,goodForGroups,\
+             goodForWatchingSports,paymentOptions,parkingOptions,\
+             accessibilityOptions,timeZone,generativeSummary,reviewSummary,\
+             consumerAlert,googleMapsLinks,priceRange,evChargeOptions,\
+             addressDescriptor"
+        );
+    }
 }

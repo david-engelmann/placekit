@@ -28,11 +28,14 @@ def _badreq_body(violations):
     return _envelope([{"@type": BADREQ, "fieldViolations": violations}])
 
 
-# The nineteen single entry shapes of the Round 35 extension
-# family, each with the view entry the ruled form produces. Well
-# formed entries project exactly as they did before the repair;
-# every other entry now rides through as its wire value where the
-# old view substituted empty strings.
+# The well-formed single entry shape of the Round 35 extension
+# family, with the view entry the ruled form produces. The full
+# nineteen shapes stand in the core pin
+# field_violations_single_entry_shapes in errors.rs; this list
+# carries the one wiring shape. Well formed entries project
+# exactly as they did before the repair; every other entry now
+# rides through as its wire value where the old view substituted
+# empty strings.
 SINGLE_ENTRY_SHAPES = [
     # Well formed entries, unchanged by the repair.
     (

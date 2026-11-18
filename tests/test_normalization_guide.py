@@ -22,22 +22,11 @@ import pytest
 from placekit import ConfigError, address, types
 from placekit.models import Place
 
+from conftest import recorded_place
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 FIXTURES = Path(__file__).parent / "fixtures"
-RECORDED = FIXTURES / "recorded"
 SYNTHESIZED = FIXTURES / "synthesized"
-
-
-def recorded_payload(name: str):
-    data = json.loads((RECORDED / name).read_bytes())
-    assert "fixtureMark" not in data
-    return data
-
-
-def recorded_place(name: str, index: int = 0) -> Place:
-    payload = recorded_payload(name)
-    places = payload["places"] if "places" in payload else [payload]
-    return Place.from_api(places[index])
 
 
 def synthesized_payload(name: str):

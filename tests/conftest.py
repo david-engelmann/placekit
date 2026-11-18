@@ -37,8 +37,10 @@ import pytest
 
 from placekit import Client
 from placekit.exceptions import InvalidRequestError
+from placekit.models import Place
 
 FIXTURES = Path(__file__).parent / "fixtures"
+RECORDED = FIXTURES / "recorded"
 
 #: Photo URI the stub reports in its skipHttpRedirect JSON form. It points
 #: at the stub's own image route so the value is followable in tests.
@@ -47,6 +49,20 @@ PHOTO_URI_PATH = "/photo-image"
 
 def load_fixture(name: str) -> bytes:
     return (FIXTURES / name).read_bytes()
+
+
+# Audit A50-189: the recorded corpus readers live here, in one
+# home, instead of being written in each corpus test module.
+def recorded_payload(name: str):
+    data = json.loads((RECORDED / name).read_bytes())
+    assert "fixtureMark" not in data
+    return data
+
+
+def recorded_place(name: str, index: int = 0) -> Place:
+    payload = recorded_payload(name)
+    places = payload["places"] if "places" in payload else [payload]
+    return Place.from_api(places[index])
 
 
 def _mask_paths(headers) -> list[str] | None:
