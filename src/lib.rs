@@ -1139,6 +1139,7 @@ fn build_core_client(
     api_key: &str,
     base_url: Option<&str>,
     timeout: Option<f64>,
+    max_response_bytes: Option<usize>,
 ) -> Result<CoreClient, CoreError> {
     let mut builder = CoreClient::builder(api_key);
     if let Some(base_url) = base_url {
@@ -1146,6 +1147,9 @@ fn build_core_client(
     }
     if let Some(timeout) = timeout {
         builder = builder.timeout(std::time::Duration::from_secs_f64(timeout));
+    }
+    if let Some(max_response_bytes) = max_response_bytes {
+        builder = builder.max_response_bytes(max_response_bytes);
     }
     builder.build()
 }
@@ -1171,6 +1175,7 @@ struct PyClient {
     api_key: String,
     base_url: Option<String>,
     timeout: Option<f64>,
+    max_response_bytes: Option<usize>,
     current: Mutex<(u32, Arc<CoreClient>)>,
 }
 
@@ -1185,8 +1190,13 @@ impl PyClient {
         if current.0 == pid {
             return Ok(Arc::clone(&current.1));
         }
-        let client = build_core_client(&self.api_key, self.base_url.as_deref(), self.timeout)
-            .map_err(|e| to_pyerr(py, e))?;
+        let client = build_core_client(
+            &self.api_key,
+            self.base_url.as_deref(),
+            self.timeout,
+            self.max_response_bytes,
+        )
+        .map_err(|e| to_pyerr(py, e))?;
         let rebuilt = Arc::new(client);
         let (_, inherited) = std::mem::replace(&mut *current, (pid, Arc::clone(&rebuilt)));
         std::mem::forget(inherited);
@@ -1197,12 +1207,13 @@ impl PyClient {
 #[pymethods]
 impl PyClient {
     #[new]
-    #[pyo3(signature = (api_key, base_url=None, timeout=None))]
+    #[pyo3(signature = (api_key, base_url=None, timeout=None, max_response_bytes=None))]
     fn new(
         py: Python<'_>,
         api_key: String,
         base_url: Option<String>,
         timeout: Option<f64>,
+        max_response_bytes: Option<usize>,
     ) -> PyResult<Self> {
         if let Some(timeout) = timeout {
             // One rule everywhere (R4-04): the same 3600 second cap
@@ -1217,17 +1228,16 @@ impl PyClient {
                 ));
             }
         }
-        let client =
-            build_core_client(&api_key, base_url.as_deref(), timeout).map_err(|e| {
-                match e.kind() {
-                    "config" => PyValueError::new_err(e.to_string()),
-                    _ => to_pyerr(py, e),
-                }
+        let client = build_core_client(&api_key, base_url.as_deref(), timeout, max_response_bytes)
+            .map_err(|e| match e.kind() {
+                "config" => PyValueError::new_err(e.to_string()),
+                _ => to_pyerr(py, e),
             })?;
         Ok(Self {
             api_key,
             base_url,
             timeout,
+            max_response_bytes,
             current: Mutex::new((std::process::id(), Arc::new(client))),
         })
     }
