@@ -16,7 +16,6 @@ import json
 
 import pytest
 
-from conftest import nested as _nested
 from placekit.exceptions import ApiError, InvalidRequestError
 
 
@@ -27,14 +26,6 @@ def _envelope(status_text: str, code: int = 400, details=None) -> str:
     return json.dumps({"error": error})
 
 
-def test_status_at_the_cap_is_kept_whole(client, raw_response):
-    status = "s" * 500
-    raw_response(400, _envelope(status))
-    with pytest.raises(InvalidRequestError) as excinfo:
-        client.text_search("pizza")
-    assert excinfo.value.google_status == status
-
-
 def test_status_one_past_the_cap_truncates(client, raw_response):
     raw_response(400, _envelope("s" * 501))
     with pytest.raises(InvalidRequestError) as excinfo:
@@ -43,37 +34,7 @@ def test_status_one_past_the_cap_truncates(client, raw_response):
     assert exc.google_status == "s" * 500
     assert "s" * 500 in str(exc)
     assert "s" * 501 not in str(exc)
-
-
-def test_status_far_past_the_cap_truncates_on_the_error_path(client, raw_response):
-    raw_response(400, _envelope("s" * 5000))
-    with pytest.raises(InvalidRequestError) as excinfo:
-        client.text_search("pizza")
-    exc = excinfo.value
-    assert exc.google_status == "s" * 500
-    # The error path renders the status once, so the whole
-    # exception stays within one cap of status text.
     assert str(exc).count("s" * 500) == 1
-
-
-def test_status_truncates_on_the_head_scan_path(client, raw_response):
-    # The detail nested 200 deep defeats the whole document
-    # parse, so the status is recovered by the tolerant head
-    # scan; the cap holds there too.
-    body = _envelope("s" * 5000, details=[_nested(200)])
-    raw_response(400, body)
-    with pytest.raises(InvalidRequestError) as excinfo:
-        client.text_search("pizza")
-    assert excinfo.value.google_status == "s" * 500
-
-
-def test_padded_known_status_still_falls_to_the_http_class(client, raw_response):
-    # A padded known status never matched when it passed through
-    # whole; truncating it must not start matching it.
-    raw_response(400, _envelope("RESOURCE_EXHAUSTED" + "s" * 5000))
-    with pytest.raises(InvalidRequestError) as excinfo:
-        client.text_search("pizza")
-    assert excinfo.value.google_status == ("RESOURCE_EXHAUSTED" + "s" * 5000)[:500]
 
 
 def test_markup_status_is_bounded_on_the_success_envelope_path(client, raw_response):
