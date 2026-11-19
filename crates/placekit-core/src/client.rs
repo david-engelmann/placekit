@@ -1209,7 +1209,7 @@ fn gunzip_capped(bytes: &[u8], cap: usize) -> Gunzip {
 /// construction cannot drift apart. The envelope is parsed once for
 /// both (Round 29, Finding 1).
 fn envelope_error(status: u16, body: &str, retry_after: Option<f64>) -> Option<Error> {
-    None
+    Error::from_success_body(status, body).map(|err| err.with_retry_after(retry_after))
 }
 
 /// The `Retry-After` header in seconds, when present. Both forms
