@@ -929,7 +929,7 @@ fn number_to_py(py: Python<'_>, n: &serde_json::Number) -> PyResult<PyObject> {
     // integers, where the allocation is noise beside the exact
     // conversion itself.
     struct ReprBuf {
-        bytes: [u8; 64],
+        bytes: [u8; 8],
         len: usize,
         overflow: bool,
     }
@@ -947,7 +947,7 @@ fn number_to_py(py: Python<'_>, n: &serde_json::Number) -> PyResult<PyObject> {
         }
     }
     let mut buf = ReprBuf {
-        bytes: [0; 64],
+        bytes: [0; 8],
         len: 0,
         overflow: false,
     };
