@@ -756,7 +756,7 @@ fn mask_valid_path(path: Vec<u8>) -> bool {
 /// crossing once for the run (audit A50-149).
 #[pyfunction]
 fn mask_first_invalid_path(paths: Vec<Vec<u8>>) -> Option<usize> {
-    None
+    placekit_core::mask::first_invalid_path(&paths)
 }
 
 /// The indices of the first occurrence of each distinct path,
