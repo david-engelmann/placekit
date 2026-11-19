@@ -17,12 +17,12 @@ use crate::errors::Error;
 /// largest curated default, the Place Details default below, holds
 /// 72 paths. The bound exists so an unbounded caller supplied list
 /// cannot build an unbounded header.
-const MAX_MASK_PATHS: usize = 100;
+pub const MAX_MASK_PATHS: usize = 100;
 
 /// Upper bound on the joined `X-Goog-FieldMask` header value, in
 /// bytes (R4-11), comfortably above anything the curated defaults or
 /// a realistic field list produce and below common header limits.
-const MAX_MASK_HEADER_LEN: usize = 4096;
+pub const MAX_MASK_HEADER_LEN: usize = 4096;
 
 /// Whether one path matches the construction grammar the Python
 /// `FieldMask` enforces when a mask is built, read over the byte

@@ -1,4 +1,4 @@
-from typing import Any, Iterable, NoReturn, Optional
+from typing import Any, Iterable, Mapping, NoReturn, Optional
 
 __all__ = ["AsyncClient", "Client"]
 
@@ -48,19 +48,19 @@ class Client:
         price_levels: Optional[Iterable[str]] = ...,
         strict_type_filtering: Optional[bool] = ...,
         included_type: Optional[str] = ...,
-        location_bias: Optional[dict[str, Any]] = ...,
-        location_restriction: Optional[dict[str, Any]] = ...,
+        location_bias: Optional[Mapping[str, Any]] = ...,
+        location_restriction: Optional[Mapping[str, Any]] = ...,
         page_size: Optional[int] = ...,
         min_rating: Optional[float] = ...,
-        ev_options: Optional[dict[str, Any]] = ...,
-        search_along_route: Optional[dict[str, Any]] = ...,
-        routing_parameters: Optional[dict[str, Any]] = ...,
+        ev_options: Optional[Mapping[str, Any]] = ...,
+        search_along_route: Optional[Mapping[str, Any]] = ...,
+        routing_parameters: Optional[Mapping[str, Any]] = ...,
         include_pure_service_area_businesses: Optional[bool] = ...,
         include_future_opening_businesses: Optional[bool] = ...,
     ) -> TextSearchResult: ...
     def nearby_search(
         self,
-        location: LatLng | tuple[float, float] | list[float] | dict[str, Any],
+        location: LatLng | tuple[float, float] | list[float] | Mapping[str, Any],
         radius_m: float,
         *,
         fields: FieldsLike = ...,
@@ -72,7 +72,7 @@ class Client:
         rank_preference: Optional[str] = ...,
         included_primary_types: Optional[Iterable[str]] = ...,
         excluded_primary_types: Optional[Iterable[str]] = ...,
-        routing_parameters: Optional[dict[str, Any]] = ...,
+        routing_parameters: Optional[Mapping[str, Any]] = ...,
         include_future_opening_businesses: Optional[bool] = ...,
     ) -> NearbySearchResult: ...
     def place_details(
@@ -94,10 +94,10 @@ class Client:
         session_token: Optional[str] = ...,
         included_region_codes: Optional[Iterable[str]] = ...,
         include_query_predictions: Optional[bool] = ...,
-        location_bias: Optional[dict[str, Any]] = ...,
-        location_restriction: Optional[dict[str, Any]] = ...,
+        location_bias: Optional[Mapping[str, Any]] = ...,
+        location_restriction: Optional[Mapping[str, Any]] = ...,
         origin: Optional[
-            LatLng | tuple[float, float] | list[float] | dict[str, Any]
+            LatLng | tuple[float, float] | list[float] | Mapping[str, Any]
         ] = ...,
         input_offset: Optional[int] = ...,
         included_primary_types: Optional[Iterable[str]] = ...,
@@ -146,19 +146,19 @@ class AsyncClient:
         price_levels: Optional[Iterable[str]] = ...,
         strict_type_filtering: Optional[bool] = ...,
         included_type: Optional[str] = ...,
-        location_bias: Optional[dict[str, Any]] = ...,
-        location_restriction: Optional[dict[str, Any]] = ...,
+        location_bias: Optional[Mapping[str, Any]] = ...,
+        location_restriction: Optional[Mapping[str, Any]] = ...,
         page_size: Optional[int] = ...,
         min_rating: Optional[float] = ...,
-        ev_options: Optional[dict[str, Any]] = ...,
-        search_along_route: Optional[dict[str, Any]] = ...,
-        routing_parameters: Optional[dict[str, Any]] = ...,
+        ev_options: Optional[Mapping[str, Any]] = ...,
+        search_along_route: Optional[Mapping[str, Any]] = ...,
+        routing_parameters: Optional[Mapping[str, Any]] = ...,
         include_pure_service_area_businesses: Optional[bool] = ...,
         include_future_opening_businesses: Optional[bool] = ...,
     ) -> TextSearchResult: ...
     async def nearby_search(
         self,
-        location: LatLng | tuple[float, float] | list[float] | dict[str, Any],
+        location: LatLng | tuple[float, float] | list[float] | Mapping[str, Any],
         radius_m: float,
         *,
         fields: FieldsLike = ...,
@@ -170,7 +170,7 @@ class AsyncClient:
         rank_preference: Optional[str] = ...,
         included_primary_types: Optional[Iterable[str]] = ...,
         excluded_primary_types: Optional[Iterable[str]] = ...,
-        routing_parameters: Optional[dict[str, Any]] = ...,
+        routing_parameters: Optional[Mapping[str, Any]] = ...,
         include_future_opening_businesses: Optional[bool] = ...,
     ) -> NearbySearchResult: ...
     async def place_details(
@@ -192,10 +192,10 @@ class AsyncClient:
         session_token: Optional[str] = ...,
         included_region_codes: Optional[Iterable[str]] = ...,
         include_query_predictions: Optional[bool] = ...,
-        location_bias: Optional[dict[str, Any]] = ...,
-        location_restriction: Optional[dict[str, Any]] = ...,
+        location_bias: Optional[Mapping[str, Any]] = ...,
+        location_restriction: Optional[Mapping[str, Any]] = ...,
         origin: Optional[
-            LatLng | tuple[float, float] | list[float] | dict[str, Any]
+            LatLng | tuple[float, float] | list[float] | Mapping[str, Any]
         ] = ...,
         input_offset: Optional[int] = ...,
         included_primary_types: Optional[Iterable[str]] = ...,
