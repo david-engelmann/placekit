@@ -830,8 +830,8 @@ fn check_body_bools(value: &Bound<'_, PyAny>, depth: usize) -> Result<(), String
     }
     if let Ok(map) = value.downcast::<PyDict>() {
         for (key, item) in map.iter() {
-            if let Ok(name) = key.extract::<String>() {
-                if BOOL_BODY_FIELDS.contains(&name.as_str())
+            if let Ok(name) = key.extract::<&str>() {
+                if BOOL_BODY_FIELDS.contains(&name)
                     && !item.is_none()
                     && !item.is_instance_of::<PyBool>()
                 {
@@ -917,7 +917,50 @@ fn number_to_py(py: Python<'_>, n: &serde_json::Number) -> PyResult<PyObject> {
     if let Some(u) = n.as_u64() {
         return Ok(u.into_pyobject(py)?.unbind().into_any());
     }
-    let text = n.to_string();
+    // The marker test below needs the number's full decimal text,
+    // and formatting it into a heap String for every float and
+    // every beyond u64 integer paid an allocation per number
+    // purely to answer a three character membership question.
+    // Format into a stack buffer instead; a repr that overflows
+    // the buffer takes the heap path verbatim, so the verdict is
+    // never computed over a prefix (audit A50-145). A 64 byte
+    // buffer covers every f64 shortest repr and every integer of
+    // up to 63 digits, so the heap path fires only for big
+    // integers, where the allocation is noise beside the exact
+    // conversion itself.
+    struct ReprBuf {
+        bytes: [u8; 64],
+        len: usize,
+        overflow: bool,
+    }
+    impl std::fmt::Write for ReprBuf {
+        fn write_str(&mut self, s: &str) -> std::fmt::Result {
+            let src = s.as_bytes();
+            let room = self.bytes.len() - self.len;
+            let take = room.min(src.len());
+            self.bytes[self.len..self.len + take].copy_from_slice(&src[..take]);
+            self.len += take;
+            if take < src.len() {
+                self.overflow = true;
+            }
+            Ok(())
+        }
+    }
+    let mut buf = ReprBuf {
+        bytes: [0; 64],
+        len: 0,
+        overflow: false,
+    };
+    let heap;
+    let text: &str = match <ReprBuf as std::fmt::Write>::write_fmt(&mut buf, format_args!("{n}")) {
+        Ok(()) if !buf.overflow => {
+            std::str::from_utf8(&buf.bytes[..buf.len]).expect("a number repr is ASCII")
+        }
+        _ => {
+            heap = n.to_string();
+            &heap
+        }
+    };
     if !text.contains(['.', 'e', 'E']) {
         // An integer beyond u64: Python's int parses the exact
         // decimal text, so no digit is lost on the way across. Past
@@ -927,7 +970,7 @@ fn number_to_py(py: Python<'_>, n: &serde_json::Number) -> PyResult<PyObject> {
         // exception hierarchy (red team R1): it is a decode failure
         // of this layer, like every other conversion failure here.
         let builtins = pyo3::types::PyModule::import(py, "builtins")?;
-        return match builtins.getattr("int")?.call1((text.clone(),)) {
+        return match builtins.getattr("int")?.call1((text,)) {
             Ok(value) => Ok(value.unbind()),
             Err(_) => Err(to_pyerr(
                 py,

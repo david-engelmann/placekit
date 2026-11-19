@@ -265,24 +265,29 @@ class FieldMask:
                     f"invalid field mask path: {_safe_repr(path)}",
                     context="FieldMask",
                 )
-            try:
-                _valid_path(path)
-            except Exception as exc:
-                # The path check reads the member (strip,
-                # membership, split), and a string subclass whose
-                # read raises used to escape construction as a
-                # bare builtin. The member is rendered safely, so
-                # the refusal itself cannot be the escaping read
-                # (Round 31, Caller Minor 3). The check now runs
-                # as the caller side exercise of the construction
-                # check, at the old site, so the raise still
-                # surfaces here, and the verdict that decides
-                # comes from the core over the value as sent
-                # (Round 54).
-                raise ConfigError(
-                    f"invalid field mask path: {_safe_repr(path)}",
-                    context="FieldMask",
-                ) from exc
+            if type(path) is not str:
+                try:
+                    _valid_path(path)
+                except Exception as exc:
+                    # The path check reads the member (strip,
+                    # membership, split), and a string subclass whose
+                    # read raises used to escape construction as a
+                    # bare builtin. The member is rendered safely, so
+                    # the refusal itself cannot be the escaping read
+                    # (Round 31, Caller Minor 3). The check now runs
+                    # as the caller side exercise of the construction
+                    # check, at the old site, so the raise still
+                    # surfaces here, and the verdict that decides
+                    # comes from the core over the value as sent
+                    # (Round 54). An exact string member skips the
+                    # exercise: its reads run on the string's own
+                    # buffer, no caller code can run inside them,
+                    # and the exercise's answer is discarded either
+                    # way, so the skip is invisible (audit A50-209).
+                    raise ConfigError(
+                        f"invalid field mask path: {_safe_repr(path)}",
+                        context="FieldMask",
+                    ) from exc
             data = _encode_path(path)
             if type(path) is str:
                 pending.append((index, data))
