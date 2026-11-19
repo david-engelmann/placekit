@@ -111,7 +111,7 @@ impl LatLng {
 }
 
 /// A text value paired with its language.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LocalizedText {
     #[serde(default, skip_serializing_if = "wire_string_absent")]
@@ -472,6 +472,18 @@ impl WireString {
 impl PartialEq<&str> for WireString {
     fn eq(&self, other: &&str) -> bool {
         self.as_str() == *other
+    }
+}
+
+impl From<&str> for WireString {
+    fn from(value: &str) -> Self {
+        WireString(Some(Some(value.to_string())))
+    }
+}
+
+impl From<String> for WireString {
+    fn from(value: String) -> Self {
+        WireString(Some(Some(value)))
     }
 }
 
@@ -1601,6 +1613,32 @@ mod tests {
         let sent: WireList<String> = serde_json::from_str("[\"cafe\"]").unwrap();
         assert!(!sent.is_null());
         assert!(!sent.is_absent());
+    }
+
+    #[test]
+    fn localized_text_defaults_to_the_absent_shape() {
+        // Audit A50-199: LocalizedText was the one serde model
+        // struct without Default, although every field supports
+        // it. The default is the absent shape a missing value
+        // decodes to.
+        let text = LocalizedText::default();
+        assert!(text.text.is_absent());
+        assert_eq!(text.language_code, None);
+        assert!(text.extra.is_empty());
+    }
+
+    #[test]
+    fn wire_string_builds_from_a_str_or_a_string() {
+        // Audit A50-200: the construction side of the wrapper
+        // family. WireFloat and WireList already offered a From
+        // conversion; WireString now offers both of its own,
+        // each yielding the present shape.
+        let from_str = WireString::from("cafe");
+        assert_eq!(from_str.as_str(), "cafe");
+        assert!(!from_str.is_absent());
+        assert!(!from_str.is_null());
+        let from_string = WireString::from(String::from("cafe"));
+        assert_eq!(from_string, from_str);
     }
 
     #[test]
