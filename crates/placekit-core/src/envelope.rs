@@ -70,7 +70,7 @@ pub(crate) struct EnvelopeParts {
 /// one bound, so they read from this one constant rather than
 /// from literals that only imply the coupling (Round 25 landing
 /// repair).
-pub(crate) const ENVELOPE_TEXT_CAP_CHARS: usize = 400;
+pub(crate) const ENVELOPE_TEXT_CAP_CHARS: usize = 500;
 
 /// Read the envelope fields of a response body, or `None` when the
 /// body carries no `error` object at all.
