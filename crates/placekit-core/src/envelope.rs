@@ -325,9 +325,7 @@ pub(crate) fn parse_envelope_head(body: &str) -> Option<EnvelopeParts> {
                 if !usable && found.as_ref().is_some_and(is_envelope) {
                     cleared = true;
                 }
-                if found.is_none() {
-                    found = Some(parts);
-                }
+                found = Some(parts);
             }
             if !closed {
                 break;
