@@ -853,16 +853,21 @@ pub(crate) fn transport_class(err: &reqwest::Error) -> &'static str {
 }
 
 // The envelope scanner lives in its own module (audit
-// A50-064); the names the error constructions and this
-// module's tests read are re-exported here so their paths
-// do not move, and the client reaches the preflight pair
-// through this module as it always has. The facade is
-// kept whole even where a name is read only by tests.
-#[allow(unused_imports)]
+// A50-064); the names the error constructions read are
+// re-exported here so their paths do not move, and the
+// client reaches the preflight pair through this module
+// as it always has. The names only this module's tests
+// read ride a second, test gated re-export (audit
+// A50-217), so no block needs an unused import allow and
+// a name that loses its last reader is flagged in the
+// build that reads it.
 pub(crate) use crate::envelope::{
-    non_envelope_message, opening_bracket_count, parse_envelope, parse_envelope_head,
-    preflight_trip, recursion_trip, EnvelopeParts, ENVELOPE_TEXT_CAP_CHARS,
-    PARSE_PREFLIGHT_MIN_BYTES, RECURSION_DEPTH_LIMIT,
+    non_envelope_message, parse_envelope, parse_envelope_head, preflight_trip, EnvelopeParts,
+    ENVELOPE_TEXT_CAP_CHARS,
+};
+#[cfg(test)]
+pub(crate) use crate::envelope::{
+    opening_bracket_count, recursion_trip, PARSE_PREFLIGHT_MIN_BYTES, RECURSION_DEPTH_LIMIT,
 };
 
 #[cfg(test)]

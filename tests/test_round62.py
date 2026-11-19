@@ -174,7 +174,7 @@ from __future__ import annotations
 
 import textwrap
 
-from test_corpus_accounting import _loads
+from test_corpus_accounting import _expand as _expand_blocks, _loads
 
 CLAIMED = "recorded_OBS1_requested_field_vanishes.json"
 OTHER = "recorded_P1_no_address_natural_feature.json"
@@ -196,14 +196,10 @@ _SAMPLE_BLOCKS = {
 
 
 def _expand(source: str) -> str:
-    lines = []
-    for line in source.split("\n"):
-        block = _SAMPLE_BLOCKS.get(line)
-        if block is None:
-            lines.append(line)
-        else:
-            lines.extend(block.split("\n"))
-    return "\n".join(lines)
+    # Audit A50-213: the expansion itself lives in
+    # test_corpus_accounting. This battery binds it over
+    # its own sentinel table.
+    return _expand_blocks(source, _SAMPLE_BLOCKS)
 
 
 def _expanded_loads(source: str) -> set[str]:

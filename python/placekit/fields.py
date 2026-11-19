@@ -51,7 +51,6 @@ from ._guarded import (
     MAX_MATERIALIZED_ITEMS,
     _materialize_bounded,
     _safe_repr,
-    _safe_type_name,
 )
 from .exceptions import ConfigError
 
