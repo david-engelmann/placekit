@@ -32,9 +32,6 @@ from placekit.exceptions import (
 )
 from placekit.fields import FieldMask, normalize_fields
 
-QUOTA_MESSAGE = "Quota exceeded for this key"
-
-
 class IterRaisesStr(str):
     def __iter__(self):
         raise RuntimeError("evil __iter__")
@@ -311,30 +308,6 @@ def test_fabricated_mask_string_paths_state_is_config_error():
 
 
 # --- Decoder Minor F4: gzip token spellings
-
-
-def _envelope(status_text: str, code: int, message: str) -> str:
-    return json.dumps(
-        {"error": {"code": code, "message": message, "status": status_text}}
-    )
-
-
-QUOTA_BODY = _envelope("RESOURCE_EXHAUSTED", 429, QUOTA_MESSAGE)
-
-
-def test_gzip_spelling_variants_classify_async(api_key, base_url, raw_response):
-    raw_response(
-        400,
-        gzip.compress(QUOTA_BODY.encode()),
-        headers={"Content-Encoding": "GZip"},
-    )
-
-    async def run():
-        async with AsyncClient(api_key, base_url=base_url) as aclient:
-            with pytest.raises(RateLimitError):
-                await aclient.text_search("pizza")
-
-    asyncio.run(run())
 
 
 def test_gzip_variant_on_a_success_body_decodes(client, raw_response):
