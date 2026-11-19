@@ -12,6 +12,7 @@
 //! plumbing rather than part of the intended Rust surface.
 
 use crate::errors::Error;
+use reqwest::header::HeaderValue;
 
 /// Upper bound on the number of paths in one mask (R4-11). The
 /// largest curated default, the Place Details default below, holds
@@ -113,6 +114,7 @@ pub fn sorted_order(keys: &[(u8, Vec<u8>)]) -> Vec<usize> {
 pub struct FieldMask {
     paths: Vec<String>,
     header: String,
+    header_send: HeaderValue,
 }
 
 impl FieldMask {
@@ -166,7 +168,17 @@ impl FieldMask {
                 "field mask header value exceeds {MAX_MASK_HEADER_LEN} bytes"
             )));
         }
-        Ok(Self { paths, header })
+        // The grammar above admits only visible ASCII, so the
+        // joined value is always a sendable header value; building
+        // it here, once, lets every request clone it instead of
+        // revalidating the string per call (audit A50-212).
+        let header_send = HeaderValue::from_str(&header)
+            .map_err(|_| Error::config("field mask cannot be sent in an HTTP header"))?;
+        Ok(Self {
+            paths,
+            header,
+            header_send,
+        })
     }
 
     /// Build a mask from borrowed paths, owned on the way in.
@@ -190,6 +202,15 @@ impl FieldMask {
         &self.header
     }
 
+    /// The header value in its sendable form, built once at
+    /// construction from the same joined string [`header_value`]
+    /// returns, so the two can never disagree (audit A50-212).
+    ///
+    /// [`header_value`]: Self::header_value
+    pub fn header_send_value(&self) -> &HeaderValue {
+        &self.header_send
+    }
+
     /// The individual paths.
     pub fn paths(&self) -> &[String] {
         &self.paths
@@ -198,7 +219,13 @@ impl FieldMask {
     fn from_static(paths: &[&str]) -> Self {
         let paths: Vec<String> = paths.iter().map(|s| (*s).to_owned()).collect();
         let header = paths.join(",");
-        Self { paths, header }
+        let header_send = HeaderValue::from_str(&header)
+            .expect("curated field mask headers are valid header values");
+        Self {
+            paths,
+            header,
+            header_send,
+        }
     }
 
     /// Default mask for Text Search. Covers identity, address, rating and
