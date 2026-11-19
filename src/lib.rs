@@ -929,7 +929,7 @@ fn number_to_py(py: Python<'_>, n: &serde_json::Number) -> PyResult<PyObject> {
     // integers, where the allocation is noise beside the exact
     // conversion itself.
     struct ReprBuf {
-        bytes: [u8; 8],
+        bytes: [u8; 64],
         len: usize,
         overflow: bool,
     }
@@ -947,13 +947,13 @@ fn number_to_py(py: Python<'_>, n: &serde_json::Number) -> PyResult<PyObject> {
         }
     }
     let mut buf = ReprBuf {
-        bytes: [0; 8],
+        bytes: [0; 64],
         len: 0,
         overflow: false,
     };
     let heap;
     let text: &str = match <ReprBuf as std::fmt::Write>::write_fmt(&mut buf, format_args!("{n}")) {
-        Ok(()) if !buf.overflow => {
+        Ok(()) => {
             std::str::from_utf8(&buf.bytes[..buf.len]).expect("a number repr is ASCII")
         }
         _ => {
