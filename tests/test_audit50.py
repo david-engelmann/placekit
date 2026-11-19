@@ -856,3 +856,36 @@ class TestIntValidatorCoercion:
         assert "min_rating must be an int or float between 0 and 5" in str(
             caught.value
         )
+
+
+def test_exact_string_members_skip_the_construction_exercise(monkeypatch):
+    """A50-209: the constructor's caller side exercise is skipped
+    for exact string members, whose reads no caller can observe,
+    and kept for subclass members, whose reads are the Round 53
+    operation sequence."""
+    import placekit.fields as fields_module
+
+    calls = []
+
+    def counting(path):
+        calls.append(path)
+        return True
+
+    monkeypatch.setattr(fields_module, "_valid_path", counting)
+    mask = FieldMask("places.id", "places.displayName")
+    assert mask.paths == ("places.id", "places.displayName")
+    assert calls == []
+
+    class Member(str):
+        pass
+
+    FieldMask(Member("places.id"))
+    assert calls == [Member("places.id")]
+
+    def raising(path):
+        raise ValueError("exercise boom")
+
+    monkeypatch.setattr(fields_module, "_valid_path", raising)
+    with pytest.raises(ConfigError):
+        FieldMask(Member("places.id"))
+    FieldMask("places.id")
