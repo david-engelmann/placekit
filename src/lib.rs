@@ -543,6 +543,9 @@ fn to_pyerr(py: Python<'_>, err: CoreError) -> PyErr {
                 &mut first_failure,
                 instance.setattr("quota_violation_entries", empty()),
             );
+            if first_failure.is_none() {
+                first_failure = Some("details conversion failed".to_owned());
+            }
         }
     }
     if let Some(failure) = first_failure {
