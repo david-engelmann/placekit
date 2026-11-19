@@ -1115,10 +1115,7 @@ fn content_encoding_names_gzip(headers: &HeaderMap) -> bool {
         .get_all(reqwest::header::CONTENT_ENCODING)
         .iter()
         .any(|value| {
-            value.to_str().is_ok_and(|text| {
-                text.split(',')
-                    .any(|token| token.trim().eq_ignore_ascii_case("gzip"))
-            })
+            value.to_str().is_ok_and(|text| text == "gzip")
         })
 }
 
