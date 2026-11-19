@@ -265,7 +265,7 @@ def _validate_coordinate(name: str, value: Any, low: float, high: float) -> floa
 
 
 def _validate_lat_lng(
-    value: LatLng | tuple[float, float] | list[float] | dict[str, Any],
+    value: LatLng | tuple[float, float] | list[float] | Mapping[str, Any],
     name: str,
 ) -> dict[str, float]:
     """Validate one coordinate pair and return it in wire shape.
@@ -315,13 +315,13 @@ def _validate_lat_lng(
 
 
 def _point(
-    value: LatLng | tuple[float, float] | list[float] | dict[str, Any],
+    value: LatLng | tuple[float, float] | list[float] | Mapping[str, Any],
 ) -> dict[str, float]:
     return _validate_lat_lng(value, "location")
 
 
 def _circle_body(
-    location: LatLng | tuple[float, float] | list[float] | dict[str, Any],
+    location: LatLng | tuple[float, float] | list[float] | Mapping[str, Any],
     radius_m: float,
 ) -> dict[str, Any]:
     if isinstance(radius_m, bool) or not isinstance(radius_m, (int, float)):
@@ -487,7 +487,7 @@ def _validate_dict_body(
 
 
 def _location_body(
-    value: Optional[dict[str, Any]],
+    value: Optional[Mapping[str, Any]],
     name: str = "location bias or restriction",
 ) -> Optional[dict[str, Any]]:
     """Normalize a location bias or restriction dict into wire shape.
@@ -533,7 +533,7 @@ def _location_body(
     return result
 
 
-def _routing_body(value: Optional[dict[str, Any]]) -> Optional[dict[str, Any]]:
+def _routing_body(value: Optional[Mapping[str, Any]]) -> Optional[dict[str, Any]]:
     """Normalize routing parameters, converting an origin given as a
     ``LatLng``, a tuple, a list or a wire-shape dict into wire shape."""
     if value is None:
@@ -551,7 +551,7 @@ def _routing_body(value: Optional[dict[str, Any]]) -> Optional[dict[str, Any]]:
     return result
 
 
-def _mapping_body(name: str, value: Optional[dict[str, Any]]) -> Optional[dict[str, Any]]:
+def _mapping_body(name: str, value: Optional[Mapping[str, Any]]) -> Optional[dict[str, Any]]:
     """Validate a bare dict escape-hatch parameter's shape."""
     if value is None:
         return None
@@ -1178,13 +1178,13 @@ class _Base:
         price_levels: Optional[Iterable[str]],
         strict_type_filtering: Optional[bool],
         included_type: Optional[str],
-        location_bias: Optional[dict[str, Any]],
-        location_restriction: Optional[dict[str, Any]],
+        location_bias: Optional[Mapping[str, Any]],
+        location_restriction: Optional[Mapping[str, Any]],
         page_size: Optional[int] = None,
         min_rating: Optional[float] = None,
-        ev_options: Optional[dict[str, Any]] = None,
-        search_along_route: Optional[dict[str, Any]] = None,
-        routing_parameters: Optional[dict[str, Any]] = None,
+        ev_options: Optional[Mapping[str, Any]] = None,
+        search_along_route: Optional[Mapping[str, Any]] = None,
+        routing_parameters: Optional[Mapping[str, Any]] = None,
         include_pure_service_area_businesses: Optional[bool] = None,
         include_future_opening_businesses: Optional[bool] = None,
     ) -> dict[str, Any]:
@@ -1233,7 +1233,7 @@ class _Base:
 
     @staticmethod
     def _nearby_search_body(
-        location: LatLng | tuple[float, float] | list[float] | dict[str, Any],
+        location: LatLng | tuple[float, float] | list[float] | Mapping[str, Any],
         radius_m: float,
         *,
         included_types: Optional[Iterable[str]],
@@ -1244,7 +1244,7 @@ class _Base:
         rank_preference: Optional[str],
         included_primary_types: Optional[Iterable[str]] = None,
         excluded_primary_types: Optional[Iterable[str]] = None,
-        routing_parameters: Optional[dict[str, Any]] = None,
+        routing_parameters: Optional[Mapping[str, Any]] = None,
         include_future_opening_businesses: Optional[bool] = None,
     ) -> dict[str, Any]:
         return _drop_none(
@@ -1291,10 +1291,10 @@ class _Base:
         session_token: Optional[str],
         included_region_codes: Optional[Iterable[str]],
         include_query_predictions: Optional[bool],
-        location_bias: Optional[dict[str, Any]],
-        location_restriction: Optional[dict[str, Any]],
+        location_bias: Optional[Mapping[str, Any]],
+        location_restriction: Optional[Mapping[str, Any]],
         origin: Optional[
-            LatLng | tuple[float, float] | list[float] | dict[str, Any]
+            LatLng | tuple[float, float] | list[float] | Mapping[str, Any]
         ] = None,
         input_offset: Optional[int] = None,
         included_primary_types: Optional[Iterable[str]] = None,
@@ -1370,8 +1370,10 @@ class Client(_Base):
     '...'
 
     ``base_url`` overrides the API root, which is how the test suite points
-    the client at a local stub server. ``timeout`` is per request, in
-    seconds, and may be at most 3600; anything else about it (zero,
+    the client at a local stub server. Left unset it defaults to the
+    Places API root, https://places.googleapis.com/v1. ``timeout`` is
+    per request, in seconds, defaults to 10 seconds, and may be at most
+    3600; anything else about it (zero,
     negative, non-finite, a boolean, a non-number) is a ``ConfigError``.
     ``max_response_bytes`` caps the successful response body size in
     bytes and defaults to 32 MiB, while error bodies keep a fixed
@@ -1406,13 +1408,13 @@ class Client(_Base):
         price_levels: Optional[Iterable[str]] = None,
         strict_type_filtering: Optional[bool] = None,
         included_type: Optional[str] = None,
-        location_bias: Optional[dict[str, Any]] = None,
-        location_restriction: Optional[dict[str, Any]] = None,
+        location_bias: Optional[Mapping[str, Any]] = None,
+        location_restriction: Optional[Mapping[str, Any]] = None,
         page_size: Optional[int] = None,
         min_rating: Optional[float] = None,
-        ev_options: Optional[dict[str, Any]] = None,
-        search_along_route: Optional[dict[str, Any]] = None,
-        routing_parameters: Optional[dict[str, Any]] = None,
+        ev_options: Optional[Mapping[str, Any]] = None,
+        search_along_route: Optional[Mapping[str, Any]] = None,
+        routing_parameters: Optional[Mapping[str, Any]] = None,
         include_pure_service_area_businesses: Optional[bool] = None,
         include_future_opening_businesses: Optional[bool] = None,
     ) -> TextSearchResult:
@@ -1470,7 +1472,7 @@ class Client(_Base):
 
     def nearby_search(
         self,
-        location: LatLng | tuple[float, float] | list[float] | dict[str, Any],
+        location: LatLng | tuple[float, float] | list[float] | Mapping[str, Any],
         radius_m: float,
         *,
         fields: FieldsLike = None,
@@ -1482,7 +1484,7 @@ class Client(_Base):
         rank_preference: Optional[str] = None,
         included_primary_types: Optional[Iterable[str]] = None,
         excluded_primary_types: Optional[Iterable[str]] = None,
-        routing_parameters: Optional[dict[str, Any]] = None,
+        routing_parameters: Optional[Mapping[str, Any]] = None,
         include_future_opening_businesses: Optional[bool] = None,
     ) -> NearbySearchResult:
         """Search for places around ``location`` within ``radius_m`` meters.
@@ -1595,10 +1597,10 @@ class Client(_Base):
         session_token: Optional[str] = None,
         included_region_codes: Optional[Iterable[str]] = None,
         include_query_predictions: Optional[bool] = None,
-        location_bias: Optional[dict[str, Any]] = None,
-        location_restriction: Optional[dict[str, Any]] = None,
+        location_bias: Optional[Mapping[str, Any]] = None,
+        location_restriction: Optional[Mapping[str, Any]] = None,
         origin: Optional[
-            LatLng | tuple[float, float] | list[float] | dict[str, Any]
+            LatLng | tuple[float, float] | list[float] | Mapping[str, Any]
         ] = None,
         input_offset: Optional[int] = None,
         included_primary_types: Optional[Iterable[str]] = None,
@@ -1844,8 +1846,10 @@ class AsyncClient(_Base):
     >>> result = await client.text_search("pizza in New York")
 
     ``base_url`` overrides the API root, which is how the test suite points
-    the client at a local stub server. ``timeout`` is per request, in
-    seconds, and may be at most 3600; anything else about it (zero,
+    the client at a local stub server. Left unset it defaults to the
+    Places API root, https://places.googleapis.com/v1. ``timeout`` is
+    per request, in seconds, defaults to 10 seconds, and may be at most
+    3600; anything else about it (zero,
     negative, non-finite, a boolean, a non-number) is a ``ConfigError``.
     ``max_response_bytes`` caps the successful response body size in
     bytes and defaults to 32 MiB, while error bodies keep a fixed
@@ -1886,13 +1890,13 @@ class AsyncClient(_Base):
         price_levels: Optional[Iterable[str]] = None,
         strict_type_filtering: Optional[bool] = None,
         included_type: Optional[str] = None,
-        location_bias: Optional[dict[str, Any]] = None,
-        location_restriction: Optional[dict[str, Any]] = None,
+        location_bias: Optional[Mapping[str, Any]] = None,
+        location_restriction: Optional[Mapping[str, Any]] = None,
         page_size: Optional[int] = None,
         min_rating: Optional[float] = None,
-        ev_options: Optional[dict[str, Any]] = None,
-        search_along_route: Optional[dict[str, Any]] = None,
-        routing_parameters: Optional[dict[str, Any]] = None,
+        ev_options: Optional[Mapping[str, Any]] = None,
+        search_along_route: Optional[Mapping[str, Any]] = None,
+        routing_parameters: Optional[Mapping[str, Any]] = None,
         include_pure_service_area_businesses: Optional[bool] = None,
         include_future_opening_businesses: Optional[bool] = None,
     ) -> TextSearchResult:
@@ -1949,7 +1953,7 @@ class AsyncClient(_Base):
 
     async def nearby_search(
         self,
-        location: LatLng | tuple[float, float] | list[float] | dict[str, Any],
+        location: LatLng | tuple[float, float] | list[float] | Mapping[str, Any],
         radius_m: float,
         *,
         fields: FieldsLike = None,
@@ -1961,7 +1965,7 @@ class AsyncClient(_Base):
         rank_preference: Optional[str] = None,
         included_primary_types: Optional[Iterable[str]] = None,
         excluded_primary_types: Optional[Iterable[str]] = None,
-        routing_parameters: Optional[dict[str, Any]] = None,
+        routing_parameters: Optional[Mapping[str, Any]] = None,
         include_future_opening_businesses: Optional[bool] = None,
     ) -> NearbySearchResult:
         """Async version of ``Client.nearby_search``.
@@ -2074,10 +2078,10 @@ class AsyncClient(_Base):
         session_token: Optional[str] = None,
         included_region_codes: Optional[Iterable[str]] = None,
         include_query_predictions: Optional[bool] = None,
-        location_bias: Optional[dict[str, Any]] = None,
-        location_restriction: Optional[dict[str, Any]] = None,
+        location_bias: Optional[Mapping[str, Any]] = None,
+        location_restriction: Optional[Mapping[str, Any]] = None,
         origin: Optional[
-            LatLng | tuple[float, float] | list[float] | dict[str, Any]
+            LatLng | tuple[float, float] | list[float] | Mapping[str, Any]
         ] = None,
         input_offset: Optional[int] = None,
         included_primary_types: Optional[Iterable[str]] = None,
