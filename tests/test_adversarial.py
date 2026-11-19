@@ -407,10 +407,12 @@ def test_code_list_items_refuse_control_characters(client, stub_server):
 
 
 class _EvilInt(int):
-    def __lt__(self, other):
-        raise RuntimeError("evil comparison")
-
-    __le__ = __lt__
+    # Audit A50-138: the int validator no longer spends a
+    # value's comparisons, so the comparison form of this
+    # class is defused by design and the detonation moves
+    # to the conversion the validator does spend.
+    def __int__(self):
+        raise RuntimeError("evil conversion")
 
 
 class _EvilStr(str):

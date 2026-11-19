@@ -32,6 +32,50 @@ fn host_is_loopback(url: &reqwest::Url) -> bool {
     }
 }
 
+/// Whether the parsed host of a URL can be trusted as
+/// loopback for a decision that extends trust on the answer:
+/// the plain http grant for a configured base, and the
+/// redirect screen's readings of its base and of a plain
+/// http target. For a name, a dotted address, and a single
+/// position embedding it answers exactly as
+/// [`host_is_loopback`] does. For a NAT64 local-use
+/// spelling, which carries two candidate delivery
+/// addresses, trust requires that some candidate is
+/// loopback and no candidate is anything other than
+/// loopback or the unspecified address: a spelling whose
+/// other position delivers to a private or public host
+/// must not gain cleartext trust from the loopback
+/// position (audit A50-127). The refusal seats keep the
+/// any-position reading of [`host_is_loopback`], because a
+/// judgement that only refuses is sound when it fires for
+/// either candidate.
+fn host_is_loopback_trusted(url: &reqwest::Url) -> bool {
+    match url.host() {
+        Some(url::Host::Domain(name)) => {
+            let name = name.trim_end_matches('.').to_ascii_lowercase();
+            name == "localhost" || name.ends_with(".localhost")
+        }
+        Some(url::Host::Ipv4(ip)) => ip.is_loopback(),
+        Some(url::Host::Ipv6(ip)) => ipv6_loopback_trusted(ip),
+        None => false,
+    }
+}
+
+/// The trusted loopback reading of an IPv6 literal, as
+/// [`host_is_loopback_trusted`] states it.
+fn ipv6_loopback_trusted(ip: std::net::Ipv6Addr) -> bool {
+    if ip.is_loopback() {
+        return true;
+    }
+    let segments = ip.segments();
+    if matches!(segments, [0x0064, 0xff9b, 0x0001, _, _, _, _, _]) {
+        let (routed, low) = local_use_positions(&segments);
+        let local = |v4: std::net::Ipv4Addr| v4.is_loopback() || v4.is_unspecified();
+        return local(routed) && local(low) && (routed.is_loopback() || low.is_loopback());
+    }
+    ipv6_embedded_ipv4(ip).is_some_and(|v4| v4.is_loopback())
+}
+
 /// The host of a URL as an IP address, when the host is an IP
 /// literal rather than a name.
 fn host_ip(url: &reqwest::Url) -> Option<std::net::IpAddr> {
@@ -73,6 +117,14 @@ fn host_ip(url: &reqwest::Url) -> Option<std::net::IpAddr> {
 /// client chose, not a delivery candidate, so it is not
 /// extracted: judging by it could grant loopback trust to
 /// a delivery that goes to the client (audit A50-006).
+/// The returned address is the extraction value the tests
+/// judge. The predicate consumers do not all read it as
+/// their verdict: a local-use spelling's two positions are
+/// read separately by the trust and non-public predicates
+/// below, because a judgement that extends trust is sound
+/// only when it holds for both candidate deliveries, and a
+/// loopback verdict would otherwise hide a non-public
+/// position from the non-public check (audit A50-127).
 /// The unspecified address and the IPv6 loopback
 /// address are not embeddings, they are addresses in their
 /// own right, so they return None here and keep their IPv6
@@ -107,11 +159,7 @@ pub(crate) fn ipv6_embedded_ipv4(ip: std::net::Ipv6Addr) -> Option<std::net::Ipv
             // host and a zero position is the only cover it
             // could hide behind, so neither position can hide
             // the other from the consumers of this helper.
-            let routed = std::net::Ipv4Addr::from(
-                ((segments[3] as u32) << 16)
-                    | (((segments[4] as u32) & 0xff) << 8)
-                    | ((segments[5] as u32) >> 8),
-            );
+            let (routed, low) = local_use_positions(&segments);
             Some(judge_embedded_pair(routed, low))
         }
         // The 6to4 prefix carries the site address in
@@ -127,6 +175,26 @@ pub(crate) fn ipv6_embedded_ipv4(ip: std::net::Ipv6Addr) -> Option<std::net::Ipv
         }
         _ => None,
     }
+}
+
+/// The two candidate delivery addresses of a NAT64 local-use
+/// spelling, in the order the extraction judges them: the
+/// RFC 6052 /48 position first (segment 3, then the low byte
+/// of segment 4 and the high byte of segment 5, stepping over
+/// the reserved u octet in the high byte of segment 4), and
+/// the last 32 bits under a /96 length second. A screen
+/// cannot know which prefix length the network is configured
+/// with, so a spelling in this space has two candidate
+/// deliveries, and the predicate consumers below read the
+/// two positions separately (audit A50-127).
+fn local_use_positions(segments: &[u16; 8]) -> (std::net::Ipv4Addr, std::net::Ipv4Addr) {
+    let routed = std::net::Ipv4Addr::from(
+        ((segments[3] as u32) << 16)
+            | (((segments[4] as u32) & 0xff) << 8)
+            | ((segments[5] as u32) >> 8),
+    );
+    let low = std::net::Ipv4Addr::from(((segments[6] as u32) << 16) | (segments[7] as u32));
+    (routed, low)
 }
 
 /// Judge the two candidate addresses of one spelling that
@@ -189,8 +257,25 @@ fn ip_is_non_public(ip: std::net::IpAddr) -> bool {
             v6.is_unique_local()
                 || v6.is_unicast_link_local()
                 || v6.is_unspecified()
-                || ipv6_embedded_ipv4(v6).is_some_and(ipv4_is_non_public)
+                || embedded_is_non_public(v6)
         }
+    }
+}
+
+/// Whether the IPv4 address an IPv6 literal embeds is
+/// non-public. A NAT64 local-use spelling is judged by
+/// either of its two candidate positions: the collapsed
+/// extraction verdict is loopback first, and loopback is
+/// not in the non-public set, so reading the verdict alone
+/// would hide a private position behind a loopback one
+/// (audit A50-127).
+fn embedded_is_non_public(v6: std::net::Ipv6Addr) -> bool {
+    let segments = v6.segments();
+    if matches!(segments, [0x0064, 0xff9b, 0x0001, _, _, _, _, _]) {
+        let (routed, low) = local_use_positions(&segments);
+        ipv4_is_non_public(routed) || ipv4_is_non_public(low)
+    } else {
+        ipv6_embedded_ipv4(v6).is_some_and(ipv4_is_non_public)
     }
 }
 
@@ -235,7 +320,7 @@ pub(crate) fn screen_redirect_target(
     if target.host_str().is_none() {
         return Err(refuse("the target names no host"));
     }
-    let base_loopback = host_is_loopback(base);
+    let base_loopback = host_is_loopback_trusted(base);
     let target_loopback = host_is_loopback(target);
     match target.scheme() {
         "https" => {
@@ -250,7 +335,7 @@ pub(crate) fn screen_redirect_target(
             Ok(())
         }
         "http" => {
-            if base_loopback && target_loopback {
+            if base_loopback && host_is_loopback_trusted(target) {
                 Ok(())
             } else {
                 Err(refuse("the target uses plain http"))
@@ -300,7 +385,7 @@ pub(crate) fn parse_base_url(raw: &str) -> Result<String, Error> {
             "base_url must not carry credentials (userinfo)",
         ));
     }
-    if url.scheme() == "http" && !host_is_loopback(&url) {
+    if url.scheme() == "http" && !host_is_loopback_trusted(&url) {
         // Classification reads the parsed host, never the raw
         // string, because the parser canonicalises spellings such
         // as a hex IPv4 address to the dotted form before this

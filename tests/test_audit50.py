@@ -720,3 +720,139 @@ class TestErrorSurfaceRepairs:
             )
         assert "could not be read" in str(caught.value)
         assert "failed to decode" not in str(caught.value)
+
+
+class _RaisingConversionInt(int):
+    def __int__(self):
+        raise RuntimeError("int boom")
+
+
+class _RaisingComparisonInt(int):
+    def __le__(self, other):
+        raise RuntimeError("cmp boom")
+
+    def __ge__(self, other):
+        raise RuntimeError("cmp boom")
+
+
+class _LyingComparisonInt(int):
+    def __le__(self, other):
+        return True
+
+    def __ge__(self, other):
+        return True
+
+
+class _HostileFloat(float):
+    def __float__(self):
+        raise RuntimeError("float boom")
+
+
+class _DivergentConversionInt(int):
+    def __int__(self):
+        return 5
+
+
+class TestIntValidatorCoercion:
+    """A50-138 and A50-197: the int validator coerces inside its
+    guard and judges the plain value, and the float seats catch
+    the whole Exception family around their conversion."""
+
+    def test_conversion_detonation_refuses_with_the_seat_message(self):
+        from placekit.client import _Base
+
+        with pytest.raises(ConfigError) as caught:
+            _Base._validate_int_range(
+                "page_size", _RaisingConversionInt(5), 1, 20
+            )
+        assert "page_size must be an integer between 1 and 20" in str(
+            caught.value
+        )
+        assert isinstance(caught.value.__cause__, RuntimeError)
+
+    def test_conversion_detonation_refuses_at_the_photo_seat(self):
+        from placekit.client import _Base
+
+        with pytest.raises(ConfigError) as caught:
+            _Base._validate_photo_args(
+                "places/x/photos/y",
+                _RaisingConversionInt(5),
+                None,
+                False,
+                "place_photo",
+            )
+        assert "max_width_px must be an integer between 1 and 4800" in str(
+            caught.value
+        )
+        assert isinstance(caught.value.__cause__, RuntimeError)
+
+    def test_lying_comparison_is_refused_on_its_stored_value(self):
+        from placekit.client import _Base
+
+        with pytest.raises(ConfigError) as caught:
+            _Base._validate_int_range(
+                "page_size", _LyingComparisonInt(999), 1, 20
+            )
+        assert "page_size must be an integer between 1 and 20" in str(
+            caught.value
+        )
+
+    def test_comparison_is_never_spent_and_the_body_carries_a_plain_int(
+        self,
+    ):
+        from placekit.client import _Base
+
+        body = _Base._text_search_body(
+            "pizza",
+            page_token=None,
+            language=None,
+            region=None,
+            rank_preference=None,
+            open_now=None,
+            price_levels=None,
+            strict_type_filtering=None,
+            included_type=None,
+            location_bias=None,
+            location_restriction=None,
+            page_size=_RaisingComparisonInt(5),
+        )
+        assert body["pageSize"] == 5
+        assert type(body["pageSize"]) is int
+
+    def test_photo_seat_returns_the_judged_plain_int(self):
+        # The validator judges the conversion's answer (5), and
+        # the photo seat returns that plain int for the caller
+        # to pass onward, so the value judged is the value the
+        # native call reads, not the stored 999 the caller's
+        # object still carries.
+        from placekit.client import _Base
+
+        width, height = _Base._validate_photo_args(
+            "places/x/photos/y",
+            _DivergentConversionInt(999),
+            None,
+            False,
+            "place_photo",
+        )
+        assert width == 5
+        assert type(width) is int
+        assert height is None
+
+    def test_hostile_float_conversion_refuses_with_the_seat_message(self):
+        from placekit.client import _Base
+
+        with pytest.raises(ConfigError) as caught:
+            _Base._validate_float_range("min_rating", _HostileFloat(1.5), 0, 5)
+        assert "min_rating must be an int or float between 0 and 5" in str(
+            caught.value
+        )
+        assert isinstance(caught.value.__cause__, RuntimeError)
+
+    def test_huge_int_refusal_text_is_unchanged(self):
+        from placekit.client import _Base
+
+        with pytest.raises(ConfigError) as caught:
+            _Base._validate_float_range("min_rating", 10**400, 0, 5)
+        assert "min_rating must be an int or float between 0 and 5" in str(
+            caught.value
+        )
