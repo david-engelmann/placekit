@@ -724,17 +724,14 @@ impl Client {
     }
 
     /// Headers shared by every request: the API key, and the field mask
-    /// when the endpoint uses one. Fails rather than silently dropping a
-    /// header that cannot be constructed (F13); the API key's header
-    /// value is built once at build time, so a failure here means a bad
-    /// mask value.
+    /// when the endpoint uses one. Both header values are built before
+    /// the request path (the key's at build time, the mask's at its
+    /// construction, audit A50-212), so this seat only clones them.
     fn headers(&self, mask: Option<&FieldMask>) -> Result<HeaderMap, Error> {
         let mut headers = HeaderMap::new();
         headers.insert(API_KEY_HEADER, self.api_key_header.clone());
         if let Some(mask) = mask {
-            let value = HeaderValue::from_str(mask.header_value())
-                .map_err(|_| Error::config("field mask cannot be sent in an HTTP header"))?;
-            headers.insert(FIELD_MASK_HEADER, value);
+            headers.insert(FIELD_MASK_HEADER, mask.header_send_value().clone());
         }
         Ok(headers)
     }
