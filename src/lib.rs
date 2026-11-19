@@ -509,11 +509,11 @@ fn to_pyerr(py: Python<'_>, err: CoreError) -> PyErr {
             record_failure(&mut first_failure, instance.setattr("details", details));
             record_failure(
                 &mut first_failure,
-                instance.setattr("field_violations", quota_violations),
+                instance.setattr("field_violations", field_violations),
             );
             record_failure(
                 &mut first_failure,
-                instance.setattr("quota_violations", field_violations),
+                instance.setattr("quota_violations", quota_violations),
             );
             record_failure(
                 &mut first_failure,
