@@ -16,6 +16,7 @@ import hashlib
 import importlib.util
 import json
 import re
+import textwrap
 from pathlib import Path
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -5341,6 +5342,12 @@ def _fixtures_a_test_loads(
 
 
 RECORDED_LOADERS = _loader_function_names("test_recorded_corpus.py")
+
+
+def _loads(source: str) -> set[str]:
+    # Audit A50-190: the one home of the wrapper the two
+    # corpus batteries used to define for themselves.
+    return _fixtures_a_test_loads(textwrap.dedent(source), RECORDED_LOADERS)
 
 
 def _case_map():

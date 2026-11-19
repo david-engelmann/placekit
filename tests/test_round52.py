@@ -303,17 +303,13 @@ from __future__ import annotations
 import textwrap
 
 from test_corpus_accounting import (
-    RECORDED_LOADERS,
     _fixtures_a_test_loads,
     _loader_function_names,
+    _loads,
 )
 
 CLAIMED = "recorded_OBS1_requested_field_vanishes.json"
 OTHER = "recorded_P1_no_address_natural_feature.json"
-
-
-def _loads(source: str) -> set[str]:
-    return _fixtures_a_test_loads(textwrap.dedent(source), RECORDED_LOADERS)
 
 
 def test_linkage_literal_argument_credits_the_fixture():
@@ -932,6 +928,34 @@ def test_linkage_post_loop_call_credits_exactly_the_last_element():
     assert loaded == {CLAIMED}
 
 
+# Audit A50-053. The derivation samples repeat a handful of
+# synthetic module blocks verbatim, so in the stored samples
+# each such block stands as one sentinel comment line, and
+# _expand restores the block before the derivation reads the
+# sample. The generated source diff in the round 13 batch 2
+# proof shows every expanded sample byte-identical to the
+# sample as it stood before the consolidation.
+_SAMPLE_BLOCKS = {
+    '# @@R52:reader@@': 'def reader(name):\n    return (ROOT / name).read_bytes()',
+    '# @@R52:shadow@@': 'def shadow_search(client, raw_response, name):\n    return reader(name)',
+    '# @@R52:install@@': 'def _install_shadow():\n    global shadow_search\n    shadow_search = lambda client, raw_response, name: None',
+    '# @@R52:descriptor@@': 'class _ShadowDescriptor:\n    def __set_name__(self, owner, name):\n        _install_shadow()',
+    '# @@R52:base@@': 'class _ShadowBase:\n    def __init__(self):\n        global shadow_search\n        shadow_search = lambda client, raw_response, name: None',
+    '# @@R52:base-item@@': 'class _ShadowBase:\n    @classmethod\n    def __class_getitem__(cls, item):\n        _install_shadow()\n        return cls',
+}
+
+
+def _expand(source: str) -> str:
+    lines = []
+    for line in source.split("\n"):
+        block = _SAMPLE_BLOCKS.get(line)
+        if block is None:
+            lines.append(line)
+        else:
+            lines.extend(block.split("\n"))
+    return "\n".join(lines)
+
+
 def _derived_loaders(tmp_path, source: str) -> set[str]:
     # The derivation reads a module file from the tests
     # folder, and an absolute path stands in for it under the
@@ -939,7 +963,7 @@ def _derived_loaders(tmp_path, source: str) -> set[str]:
     # to the test's own scratch folder derives its loader set
     # exactly as the shipped module derives its own.
     module = tmp_path / "synthetic_corpus.py"
-    module.write_text(textwrap.dedent(source))
+    module.write_text(_expand(textwrap.dedent(source)))
     return _loader_function_names(str(module))
 
 
@@ -956,8 +980,7 @@ def test_loader_derivation_refuses_a_helper_that_drops_its_argument(tmp_path):
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
         def shadow_search(client, raw_response, name):
@@ -982,8 +1005,7 @@ def test_loader_derivation_refuses_a_helper_that_passes_its_argument_on_one_bran
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
         def shadow_search(client, raw_response, name):
@@ -1008,8 +1030,7 @@ def test_loader_derivation_admits_a_faithful_helper_and_credits_through_it(tmp_p
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
         def faithful_search(client, raw_response, name):
@@ -1198,8 +1219,7 @@ def test_loader_derivation_admits_a_faithful_multi_argument_helper(tmp_path):
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
         def replay(client, raw_response, name):
@@ -1359,8 +1379,7 @@ def test_loader_derivation_refuses_a_generator_function_helper(tmp_path):
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
         def shadow_search(client, raw_response, name):
@@ -1387,12 +1406,10 @@ def test_loader_derivation_refuses_a_helper_rebound_at_module_level(tmp_path):
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
         shadow_search = lambda client, raw_response, name: None
@@ -1416,8 +1433,7 @@ def test_loader_derivation_refuses_a_decorated_helper(tmp_path):
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
         def swallower(function):
@@ -1450,8 +1466,7 @@ def test_loader_derivation_refuses_an_async_helper(tmp_path):
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
         async def shadow_search(client, raw_response, name):
@@ -1479,12 +1494,10 @@ def test_loader_derivation_refuses_a_helper_rebound_by_a_match_capture(tmp_path)
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
         match (lambda client, raw_response, name: None,):
@@ -1514,12 +1527,10 @@ def test_loader_derivation_refuses_a_helper_rebound_by_a_with_item_target(tmp_pa
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
         class _ShadowBox:
@@ -1554,12 +1565,10 @@ def test_loader_derivation_refuses_a_helper_rebound_inside_a_with_body(tmp_path)
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
         from contextlib import suppress
@@ -1593,17 +1602,13 @@ def test_loader_derivation_refuses_a_helper_rewritten_by_a_called_installer(tmp_
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
         _install_shadow()
@@ -1627,17 +1632,13 @@ def test_loader_derivation_admits_a_helper_beside_an_uncalled_installer(tmp_path
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
         """,
     )
     assert loaders == {"reader", "shadow_search"}
@@ -1659,17 +1660,13 @@ def test_loader_derivation_refuses_a_helper_rewritten_through_an_intermediary(tm
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
         def _run_installer():
@@ -1698,17 +1695,13 @@ def test_loader_derivation_refuses_a_helper_rewritten_from_a_class_body(tmp_path
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
         class _LoadTrigger:
@@ -1734,12 +1727,10 @@ def test_loader_derivation_refuses_a_helper_rewritten_through_a_constructor(tmp_
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
         class _ShadowInstaller:
@@ -1772,17 +1763,13 @@ def test_loader_derivation_refuses_a_helper_rewritten_by_an_installer_standing_b
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
         _install_shadow()
@@ -1806,17 +1793,13 @@ def test_loader_derivation_admits_a_helper_beside_a_chain_never_called(tmp_path)
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
         def _run_installer():
@@ -1840,12 +1823,10 @@ def test_loader_derivation_admits_a_helper_beside_a_class_never_constructed(tmp_
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
         class _ShadowInstaller:
@@ -1878,17 +1859,13 @@ def test_loader_derivation_refuses_a_helper_rewritten_through_a_decorator_call(t
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
         def _wrap(value):
@@ -1922,17 +1899,13 @@ def test_loader_derivation_refuses_a_helper_rewritten_through_a_default_value_ca
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
         def _decoy(marker=_install_shadow()):
@@ -1959,17 +1932,13 @@ def test_loader_derivation_refuses_a_helper_rewritten_through_an_on_the_spot_lam
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
         (lambda: _install_shadow())()
@@ -1995,12 +1964,10 @@ def test_loader_derivation_refuses_a_helper_rewritten_through_a_dunder_new_metho
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
         class _ShadowInstaller:
@@ -2034,18 +2001,13 @@ def test_loader_derivation_refuses_a_helper_rewritten_through_an_inherited_const
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        class _ShadowBase:
-            def __init__(self):
-                global shadow_search
-                shadow_search = lambda client, raw_response, name: None
+        # @@R52:base@@
 
 
         class _ShadowInstaller(_ShadowBase):
@@ -2074,17 +2036,13 @@ def test_loader_derivation_admits_a_helper_beside_an_uninvoked_lambda(tmp_path):
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
         _trigger = lambda: _install_shadow()
@@ -2114,17 +2072,13 @@ def test_loader_derivation_refuses_a_helper_rewritten_through_a_subclass_hook(tm
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
         class _HookBase:
@@ -2162,12 +2116,10 @@ def test_loader_derivation_refuses_a_helper_rewritten_by_a_metaclass(tmp_path):
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
         class _ShadowMeta(type):
@@ -2208,17 +2160,13 @@ def test_loader_derivation_refuses_a_helper_rewritten_through_a_class_decorator_
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
         def _wrap(value):
@@ -2259,17 +2207,13 @@ def test_loader_derivation_refuses_a_helper_rewritten_in_a_subclass_body(tmp_pat
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
         class _HookBase:
@@ -2311,22 +2255,16 @@ def test_loader_derivation_refuses_a_helper_rewritten_through_a_set_name_hook(tm
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
-        class _ShadowDescriptor:
-            def __set_name__(self, owner, name):
-                _install_shadow()
+        # @@R52:descriptor@@
 
 
         class _DescriptorMarked:
@@ -2367,8 +2305,7 @@ def test_loader_derivation_refuses_a_helper_rewritten_by_an_inherited_metaclass(
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
         class _ShadowMeta(type):
@@ -2376,17 +2313,14 @@ def test_loader_derivation_refuses_a_helper_rewritten_by_an_inherited_metaclass(
                 _install_shadow()
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
         class _MetaBase(metaclass=_ShadowMeta):
             pass
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
         class _MetaChild(_MetaBase):
@@ -2415,12 +2349,10 @@ def test_loader_derivation_keeps_a_helper_beside_a_hookless_descriptor(tmp_path)
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
         class _PlainDescriptor:
@@ -2464,17 +2396,13 @@ def test_loader_derivation_refuses_a_helper_rewritten_through_a_prepare_method(
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
         class _PrepareMeta(type):
@@ -2522,8 +2450,7 @@ def test_loader_derivation_refuses_a_helper_rewritten_by_an_inherited_prepare_me
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
         class _PrepareMeta(type):
@@ -2533,17 +2460,14 @@ def test_loader_derivation_refuses_a_helper_rewritten_by_an_inherited_prepare_me
                 return {}
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
         class _MetaBase(metaclass=_PrepareMeta):
             pass
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
         class _MetaChild(_MetaBase):
@@ -2584,22 +2508,16 @@ def test_loader_derivation_refuses_a_helper_rewritten_through_a_name_bound_descr
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
-        class _ShadowDescriptor:
-            def __set_name__(self, owner, name):
-                _install_shadow()
+        # @@R52:descriptor@@
 
 
         _SHARED_DESCRIPTOR = _ShadowDescriptor()
@@ -2641,17 +2559,13 @@ def test_loader_derivation_refuses_a_helper_rewritten_in_a_class_body_inside_a_c
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
         def _run_at_load():
@@ -2692,17 +2606,13 @@ def test_loader_derivation_refuses_a_helper_rewritten_through_a_subclass_hook_on
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
         class _HookBase:
@@ -2752,8 +2662,7 @@ def test_loader_derivation_refuses_a_helper_rewritten_by_a_metaclass_behind_a_su
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
         class _ShadowMeta(type):
@@ -2761,9 +2670,7 @@ def test_loader_derivation_refuses_a_helper_rewritten_by_a_metaclass_behind_a_su
                 _install_shadow()
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
         class _MetaBase(metaclass=_ShadowMeta):
@@ -2772,8 +2679,7 @@ def test_loader_derivation_refuses_a_helper_rewritten_by_a_metaclass_behind_a_su
                 return cls
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
         class _MetaChild(_MetaBase[int]):
@@ -2804,12 +2710,10 @@ def test_loader_derivation_keeps_a_helper_beside_a_quiet_prepare_method(tmp_path
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
         class _QuietMeta(type):
@@ -2848,17 +2752,13 @@ def test_loader_derivation_keeps_a_helper_beside_a_class_body_in_an_uncalled_fun
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
         def _never_run():
@@ -2900,22 +2800,16 @@ def test_loader_derivation_refuses_a_helper_rewritten_through_a_set_name_hook_in
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
-        class _ShadowDescriptor:
-            def __set_name__(self, owner, name):
-                _install_shadow()
+        # @@R52:descriptor@@
 
 
         class _DescriptorMarked:
@@ -2953,22 +2847,16 @@ def test_loader_derivation_refuses_a_helper_rewritten_through_a_set_name_hook_on
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
-        class _ShadowDescriptor:
-            def __set_name__(self, owner, name):
-                _install_shadow()
+        # @@R52:descriptor@@
 
 
         class _DescriptorMarked:
@@ -3006,17 +2894,13 @@ def test_loader_derivation_refuses_a_helper_rewritten_through_a_set_name_hook_on
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
         class _ShadowDescriptor:
@@ -3065,17 +2949,13 @@ def test_loader_derivation_refuses_a_helper_rewritten_through_an_assigned_subcla
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
         def _shadow_hook(cls, **kwargs):
@@ -3123,17 +3003,13 @@ def test_loader_derivation_refuses_a_helper_rewritten_through_an_assigned_set_na
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
         def _shadow_set_name(self, owner, name):
@@ -3181,17 +3057,13 @@ def test_loader_derivation_refuses_a_helper_rewritten_through_an_assigned_constr
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
         def _shadow_meta_init(cls, name, bases, namespace):
@@ -3240,12 +3112,10 @@ def test_loader_derivation_refuses_a_helper_rewritten_by_a_definition_called_fro
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
         class _RunAtLoad:
@@ -3283,17 +3153,13 @@ def test_loader_derivation_keeps_a_helper_beside_a_hookless_descriptor_in_an_arm
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
         class _QuietDescriptor:
@@ -3335,12 +3201,10 @@ def test_loader_derivation_keeps_a_helper_beside_an_assigned_hook_that_calls_not
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
         def _quiet_hook(cls, **kwargs):
@@ -3387,22 +3251,16 @@ def test_loader_derivation_refuses_a_helper_rewritten_through_a_set_name_hook_on
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
-        class _ShadowDescriptor:
-            def __set_name__(self, owner, name):
-                _install_shadow()
+        # @@R52:descriptor@@
 
 
         _AliasDescriptor = _ShadowDescriptor
@@ -3442,17 +3300,13 @@ def test_loader_derivation_refuses_a_helper_rewritten_through_a_subclass_hook_be
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
         class _HookBase:
@@ -3498,17 +3352,13 @@ def test_loader_derivation_refuses_a_helper_rewritten_through_an_aliased_metacla
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
         class _ShadowMeta(type):
@@ -3555,17 +3405,13 @@ def test_loader_derivation_refuses_a_helper_rewritten_through_a_set_name_hook_on
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
         class _ShadowDescriptor:
@@ -3619,17 +3465,13 @@ def test_loader_derivation_refuses_a_helper_rewritten_through_a_metaclass_call_m
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
         class _CallMeta(type):
@@ -3675,17 +3517,13 @@ def test_loader_derivation_refuses_a_helper_rewritten_through_an_inherited_metac
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
         class _CallMeta(type):
@@ -3738,17 +3576,13 @@ def test_loader_derivation_refuses_a_helper_rewritten_through_a_subclass_hook_de
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
         class _HookBase:
@@ -3795,17 +3629,13 @@ def test_loader_derivation_refuses_a_helper_rewritten_through_a_subclass_hook_as
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
         def _shadow_hook(cls, **kwargs):
@@ -3852,17 +3682,13 @@ def test_loader_derivation_refuses_a_helper_rewritten_through_a_subclass_hook_bo
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
         def _shadow_hook(cls, **kwargs):
@@ -3907,17 +3733,13 @@ def test_loader_derivation_keeps_a_helper_beside_an_aliased_descriptor_without_a
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
         class _QuietDescriptor:
@@ -3961,17 +3783,13 @@ def test_loader_derivation_keeps_a_helper_beside_a_delegating_metaclass_call_met
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
         class _CallMeta(type):
@@ -4015,17 +3833,13 @@ def test_loader_derivation_keeps_a_helper_beside_a_quiet_subclass_hook_defined_i
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
         class _HookBase:
@@ -4065,17 +3879,13 @@ def test_loader_derivation_refuses_a_helper_rewritten_by_an_installer_called_thr
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
         _alias_installer = _install_shadow
@@ -4110,17 +3920,13 @@ def test_loader_derivation_refuses_a_helper_rewritten_by_a_wrapper_called_throug
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
         def _wrap():
@@ -4158,17 +3964,13 @@ def test_loader_derivation_refuses_a_helper_rewritten_by_an_installer_called_fro
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
         _alias_lambda = lambda: _install_shadow()
@@ -4203,17 +4005,13 @@ def test_loader_derivation_refuses_a_helper_rewritten_by_a_decorator_applied_to_
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
         def _deco(value):
@@ -4252,17 +4050,13 @@ def test_loader_derivation_refuses_a_helper_rewritten_by_a_decorator_applied_to_
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
         def _deco(value):
@@ -4302,17 +4096,13 @@ def test_loader_derivation_refuses_a_helper_rewritten_by_a_class_standing_as_a_d
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
         class _Deco:
@@ -4352,17 +4142,13 @@ def test_loader_derivation_refuses_a_helper_rewritten_by_an_instance_standing_as
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
         class _Runner:
@@ -4407,17 +4193,13 @@ def test_loader_derivation_refuses_a_helper_rewritten_by_an_instance_called_thro
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
         class _Runner:
@@ -4458,17 +4240,13 @@ def test_loader_derivation_refuses_a_helper_rewritten_by_an_instance_reached_thr
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
         class _Runner:
@@ -4513,17 +4291,13 @@ def test_loader_derivation_keeps_a_helper_beside_a_call_through_a_name_bound_to_
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
         def _quiet():
@@ -4563,17 +4337,13 @@ def test_loader_derivation_keeps_a_helper_beside_a_returning_decorator_in_bare_n
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
         def _deco(value):
@@ -4612,17 +4382,13 @@ def test_loader_derivation_keeps_a_helper_beside_a_quiet_instance_called_through
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
         class _Runner:
@@ -4662,17 +4428,13 @@ def test_loader_derivation_refuses_a_helper_rewritten_by_a_walrus_bound_installe
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
         (_alias_installer := _install_shadow)
@@ -4706,17 +4468,13 @@ def test_loader_derivation_refuses_a_helper_rewritten_by_a_walrus_bound_lambda(
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
         (_alias_lambda := lambda: _install_shadow())
@@ -4751,17 +4509,13 @@ def test_loader_derivation_refuses_a_helper_rewritten_through_a_subclass_hook_be
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
         class _HookBase:
@@ -4804,17 +4558,13 @@ def test_loader_derivation_refuses_a_helper_rewritten_by_a_walrus_bound_instance
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
         class _Runner:
@@ -4862,22 +4612,16 @@ def test_loader_derivation_refuses_a_helper_rewritten_through_a_set_name_hook_on
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
-        class _ShadowDescriptor:
-            def __set_name__(self, owner, name):
-                _install_shadow()
+        # @@R52:descriptor@@
 
 
         for _placed in [_ShadowDescriptor()]:
@@ -4916,17 +4660,13 @@ def test_loader_derivation_refuses_a_helper_rewritten_through_a_with_managers_en
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
         class _EnterCtx:
@@ -4965,17 +4705,13 @@ def test_loader_derivation_refuses_a_helper_rewritten_through_a_with_managers_ex
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
         class _ExitCtx:
@@ -5017,17 +4753,13 @@ def test_loader_derivation_refuses_a_helper_rewritten_through_a_bound_with_manag
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
         class _EnterCtx:
@@ -5069,17 +4801,13 @@ def test_loader_derivation_refuses_a_helper_rewritten_through_an_inherited_with_
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
         class _EnterBase:
@@ -5130,17 +4858,13 @@ def test_loader_derivation_refuses_a_helper_rewritten_through_a_class_getitem_in
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
         class _GIBase:
@@ -5178,17 +4902,13 @@ def test_loader_derivation_refuses_a_helper_rewritten_through_a_class_getitem_in
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
         class _GIBase:
@@ -5229,17 +4949,13 @@ def test_loader_derivation_refuses_a_helper_rewritten_through_a_for_loops_iter_m
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
         class _Iter:
@@ -5280,17 +4996,13 @@ def test_loader_derivation_refuses_a_helper_rewritten_through_a_self_iterators_n
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
         class _SelfIter:
@@ -5336,17 +5048,13 @@ def test_loader_derivation_refuses_a_helper_rewritten_through_a_bound_iterables_
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
         class _Iter:
@@ -5393,22 +5101,16 @@ def test_loader_derivation_refuses_a_helper_rewritten_through_a_set_name_hook_on
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
-        class _ShadowDescriptor:
-            def __set_name__(self, owner, name):
-                _install_shadow()
+        # @@R52:descriptor@@
 
 
         class _TupleMarked:
@@ -5443,22 +5145,16 @@ def test_loader_derivation_refuses_a_helper_rewritten_through_a_set_name_hook_on
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
-        class _ShadowDescriptor:
-            def __set_name__(self, owner, name):
-                _install_shadow()
+        # @@R52:descriptor@@
 
 
         class _CondMarked:
@@ -5493,17 +5189,13 @@ def test_loader_derivation_keeps_a_helper_beside_a_walrus_bound_quiet_name(
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
         def _quiet():
@@ -5544,17 +5236,13 @@ def test_loader_derivation_keeps_a_helper_beside_a_quiet_with_manager(
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
         class _QuietCtx:
@@ -5597,17 +5285,13 @@ def test_loader_derivation_keeps_a_helper_beside_a_delegating_class_getitem(
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
         class _GIBase:
@@ -5647,17 +5331,13 @@ def test_loader_derivation_keeps_a_helper_beside_a_quiet_iterable(
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
         class _Iter:
@@ -5698,17 +5378,13 @@ def test_loader_derivation_refuses_a_helper_rewritten_through_a_next_method_behi
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
         class _IterLocal:
@@ -5753,17 +5429,13 @@ def test_loader_derivation_refuses_a_helper_rewritten_through_a_next_method_behi
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
         class _IterCond:
@@ -5808,17 +5480,13 @@ def test_loader_derivation_refuses_a_helper_rewritten_through_a_sequence_fallbac
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
         class _SeqIter:
@@ -5862,17 +5530,13 @@ def test_loader_derivation_refuses_a_helper_rewritten_through_an_augmented_assig
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
         class _Accum:
@@ -5909,17 +5573,13 @@ def test_loader_derivation_refuses_a_helper_rewritten_through_an_augmented_assig
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
         class _AccumAdd:
@@ -5962,17 +5622,13 @@ def test_loader_derivation_refuses_a_helper_rewritten_through_a_call_bearing_an_
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
         _alias_installer, _other = _install_shadow, _install_shadow
@@ -6005,17 +5661,13 @@ def test_loader_derivation_refuses_a_helper_rewritten_through_a_subclass_hook_be
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
         class _HookBase:
@@ -6053,17 +5705,13 @@ def test_loader_derivation_refuses_a_helper_rewritten_through_an_instance_call_o
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
         class _Runner:
@@ -6107,17 +5755,13 @@ def test_loader_derivation_refuses_a_helper_rewritten_through_a_with_statements_
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
         class _EnterCtx:
@@ -6166,17 +5810,13 @@ def test_loader_derivation_refuses_a_helper_rewritten_through_a_for_statements_c
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
         class _Iter:
@@ -6219,17 +5859,13 @@ def test_loader_derivation_refuses_a_helper_rewritten_through_a_for_statements_w
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
         class _Iter:
@@ -6264,17 +5900,13 @@ def test_loader_derivation_refuses_a_helper_rewritten_through_a_with_statements_
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
         class _EnterCtx:
@@ -6319,22 +5951,16 @@ def test_loader_derivation_refuses_a_helper_rewritten_through_a_set_name_hook_on
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
-        class _ShadowDescriptor:
-            def __set_name__(self, owner, name):
-                _install_shadow()
+        # @@R52:descriptor@@
 
 
         class _DescriptorMarked:
@@ -6362,22 +5988,16 @@ def test_loader_derivation_refuses_a_helper_rewritten_through_a_set_name_hook_on
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
-        class _ShadowDescriptor:
-            def __set_name__(self, owner, name):
-                _install_shadow()
+        # @@R52:descriptor@@
 
 
         class _DescriptorMarked:
@@ -6412,22 +6032,16 @@ def test_loader_derivation_refuses_a_helper_rewritten_through_a_set_name_hook_on
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
-        class _ShadowDescriptor:
-            def __set_name__(self, owner, name):
-                _install_shadow()
+        # @@R52:descriptor@@
 
 
         _pair = (_ShadowDescriptor(),)
@@ -6459,22 +6073,16 @@ def test_loader_derivation_refuses_a_helper_rewritten_through_a_set_name_hook_on
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
-        class _ShadowDescriptor:
-            def __set_name__(self, owner, name):
-                _install_shadow()
+        # @@R52:descriptor@@
 
 
         def _build():
@@ -6515,17 +6123,13 @@ def test_loader_derivation_keeps_a_helper_beside_a_next_method_behind_a_distinct
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
         class _DistinctIter:
@@ -6567,17 +6171,13 @@ def test_loader_derivation_keeps_a_helper_beside_a_getitem_method_displaced_by_a
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
         class _BothProtocols:
@@ -6620,17 +6220,13 @@ def test_loader_derivation_keeps_a_helper_beside_a_hookless_descriptor_placed_by
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
         class _HooklessDescriptor:
@@ -6668,17 +6264,13 @@ def test_loader_derivation_refuses_a_helper_rewritten_through_an_enter_method_in
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
         def _loud_enter(self):
@@ -6722,17 +6314,13 @@ def test_loader_derivation_refuses_a_helper_rewritten_through_an_iter_method_ins
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
         def _loud_iter(self):
@@ -6778,17 +6366,13 @@ def test_loader_derivation_refuses_a_helper_rewritten_through_a_next_method_behi
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
         class _IterUnpack:
@@ -6832,17 +6416,13 @@ def test_loader_derivation_refuses_a_helper_rewritten_through_a_next_method_behi
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
         class _IterCondAlias:
@@ -6887,17 +6467,13 @@ def test_loader_derivation_refuses_a_helper_rewritten_through_an_enter_method_be
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
         class _EnterCtx:
@@ -6944,17 +6520,13 @@ def test_loader_derivation_refuses_a_helper_rewritten_through_an_iter_method_beh
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
         class _Iter:
@@ -6998,17 +6570,13 @@ def test_loader_derivation_refuses_a_helper_rewritten_through_an_enter_method_be
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
         class _EnterCtx:
@@ -7058,17 +6626,13 @@ def test_loader_derivation_refuses_a_helper_rewritten_through_a_class_getitem_be
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
         class _GIBase:
@@ -7114,22 +6678,16 @@ def test_loader_derivation_refuses_a_helper_rewritten_through_a_set_name_hook_on
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
-        class _ShadowDescriptor:
-            def __set_name__(self, owner, name):
-                _install_shadow()
+        # @@R52:descriptor@@
 
 
         _d = _ShadowDescriptor() if True else None
@@ -7165,22 +6723,16 @@ def test_loader_derivation_refuses_a_helper_rewritten_through_a_set_name_hook_on
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
-        class _ShadowDescriptor:
-            def __set_name__(self, owner, name):
-                _install_shadow()
+        # @@R52:descriptor@@
 
 
         _d = (_ShadowDescriptor(),)[0]
@@ -7227,22 +6779,16 @@ def test_loader_derivation_refuses_a_helper_rewritten_through_a_set_name_hook_on
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
-        class _ShadowDescriptor:
-            def __set_name__(self, owner, name):
-                _install_shadow()
+        # @@R52:descriptor@@
 
 
         _pair = (_ShadowDescriptor(), None)
@@ -7280,17 +6826,13 @@ def test_loader_derivation_keeps_a_helper_beside_an_enter_method_installed_by_un
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
         def _quiet_enter(self):
@@ -7339,17 +6881,13 @@ def test_loader_derivation_keeps_a_helper_beside_a_hookless_descriptor_placed_by
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
         class _HooklessDescriptor:
@@ -7391,17 +6929,13 @@ def test_loader_derivation_refuses_a_helper_rewritten_through_a_call_bearing_the
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
         for _installer in [_install_shadow]:
@@ -7436,17 +6970,13 @@ def test_loader_derivation_refuses_a_helper_rewritten_through_a_subclass_hook_be
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
         class _HookBase:
@@ -7488,17 +7018,13 @@ def test_loader_derivation_refuses_a_helper_rewritten_through_a_decorator_applic
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
         class _Runner:
@@ -7541,17 +7067,13 @@ def test_loader_derivation_refuses_a_helper_rewritten_through_an_instance_call_b
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
         class _Runner:
@@ -7592,17 +7114,13 @@ def test_loader_derivation_refuses_a_helper_rewritten_through_an_enter_method_be
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
         class _EnterCtx:
@@ -7648,17 +7166,13 @@ def test_loader_derivation_refuses_a_helper_rewritten_through_an_augmented_assig
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
         class _AccumSub:
@@ -7697,17 +7211,13 @@ def test_loader_derivation_refuses_a_helper_rewritten_through_an_augmented_assig
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
         class _AccumSubOnly:
@@ -7746,17 +7256,13 @@ def test_loader_derivation_refuses_a_helper_rewritten_through_an_augmented_assig
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
         class _AccumMul:
@@ -7798,17 +7304,13 @@ def test_loader_derivation_refuses_a_helper_rewritten_through_a_class_getitem_be
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
         class _GIBase:
@@ -7850,17 +7352,13 @@ def test_loader_derivation_refuses_a_helper_rewritten_through_a_class_getitem_be
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
         class _GIBase:
@@ -7902,17 +7400,13 @@ def test_loader_derivation_refuses_a_helper_rewritten_through_a_next_method_behi
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
         class _IterSubscript:
@@ -7953,17 +7447,13 @@ def test_loader_derivation_refuses_a_helper_rewritten_through_a_next_method_behi
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
         class _IterSubscriptAlias:
@@ -8011,17 +7501,13 @@ def test_loader_derivation_refuses_a_helper_rewritten_through_a_next_method_behi
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
         class _IterLoopAlias:
@@ -8068,22 +7554,16 @@ def test_loader_derivation_refuses_a_helper_rewritten_through_a_set_name_hook_on
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
-        class _ShadowDescriptor:
-            def __set_name__(self, owner, name):
-                _install_shadow()
+        # @@R52:descriptor@@
 
 
         _d = (_held := _ShadowDescriptor())
@@ -8122,17 +7602,13 @@ def test_loader_derivation_keeps_a_helper_beside_a_quiet_function_called_through
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
         def _quiet():
@@ -8176,17 +7652,13 @@ def test_loader_derivation_keeps_a_helper_beside_a_hookless_descriptor_placed_by
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
         class _HooklessDescriptor:
@@ -8227,17 +7699,13 @@ def test_loader_derivation_refuses_a_helper_rewritten_through_an_instance_call_b
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
         class _Runner:
@@ -8276,17 +7744,13 @@ def test_loader_derivation_refuses_a_helper_rewritten_through_a_subclass_hook_be
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
         class _HookBase:
@@ -8331,17 +7795,13 @@ def test_loader_derivation_refuses_a_helper_rewritten_through_a_class_getitem_be
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
         class _GIBase:
@@ -8382,17 +7842,13 @@ def test_loader_derivation_refuses_a_helper_rewritten_through_a_next_method_behi
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
         class _IterNamedSelection:
@@ -8434,17 +7890,13 @@ def test_loader_derivation_refuses_a_helper_rewritten_through_a_next_method_behi
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
         class _IterLoopNamedSelection:
@@ -8485,17 +7937,13 @@ def test_loader_derivation_refuses_a_helper_rewritten_through_a_next_method_behi
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
         class _IterAliasedSelection:
@@ -8539,17 +7987,13 @@ def test_loader_derivation_refuses_a_helper_rewritten_through_a_next_method_behi
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
         class _IterNamedLoop:
@@ -8595,17 +8039,13 @@ def test_loader_derivation_refuses_a_helper_rewritten_through_a_call_bearing_the
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
         for _inner in [[_install_shadow]]:
@@ -8647,17 +8087,13 @@ def test_loader_derivation_refuses_a_helper_rewritten_through_a_call_naming_an_i
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
         class _Runner:
@@ -8694,17 +8130,13 @@ def test_loader_derivation_refuses_a_helper_rewritten_through_an_augmented_assig
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
         class _AccumSub:
@@ -8748,17 +8180,13 @@ def test_loader_derivation_keeps_a_helper_beside_a_quiet_function_called_through
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
         def _quiet():
@@ -8802,17 +8230,13 @@ def test_loader_derivation_keeps_a_helper_beside_an_iter_returning_a_distinct_it
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
         class _IterDistinct:
@@ -8861,17 +8285,13 @@ def test_loader_derivation_refuses_a_helper_rewritten_through_a_next_method_behi
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
         class _IterWalrusSelectionValue:
@@ -8912,17 +8332,13 @@ def test_loader_derivation_refuses_a_helper_rewritten_through_a_next_method_behi
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
         class _IterBooleanSelectionValue:
@@ -8961,17 +8377,13 @@ def test_loader_derivation_refuses_a_helper_rewritten_through_a_next_method_behi
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
         class _IterConditionalSelectionValue:
@@ -9010,17 +8422,13 @@ def test_loader_derivation_refuses_a_helper_rewritten_through_a_next_method_behi
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
         class _IterNestedSelectionValue:
@@ -9064,22 +8472,16 @@ def test_loader_derivation_refuses_a_helper_rewritten_through_a_set_name_hook_on
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
-        class _ShadowDescriptor:
-            def __set_name__(self, owner, name):
-                _install_shadow()
+        # @@R52:descriptor@@
 
 
         class _DescriptorMarked:
@@ -9108,22 +8510,16 @@ def test_loader_derivation_refuses_a_helper_rewritten_through_a_set_name_hook_on
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
-        class _ShadowDescriptor:
-            def __set_name__(self, owner, name):
-                _install_shadow()
+        # @@R52:descriptor@@
 
 
         _held = ((_ShadowDescriptor(),),)[0][0]
@@ -9160,17 +8556,13 @@ def test_loader_derivation_refuses_a_helper_rewritten_through_a_call_naming_an_i
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
         class _Runner:
@@ -9207,17 +8599,13 @@ def test_loader_derivation_refuses_a_helper_rewritten_through_an_augmented_assig
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
         class _Accumulator:
@@ -9257,17 +8645,13 @@ def test_loader_derivation_refuses_a_helper_rewritten_through_an_enter_method_be
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
         class _Manager:
@@ -9315,17 +8699,13 @@ def test_loader_derivation_refuses_a_helper_rewritten_through_a_class_getitem_be
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
         class _GIBase:
@@ -9365,17 +8745,13 @@ def test_loader_derivation_refuses_a_helper_rewritten_through_a_class_getitem_be
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
         class _GIBase:
@@ -9414,17 +8790,13 @@ def test_loader_derivation_refuses_a_helper_rewritten_through_a_class_getitem_be
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
         class _GIBase:
@@ -9466,17 +8838,13 @@ def test_loader_derivation_keeps_a_helper_beside_a_quiet_instance_called_through
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
         class _QuietRunner:
@@ -9520,17 +8888,13 @@ def test_loader_derivation_keeps_a_helper_beside_an_iter_returning_a_distinct_it
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
         class _IterDistinctWalrus:
@@ -9574,22 +8938,16 @@ def test_loader_derivation_refuses_a_helper_rewritten_through_a_set_name_hook_on
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
-        class _ShadowDescriptor:
-            def __set_name__(self, owner, name):
-                _install_shadow()
+        # @@R52:descriptor@@
 
 
         _pair = ((_ShadowDescriptor(),),)[0]
@@ -9622,22 +8980,16 @@ def test_loader_derivation_refuses_a_helper_rewritten_through_a_set_name_hook_on
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
-        class _ShadowDescriptor:
-            def __set_name__(self, owner, name):
-                _install_shadow()
+        # @@R52:descriptor@@
 
 
         _pair = ((_ShadowDescriptor(),),)[0]
@@ -9671,17 +9023,13 @@ def test_loader_derivation_refuses_a_helper_rewritten_through_a_call_naming_an_i
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
         class _ShadowRunner:
@@ -9719,17 +9067,13 @@ def test_loader_derivation_refuses_a_helper_rewritten_through_an_augmented_assig
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
         class _ShadowAccumulator:
@@ -9768,17 +9112,13 @@ def test_loader_derivation_refuses_a_helper_rewritten_through_an_enter_method_be
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
         class _ShadowManager:
@@ -9822,17 +9162,13 @@ def test_loader_derivation_refuses_a_helper_rewritten_through_an_enter_method_be
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
         class _ShadowManager:
@@ -9876,24 +9212,16 @@ def test_loader_derivation_refuses_a_helper_rewritten_through_a_class_getitem_be
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
-        class _ShadowBase:
-            @classmethod
-            def __class_getitem__(cls, item):
-                _install_shadow()
-                return cls
+        # @@R52:base-item@@
 
 
         _pair = ((_ShadowBase,),)[0]
@@ -9928,17 +9256,13 @@ def test_loader_derivation_refuses_a_helper_rewritten_through_a_call_naming_an_i
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
         class _ShadowRunner:
@@ -9973,17 +9297,13 @@ def test_loader_derivation_refuses_a_helper_rewritten_through_a_call_naming_an_i
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
         class _ShadowRunner:
@@ -10018,17 +9338,13 @@ def test_loader_derivation_refuses_a_helper_rewritten_through_a_call_naming_an_i
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
         class _ShadowRunner:
@@ -10065,17 +9381,13 @@ def test_loader_derivation_refuses_a_helper_rewritten_through_an_enter_method_be
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
         class _ShadowManager:
@@ -10117,17 +9429,13 @@ def test_loader_derivation_refuses_a_helper_rewritten_through_an_augmented_assig
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
         class _ShadowAccumulator:
@@ -10166,17 +9474,13 @@ def test_loader_derivation_refuses_a_helper_rewritten_through_a_call_naming_a_de
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
         class _ShadowDecorator:
@@ -10220,17 +9524,13 @@ def test_loader_derivation_refuses_a_helper_rewritten_through_a_next_method_behi
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
         class _IterBoolBound:
@@ -10270,17 +9570,13 @@ def test_loader_derivation_refuses_a_helper_rewritten_through_a_next_method_behi
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
         class _IterConditionalBound:
@@ -10320,17 +9616,13 @@ def test_loader_derivation_refuses_a_helper_rewritten_through_a_next_method_behi
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
         class _IterSubscriptBound:
@@ -10371,17 +9663,13 @@ def test_loader_derivation_refuses_a_helper_rewritten_through_a_next_method_behi
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
         class _IterWalrusBound:
@@ -10423,17 +9711,13 @@ def test_loader_derivation_refuses_a_helper_rewritten_through_a_next_method_behi
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
         class _IterLoopBound:
@@ -10480,17 +9764,13 @@ def test_loader_derivation_keeps_a_helper_beside_a_quiet_instance_bound_to_a_con
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
         class _QuietRunner:
@@ -10532,17 +9812,13 @@ def test_loader_derivation_keeps_a_helper_beside_a_quiet_instance_bound_to_a_sel
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
         class _QuietRunner:
@@ -10586,17 +9862,13 @@ def test_loader_derivation_refuses_a_helper_rewritten_by_an_installer_called_thr
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
         _fn = (_install_shadow,)[0]
@@ -10628,17 +9900,13 @@ def test_loader_derivation_refuses_a_helper_rewritten_by_an_installer_called_thr
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
         _pair = (_install_shadow,)
@@ -10674,17 +9942,13 @@ def test_loader_derivation_refuses_a_helper_rewritten_by_an_installer_called_thr
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
         def _quiet():
@@ -10719,17 +9983,13 @@ def test_loader_derivation_refuses_a_helper_rewritten_by_an_installer_called_thr
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
         def _quiet():
@@ -10764,17 +10024,13 @@ def test_loader_derivation_refuses_a_helper_rewritten_by_an_installer_called_thr
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
         _fn = (_held := _install_shadow)
@@ -10810,17 +10066,13 @@ def test_loader_derivation_refuses_a_helper_rewritten_through_a_decorator_in_bar
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
         def _loud_decorator(fn):
@@ -10861,17 +10113,13 @@ def test_loader_derivation_refuses_a_helper_rewritten_by_an_installer_called_thr
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
         _fn = ((lambda: _install_shadow()),)[0]
@@ -10907,17 +10155,13 @@ def test_loader_derivation_keeps_a_helper_beside_a_call_through_a_name_bound_to_
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
         def _quiet_fn():
@@ -10955,17 +10199,13 @@ def test_loader_derivation_keeps_a_helper_beside_a_quiet_decorator_selected_out_
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
         def _quiet_decorator(fn):
@@ -11016,17 +10256,13 @@ def test_loader_derivation_refuses_a_helper_rewritten_by_an_installer_called_thr
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
         for _elt in [(_install_shadow,)]:
@@ -11060,17 +10296,13 @@ def test_loader_derivation_refuses_a_helper_rewritten_by_an_installer_called_thr
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
         for _elt in [[_install_shadow]]:
@@ -11107,17 +10339,13 @@ def test_loader_derivation_refuses_a_helper_rewritten_through_a_call_method_of_a
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
         class _ShadowRunner:
@@ -11159,17 +10387,13 @@ def test_loader_derivation_refuses_a_helper_rewritten_through_an_enter_method_of
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
         class _ShadowManager:
@@ -11211,17 +10435,13 @@ def test_loader_derivation_refuses_a_helper_rewritten_through_an_enter_method_of
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
         class _ShadowManager:
@@ -11268,24 +10488,16 @@ def test_loader_derivation_refuses_a_helper_rewritten_through_a_class_getitem_me
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
-        class _ShadowBase:
-            @classmethod
-            def __class_getitem__(cls, item):
-                _install_shadow()
-                return cls
+        # @@R52:base-item@@
 
 
         for _elt in [(_ShadowBase,)]:
@@ -11321,17 +10533,13 @@ def test_loader_derivation_refuses_a_helper_rewritten_through_an_isub_method_of_
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
         class _ShadowAccumulator:
@@ -11374,17 +10582,13 @@ def test_loader_derivation_refuses_a_helper_rewritten_by_a_decorator_called_thro
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
         def _loud_decorator(fn):
@@ -11435,17 +10639,13 @@ def test_loader_derivation_refuses_a_helper_rewritten_through_a_next_method_behi
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
         class _IterSelectionBoundName:
@@ -11488,17 +10688,13 @@ def test_loader_derivation_refuses_a_helper_rewritten_through_a_next_method_behi
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
         class _IterWalrusSelection:
@@ -11541,17 +10737,13 @@ def test_loader_derivation_refuses_a_helper_rewritten_through_a_next_method_behi
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
         class _IterConditionalSelectionBound:
@@ -11596,17 +10788,13 @@ def test_loader_derivation_refuses_a_helper_rewritten_through_a_next_method_behi
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
         class _IterDenotedSelectionBound:
@@ -11655,17 +10843,13 @@ def test_loader_derivation_keeps_a_helper_beside_a_call_through_a_name_bound_to_
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
         def _quiet():
@@ -11713,17 +10897,13 @@ def test_loader_derivation_keeps_a_helper_beside_an_iter_returning_a_distinct_it
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
         class _IterDistinctSelectionBound:
@@ -11774,17 +10954,13 @@ def test_loader_derivation_refuses_a_helper_rewritten_by_an_installer_called_thr
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
         for _elt in [(_install_shadow,)]:
@@ -11819,17 +10995,13 @@ def test_loader_derivation_refuses_a_helper_rewritten_by_an_installer_called_thr
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
         for _elt in [(_install_shadow,)]:
@@ -11862,17 +11034,13 @@ def test_loader_derivation_refuses_a_helper_rewritten_by_an_installer_called_thr
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
         for _elt in [(_install_shadow,)]:
@@ -11909,17 +11077,13 @@ def test_loader_derivation_refuses_a_helper_rewritten_through_a_call_method_of_a
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
         class _ShadowRunner:
@@ -11961,17 +11125,13 @@ def test_loader_derivation_refuses_a_helper_rewritten_through_an_enter_method_of
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
         class _ShadowManager:
@@ -12024,24 +11184,16 @@ def test_loader_derivation_refuses_a_helper_rewritten_through_a_class_getitem_me
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
-        class _ShadowBase:
-            @classmethod
-            def __class_getitem__(cls, item):
-                _install_shadow()
-                return cls
+        # @@R52:base-item@@
 
 
         for _elt in [(_ShadowBase,)]:
@@ -12080,17 +11232,13 @@ def test_loader_derivation_refuses_a_helper_rewritten_through_an_isub_method_of_
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
         class _ShadowAccumulator:
@@ -12133,17 +11281,13 @@ def test_loader_derivation_refuses_a_helper_rewritten_by_a_decorator_called_thro
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
         def _loud_decorator(fn):
@@ -12191,17 +11335,13 @@ def test_loader_derivation_refuses_a_helper_rewritten_by_an_installer_called_thr
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
         for _elt in [(_install_shadow,)]:
@@ -12240,17 +11380,13 @@ def test_loader_derivation_refuses_a_helper_rewritten_by_an_installer_called_thr
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
         for _elt in [(_install_shadow,)]:
@@ -12295,17 +11431,13 @@ def test_loader_derivation_keeps_a_helper_beside_a_call_through_a_name_bound_to_
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
         def _quiet():
@@ -12351,17 +11483,13 @@ def test_loader_derivation_keeps_a_helper_beside_a_manager_standing_as_a_subscri
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
         class _QuietManager:
@@ -12414,24 +11542,16 @@ def test_loader_derivation_refuses_a_helper_rewritten_through_a_class_getitem_me
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
-        class _ShadowBase:
-            @classmethod
-            def __class_getitem__(cls, item):
-                _install_shadow()
-                return cls
+        # @@R52:base-item@@
 
 
         for _elt in [(_ShadowBase,)]:
@@ -12472,24 +11592,16 @@ def test_loader_derivation_refuses_a_helper_rewritten_through_a_class_getitem_me
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
-        class _ShadowBase:
-            @classmethod
-            def __class_getitem__(cls, item):
-                _install_shadow()
-                return cls
+        # @@R52:base-item@@
 
 
         for _elt in [(_ShadowBase,)]:
@@ -12530,24 +11642,16 @@ def test_loader_derivation_refuses_a_helper_rewritten_through_a_class_getitem_me
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
-        class _ShadowBase:
-            @classmethod
-            def __class_getitem__(cls, item):
-                _install_shadow()
-                return cls
+        # @@R52:base-item@@
 
 
         for _elt in [(_ShadowBase,)]:
@@ -12597,24 +11701,16 @@ def test_loader_derivation_refuses_a_helper_rewritten_through_a_class_getitem_me
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
-        class _ShadowBase:
-            @classmethod
-            def __class_getitem__(cls, item):
-                _install_shadow()
-                return cls
+        # @@R52:base-item@@
 
 
         for _elt in [(_ShadowBase,)]:
@@ -12655,24 +11751,16 @@ def test_loader_derivation_refuses_a_helper_rewritten_through_a_class_getitem_me
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
-        class _ShadowBase:
-            @classmethod
-            def __class_getitem__(cls, item):
-                _install_shadow()
-                return cls
+        # @@R52:base-item@@
 
 
         for _elt in [(_ShadowBase,)]:
@@ -12713,24 +11801,16 @@ def test_loader_derivation_refuses_a_helper_rewritten_through_a_class_getitem_me
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
-        class _ShadowBase:
-            @classmethod
-            def __class_getitem__(cls, item):
-                _install_shadow()
-                return cls
+        # @@R52:base-item@@
 
 
         for _elt in [(_ShadowBase,)]:
@@ -12773,17 +11853,13 @@ def test_loader_derivation_keeps_a_helper_beside_a_quiet_class_reached_through_a
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
         class _QuietBase:
@@ -12834,24 +11910,16 @@ def test_loader_derivation_keeps_a_helper_beside_a_class_getitem_method_reached_
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
-        class _ShadowBase:
-            @classmethod
-            def __class_getitem__(cls, item):
-                _install_shadow()
-                return cls
+        # @@R52:base-item@@
 
 
         _sel = (_ShadowBase,)[0]
@@ -12897,24 +11965,16 @@ def test_loader_derivation_refuses_a_helper_rewritten_through_a_class_getitem_me
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
-        class _ShadowBase:
-            @classmethod
-            def __class_getitem__(cls, item):
-                _install_shadow()
-                return cls
+        # @@R52:base-item@@
 
 
         for _elt in [(_ShadowBase,)]:
@@ -12952,24 +12012,16 @@ def test_loader_derivation_refuses_a_helper_rewritten_through_a_class_getitem_me
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
-        class _ShadowBase:
-            @classmethod
-            def __class_getitem__(cls, item):
-                _install_shadow()
-                return cls
+        # @@R52:base-item@@
 
 
         for _elt in [(_ShadowBase,)]:
@@ -13021,24 +12073,16 @@ def test_loader_derivation_refuses_a_helper_rewritten_through_a_class_getitem_me
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
-        class _ShadowBase:
-            @classmethod
-            def __class_getitem__(cls, item):
-                _install_shadow()
-                return cls
+        # @@R52:base-item@@
 
 
         for _elt in [(_ShadowBase,)]:
@@ -13075,24 +12119,16 @@ def test_loader_derivation_refuses_a_helper_rewritten_through_a_class_getitem_me
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
-        class _ShadowBase:
-            @classmethod
-            def __class_getitem__(cls, item):
-                _install_shadow()
-                return cls
+        # @@R52:base-item@@
 
 
         for _elt in [(_ShadowBase,)]:
@@ -13130,24 +12166,16 @@ def test_loader_derivation_refuses_a_helper_rewritten_through_a_class_getitem_me
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
-        class _ShadowBase:
-            @classmethod
-            def __class_getitem__(cls, item):
-                _install_shadow()
-                return cls
+        # @@R52:base-item@@
 
 
         for _elt in [(_ShadowBase,)]:
@@ -13198,24 +12226,16 @@ def test_loader_derivation_keeps_a_helper_beside_a_class_getitem_method_reached_
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
-        class _ShadowBase:
-            @classmethod
-            def __class_getitem__(cls, item):
-                _install_shadow()
-                return cls
+        # @@R52:base-item@@
 
 
         for _elt in [(_ShadowBase,)]:
@@ -13259,17 +12279,13 @@ def test_loader_derivation_keeps_a_helper_beside_a_quiet_class_reached_through_a
         ROOT = None
 
 
-        def reader(name):
-            return (ROOT / name).read_bytes()
+        # @@R52:reader@@
 
 
-        def shadow_search(client, raw_response, name):
-            return reader(name)
+        # @@R52:shadow@@
 
 
-        def _install_shadow():
-            global shadow_search
-            shadow_search = lambda client, raw_response, name: None
+        # @@R52:install@@
 
 
         class _QuietBase:
