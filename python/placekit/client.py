@@ -1774,6 +1774,14 @@ class AsyncClient(_Base):
     >>> client = AsyncClient("YOUR_API_KEY")
     >>> result = await client.text_search("pizza in New York")
 
+    ``base_url`` overrides the API root, which is how the test suite points
+    the client at a local stub server. ``timeout`` is per request, in
+    seconds, and may be at most 3600; anything else about it (zero,
+    negative, non-finite, a boolean, a non-number) is a ``ConfigError``.
+    ``max_response_bytes`` caps the successful response body size in
+    bytes and defaults to 32 MiB, while error bodies keep a fixed
+    limit of their own; a value that is not a positive int is a
+    ``ConfigError``.
     Argument validation fires when a call is awaited, not when the
     coroutine object is created, because an async method's body only
     runs on await (A21). A ``ConfigError`` for bad arguments
