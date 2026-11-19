@@ -174,17 +174,40 @@ from __future__ import annotations
 
 import textwrap
 
-from test_corpus_accounting import (
-    RECORDED_LOADERS,
-    _fixtures_a_test_loads,
-)
+from test_corpus_accounting import _loads
 
 CLAIMED = "recorded_OBS1_requested_field_vanishes.json"
 OTHER = "recorded_P1_no_address_natural_feature.json"
 
 
-def _loads(source: str) -> set[str]:
-    return _fixtures_a_test_loads(textwrap.dedent(source), RECORDED_LOADERS)
+# Audit A50-056, the round62 half, and A50-190. The samples
+# repeat a four line preamble verbatim, so each such line
+# stands in the stored samples as one sentinel comment
+# line, and _expand restores the line before the shared
+# _loads reads the sample. The generated source diff in
+# the round 13 batch 2 proof shows every expanded sample
+# byte-identical to the sample as it stood before.
+_SAMPLE_BLOCKS = {
+    "# @@R62:shape@@": "def test_shape(client, raw_response):",
+    "    # @@R62:import@@": "    from contextlib import suppress",
+    "    # @@R62:name@@": f'    fixture_name = "{OTHER}"',
+    "    # @@R62:with@@": "    with suppress(AssertionError):",
+}
+
+
+def _expand(source: str) -> str:
+    lines = []
+    for line in source.split("\n"):
+        block = _SAMPLE_BLOCKS.get(line)
+        if block is None:
+            lines.append(line)
+        else:
+            lines.extend(block.split("\n"))
+    return "\n".join(lines)
+
+
+def _expanded_loads(source: str) -> set[str]:
+    return _loads(_expand(textwrap.dedent(source)))
 
 
 def test_linkage_call_after_a_false_assert_in_a_with_body_earns_no_credit():
@@ -195,12 +218,12 @@ def test_linkage_call_after_a_false_assert_in_a_with_body_earns_no_credit():
     # forks at the assert, and the raised path resumes after
     # the block holding no credit for the claimed fixture, so
     # the intersection strips it.
-    loaded = _loads(
+    loaded = _expanded_loads(
         f"""
-        def test_shape(client, raw_response):
-            from contextlib import suppress
-            fixture_name = "{OTHER}"
-            with suppress(AssertionError):
+        # @@R62:shape@@
+            # @@R62:import@@
+            # @@R62:name@@
+            # @@R62:with@@
                 assert False
                 dead = search(client, raw_response, "{CLAIMED}")
             result = search(client, raw_response, fixture_name)
@@ -215,12 +238,12 @@ def test_linkage_call_after_a_constant_comparison_assert_in_a_with_body_earns_no
     # and it decides the same way from the source alone. The
     # fork turns on the statement, not on the form of the
     # test, so this shape closes with the literal form.
-    loaded = _loads(
+    loaded = _expanded_loads(
         f"""
-        def test_shape(client, raw_response):
-            from contextlib import suppress
-            fixture_name = "{OTHER}"
-            with suppress(AssertionError):
+        # @@R62:shape@@
+            # @@R62:import@@
+            # @@R62:name@@
+            # @@R62:with@@
                 assert 1 == 2
                 dead = search(client, raw_response, "{CLAIMED}")
             result = search(client, raw_response, fixture_name)
@@ -238,13 +261,13 @@ def test_linkage_call_after_a_call_assert_in_a_with_body_earns_no_credit():
     # every assert the same way, decided or not, so the
     # raised path stands beside the fall through path at the
     # join and the claimed fixture earns nothing.
-    loaded = _loads(
+    loaded = _expanded_loads(
         f"""
-        def test_shape(client, raw_response):
-            from contextlib import suppress
-            fixture_name = "{OTHER}"
+        # @@R62:shape@@
+            # @@R62:import@@
+            # @@R62:name@@
             check = lambda: False
-            with suppress(AssertionError):
+            # @@R62:with@@
                 assert check()
                 dead = search(client, raw_response, "{CLAIMED}")
             result = search(client, raw_response, fixture_name)
@@ -260,12 +283,12 @@ def test_linkage_call_after_an_assert_in_a_nested_with_body_earns_no_credit():
     # block converts a raise, so the claimed fixture is
     # stripped at the inner join before the outer join ever
     # sees it.
-    loaded = _loads(
+    loaded = _expanded_loads(
         f"""
-        def test_shape(client, raw_response):
-            from contextlib import suppress
-            fixture_name = "{OTHER}"
-            with suppress(AssertionError):
+        # @@R62:shape@@
+            # @@R62:import@@
+            # @@R62:name@@
+            # @@R62:with@@
                 with suppress(AssertionError):
                     assert False
                     dead = search(client, raw_response, "{CLAIMED}")
@@ -284,12 +307,12 @@ def test_linkage_call_after_an_assert_in_a_loop_body_in_a_with_earns_no_credit()
     # the enclosing with, which resumes it after the block
     # and joins it by intersection against the fall through
     # path that loaded the claimed fixture.
-    loaded = _loads(
+    loaded = _expanded_loads(
         f"""
-        def test_shape(client, raw_response):
-            from contextlib import suppress
-            fixture_name = "{OTHER}"
-            with suppress(AssertionError):
+        # @@R62:shape@@
+            # @@R62:import@@
+            # @@R62:name@@
+            # @@R62:with@@
                 for _unused in ("x",):
                     assert False
                     dead = search(client, raw_response, "{CLAIMED}")
@@ -305,12 +328,12 @@ def test_linkage_call_before_an_assert_in_a_with_body_still_credits():
     # makes, and its credit survives the join. The fork
     # refuses credit a path skips, not credit every path
     # records.
-    loaded = _loads(
+    loaded = _expanded_loads(
         f"""
-        def test_shape(client, raw_response):
-            from contextlib import suppress
-            fixture_name = "{OTHER}"
-            with suppress(AssertionError):
+        # @@R62:shape@@
+            # @@R62:import@@
+            # @@R62:name@@
+            # @@R62:with@@
                 result = search(client, raw_response, "{CLAIMED}")
                 assert False
             other = search(client, raw_response, fixture_name)
@@ -324,12 +347,12 @@ def test_linkage_call_after_a_true_constant_assert_in_a_with_body_still_credits(
     # true constant fails on no path, so the assert forks
     # nothing and the call after it credits exactly as it
     # did before the repair.
-    loaded = _loads(
+    loaded = _expanded_loads(
         f"""
-        def test_shape(client, raw_response):
-            from contextlib import suppress
-            fixture_name = "{OTHER}"
-            with suppress(AssertionError):
+        # @@R62:shape@@
+            # @@R62:import@@
+            # @@R62:name@@
+            # @@R62:with@@
                 assert True
                 result = search(client, raw_response, "{CLAIMED}")
             other = search(client, raw_response, fixture_name)
@@ -349,12 +372,12 @@ def test_linkage_call_after_an_assert_in_a_try_body_with_a_mismatched_handler_ea
     # error the assert raises, and lets the raised path leave
     # the try as it stands, so the manager resumes it after
     # the block holding nothing and the join strips the call.
-    loaded = _loads(
+    loaded = _expanded_loads(
         f"""
-        def test_shape(client, raw_response):
-            from contextlib import suppress
-            fixture_name = "{OTHER}"
-            with suppress(AssertionError):
+        # @@R62:shape@@
+            # @@R62:import@@
+            # @@R62:name@@
+            # @@R62:with@@
                 try:
                     assert False
                 except KeyError:
@@ -374,12 +397,12 @@ def test_linkage_call_after_a_raise_in_a_try_body_with_a_mismatched_handler_earn
     # error it constructs, no handler here names that error,
     # and its path leaves the try on the same terms as the
     # assert path in the pin above.
-    loaded = _loads(
+    loaded = _expanded_loads(
         f"""
-        def test_shape(client, raw_response):
-            from contextlib import suppress
-            fixture_name = "{OTHER}"
-            with suppress(AssertionError):
+        # @@R62:shape@@
+            # @@R62:import@@
+            # @@R62:name@@
+            # @@R62:with@@
                 try:
                     raise AssertionError("stop")
                 except KeyError:
@@ -398,12 +421,12 @@ def test_linkage_call_after_a_try_with_a_matching_handler_still_credits():
     # the paths that reach it exactly as it did before the
     # repair. The raised path rejoins through the handler,
     # and its credit is untouched.
-    loaded = _loads(
+    loaded = _expanded_loads(
         f"""
-        def test_shape(client, raw_response):
-            from contextlib import suppress
-            fixture_name = "{OTHER}"
-            with suppress(AssertionError):
+        # @@R62:shape@@
+            # @@R62:import@@
+            # @@R62:name@@
+            # @@R62:with@@
                 try:
                     assert False
                 except AssertionError:
@@ -424,13 +447,13 @@ def test_linkage_call_after_an_assert_in_a_try_body_with_an_attribute_handler_se
     # evasion included. The pin holds the boundary where the
     # repair stops, and it fails the day a change carries
     # the name reading past the seats the ruling names.
-    loaded = _loads(
+    loaded = _expanded_loads(
         f"""
-        def test_shape(client, raw_response):
-            from contextlib import suppress
+        # @@R62:shape@@
+            # @@R62:import@@
             import builtins
-            fixture_name = "{OTHER}"
-            with suppress(AssertionError):
+            # @@R62:name@@
+            # @@R62:with@@
                 try:
                     assert False
                 except builtins.KeyError:
@@ -454,12 +477,12 @@ def test_linkage_call_after_an_assert_in_a_try_else_arm_with_a_matching_handler_
     # the else arm, so the path leaves the try as it
     # stands, the manager resumes it after the block
     # holding nothing, and the join strips the call.
-    loaded = _loads(
+    loaded = _expanded_loads(
         f"""
-        def test_shape(client, raw_response):
-            from contextlib import suppress
-            fixture_name = "{OTHER}"
-            with suppress(AssertionError):
+        # @@R62:shape@@
+            # @@R62:import@@
+            # @@R62:name@@
+            # @@R62:with@@
                 try:
                     pass
                 except AssertionError:
@@ -481,12 +504,12 @@ def test_linkage_call_after_a_raise_in_a_try_else_arm_with_a_matching_handler_ea
     # can catch an error the else arm raises. Its path
     # leaves the try without a name being read, exactly as
     # the assert path in the pin above leaves it.
-    loaded = _loads(
+    loaded = _expanded_loads(
         f"""
-        def test_shape(client, raw_response):
-            from contextlib import suppress
-            fixture_name = "{OTHER}"
-            with suppress(AssertionError):
+        # @@R62:shape@@
+            # @@R62:import@@
+            # @@R62:name@@
+            # @@R62:with@@
                 try:
                     pass
                 except AssertionError:
@@ -512,12 +535,12 @@ def test_linkage_call_after_an_assert_in_a_conditional_arm_in_a_try_body_earns_n
     # could catch the error, and lets the path leave, so
     # the manager resumes it after the block holding
     # nothing and the join strips the call.
-    loaded = _loads(
+    loaded = _expanded_loads(
         f"""
-        def test_shape(client, raw_response):
-            from contextlib import suppress
-            fixture_name = "{OTHER}"
-            with suppress(AssertionError):
+        # @@R62:shape@@
+            # @@R62:import@@
+            # @@R62:name@@
+            # @@R62:with@@
                 try:
                     if client:
                         assert False
@@ -542,12 +565,12 @@ def test_linkage_call_after_a_raise_in_a_loop_in_a_try_body_earns_no_credit():
     # handed end afresh, and the try judges it and lets
     # it leave on the same terms as a raise standing in
     # the body itself.
-    loaded = _loads(
+    loaded = _expanded_loads(
         f"""
-        def test_shape(client, raw_response):
-            from contextlib import suppress
-            fixture_name = "{OTHER}"
-            with suppress(AssertionError):
+        # @@R62:shape@@
+            # @@R62:import@@
+            # @@R62:name@@
+            # @@R62:with@@
                 try:
                     for _unused in ("x",):
                         raise AssertionError("stop")
@@ -572,12 +595,12 @@ def test_linkage_call_after_a_raise_in_a_try_in_a_loop_body_earns_no_credit():
     # on the record of that judgement, because no
     # mechanism the loop carries resolves it, and the
     # manager resumes it after the block holding nothing.
-    loaded = _loads(
+    loaded = _expanded_loads(
         f"""
-        def test_shape(client, raw_response):
-            from contextlib import suppress
-            fixture_name = "{OTHER}"
-            with suppress(AssertionError):
+        # @@R62:shape@@
+            # @@R62:import@@
+            # @@R62:name@@
+            # @@R62:with@@
                 for _unused in ("x",):
                     try:
                         raise AssertionError("stop")
@@ -603,12 +626,12 @@ def test_linkage_call_after_an_assert_under_a_nested_with_suppressing_another_er
     # names, the name proves it could not suppress the
     # error the assert raises, and the path leaves the
     # with unresumed for the try to judge.
-    loaded = _loads(
+    loaded = _expanded_loads(
         f"""
-        def test_shape(client, raw_response):
-            from contextlib import suppress
-            fixture_name = "{OTHER}"
-            with suppress(AssertionError):
+        # @@R62:shape@@
+            # @@R62:import@@
+            # @@R62:name@@
+            # @@R62:with@@
                 try:
                     with suppress(KeyError):
                         assert False
@@ -631,12 +654,12 @@ def test_linkage_call_after_an_assert_under_a_nested_with_suppressing_its_own_er
     # above, the conversion stands, and the credit is
     # untouched. The pin fails the day the reading starts
     # refusing paths the manager genuinely suppresses.
-    loaded = _loads(
+    loaded = _expanded_loads(
         f"""
-        def test_shape(client, raw_response):
-            from contextlib import suppress
-            fixture_name = "{OTHER}"
-            with suppress(AssertionError):
+        # @@R62:shape@@
+            # @@R62:import@@
+            # @@R62:name@@
+            # @@R62:with@@
                 try:
                     with suppress(AssertionError):
                         assert False
@@ -661,12 +684,12 @@ def test_linkage_call_after_an_assert_in_a_handler_body_earns_no_credit():
     # a handler body leaves the try statement outright,
     # the manager resumes it after the block holding
     # nothing, and the join strips the call.
-    loaded = _loads(
+    loaded = _expanded_loads(
         f"""
-        def test_shape(client, raw_response):
-            from contextlib import suppress
-            fixture_name = "{OTHER}"
-            with suppress(AssertionError):
+        # @@R62:shape@@
+            # @@R62:import@@
+            # @@R62:name@@
+            # @@R62:with@@
                 try:
                     assert False
                 except AssertionError:
@@ -690,12 +713,12 @@ def test_linkage_call_after_an_assert_in_a_match_arm_in_a_try_body_earns_no_cred
     # enclosing block, the try judges it by its seats and
     # lets it leave, and the manager resumes it after the
     # block holding nothing, so the join strips the call.
-    loaded = _loads(
+    loaded = _expanded_loads(
         f"""
-        def test_shape(client, raw_response):
-            from contextlib import suppress
-            fixture_name = "{OTHER}"
-            with suppress(AssertionError):
+        # @@R62:shape@@
+            # @@R62:import@@
+            # @@R62:name@@
+            # @@R62:with@@
                 try:
                     match 1:
                         case _:
@@ -719,12 +742,12 @@ def test_linkage_call_after_a_raise_in_a_match_arm_in_a_try_body_earns_no_credit
     # handler here names that error, and its path leaves
     # the try on the same terms as the assert path in the
     # pin above.
-    loaded = _loads(
+    loaded = _expanded_loads(
         f"""
-        def test_shape(client, raw_response):
-            from contextlib import suppress
-            fixture_name = "{OTHER}"
-            with suppress(AssertionError):
+        # @@R62:shape@@
+            # @@R62:import@@
+            # @@R62:name@@
+            # @@R62:with@@
                 try:
                     match 1:
                         case _:
@@ -749,12 +772,12 @@ def test_linkage_call_after_an_assert_in_a_match_arm_outside_any_try_earns_no_cr
     # paths in the pins above, the manager resumes it
     # after the block holding nothing, and the join
     # strips the call after the match.
-    loaded = _loads(
+    loaded = _expanded_loads(
         f"""
-        def test_shape(client, raw_response):
-            from contextlib import suppress
-            fixture_name = "{OTHER}"
-            with suppress(AssertionError):
+        # @@R62:shape@@
+            # @@R62:import@@
+            # @@R62:name@@
+            # @@R62:with@@
                 match 1:
                     case _:
                         assert False
@@ -775,12 +798,12 @@ def test_linkage_call_after_a_raise_in_a_later_match_arm_earns_no_credit():
     # the match on the same terms, and this pin fails the
     # day the hand on narrows to the first arm or to the
     # wildcard arm alone.
-    loaded = _loads(
+    loaded = _expanded_loads(
         f"""
-        def test_shape(client, raw_response):
-            from contextlib import suppress
-            fixture_name = "{OTHER}"
-            with suppress(AssertionError):
+        # @@R62:shape@@
+            # @@R62:import@@
+            # @@R62:name@@
+            # @@R62:with@@
                 match 1:
                     case 2:
                         pass
@@ -807,12 +830,12 @@ def test_linkage_call_after_a_raise_in_a_match_arm_under_a_handler_naming_it_sti
     # the credit is untouched. The pin fails the day the
     # hand on starts refusing paths a named handler
     # genuinely catches.
-    loaded = _loads(
+    loaded = _expanded_loads(
         f"""
-        def test_shape(client, raw_response):
-            from contextlib import suppress
-            fixture_name = "{OTHER}"
-            with suppress(AssertionError):
+        # @@R62:shape@@
+            # @@R62:import@@
+            # @@R62:name@@
+            # @@R62:with@@
                 try:
                     match 1:
                         case _:
@@ -841,11 +864,11 @@ def test_linkage_call_after_a_raise_under_an_inner_with_suppressing_another_erro
     # leaves the inner with as the raised path it is,
     # and the outer manager resumes it after its own
     # block holding nothing for the call.
-    loaded = _loads(
+    loaded = _expanded_loads(
         f"""
-        def test_shape(client, raw_response):
-            from contextlib import suppress
-            fixture_name = "{OTHER}"
+        # @@R62:shape@@
+            # @@R62:import@@
+            # @@R62:name@@
             with suppress(ValueError):
                 with suppress(KeyError):
                     raise ValueError("stop")
@@ -864,12 +887,12 @@ def test_linkage_call_after_an_assert_under_an_inner_with_suppressing_another_er
     # either kind. The assert path now leaves the inner
     # with on the same terms as the raise path in the
     # pin above, under the name every assert shares.
-    loaded = _loads(
+    loaded = _expanded_loads(
         f"""
-        def test_shape(client, raw_response):
-            from contextlib import suppress
-            fixture_name = "{OTHER}"
-            with suppress(AssertionError):
+        # @@R62:shape@@
+            # @@R62:import@@
+            # @@R62:name@@
+            # @@R62:with@@
                 with suppress(KeyError):
                     assert False
                 after = search(client, raw_response, "{CLAIMED}")
@@ -889,11 +912,11 @@ def test_linkage_call_after_a_raise_under_an_inner_with_suppressing_its_own_erro
     # the credit is untouched, and the pin fails the
     # day the reading starts refusing paths a named
     # manager genuinely suppresses.
-    loaded = _loads(
+    loaded = _expanded_loads(
         f"""
-        def test_shape(client, raw_response):
-            from contextlib import suppress
-            fixture_name = "{OTHER}"
+        # @@R62:shape@@
+            # @@R62:import@@
+            # @@R62:name@@
             with suppress(ValueError):
                 with suppress(ValueError):
                     raise ValueError("stop")
@@ -915,11 +938,11 @@ def test_linkage_call_after_a_raise_in_the_arm_a_true_constant_selects_earns_no_
     # as a constant is now read the way the walk reads
     # the test of an assert and the test of a while, and
     # only the arm the constant selects is walked.
-    loaded = _loads(
+    loaded = _expanded_loads(
         f"""
-        def test_shape(client, raw_response):
-            from contextlib import suppress
-            fixture_name = "{OTHER}"
+        # @@R62:shape@@
+            # @@R62:import@@
+            # @@R62:name@@
             with suppress(RuntimeError):
                 if True:
                     raise RuntimeError("stop")
@@ -939,11 +962,11 @@ def test_linkage_call_after_a_raise_in_the_else_arm_a_false_constant_selects_ear
     # this pin fails the day the walk goes back to
     # walking both arms of a constant test or narrows
     # the reading to the written arm alone.
-    loaded = _loads(
+    loaded = _expanded_loads(
         f"""
-        def test_shape(client, raw_response):
-            from contextlib import suppress
-            fixture_name = "{OTHER}"
+        # @@R62:shape@@
+            # @@R62:import@@
+            # @@R62:name@@
             with suppress(RuntimeError):
                 if False:
                     pass
@@ -970,11 +993,11 @@ def test_linkage_call_after_a_class_body_raise_in_a_try_under_a_mismatched_handl
     # to the enclosing block, the try judges it by its
     # seats and lets it leave, and the manager resumes
     # it after the block holding nothing for the call.
-    loaded = _loads(
+    loaded = _expanded_loads(
         f"""
-        def test_shape(client, raw_response):
-            from contextlib import suppress
-            fixture_name = "{OTHER}"
+        # @@R62:shape@@
+            # @@R62:import@@
+            # @@R62:name@@
             with suppress(RuntimeError):
                 try:
                     class Box:
@@ -986,3 +1009,23 @@ def test_linkage_call_after_a_class_body_raise_in_a_try_under_a_mismatched_handl
         """
     )
     assert loaded == {OTHER}
+
+
+def test_sample_blocks_expand_to_the_lines_they_replace():
+    # Audit round 13 batch 2, red team finding 1: the import
+    # sentinel's restoration is the one the analyzer cannot
+    # catch, because the analyzer is indifferent to the
+    # suppress import line. This pin holds the table against
+    # expectations written out here, independent of the
+    # table itself, so a dropped or renamed entry, or a
+    # wrong mapped value, fails here instead of passing
+    # silently on shortened samples.
+    expected = {
+        "# @@R62:shape@@": "def test_shape(client, raw_response):",
+        "    # @@R62:import@@": "    from contextlib import suppress",
+        "    # @@R62:name@@": f'    fixture_name = "{OTHER}"',
+        "    # @@R62:with@@": "    with suppress(AssertionError):",
+    }
+    assert _SAMPLE_BLOCKS == expected
+    for sentinel, line in expected.items():
+        assert _expand(sentinel) == line
