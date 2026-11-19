@@ -1804,6 +1804,15 @@ mod tests {
             // network host, not a loopback one.
             "http://evillocalhost.com/v1",
             "http://localhost.example.com/v1",
+            // Audit A50-127: a NAT64 local-use spelling whose
+            // two candidate deliveries split between loopback
+            // and another host gains no cleartext trust from
+            // the loopback position. The first carries
+            // loopback in its routed position and 8.8.8.8 in
+            // its last 32 bits, the second 10.0.0.1 routed
+            // and loopback low.
+            "http://[64:ff9b:1:7f00:0:100:808:808]/v1",
+            "http://[64:ff9b:1:a00:0:100:7f00:1]/v1",
         ] {
             assert_eq!(
                 Client::builder("k")
@@ -3038,6 +3047,20 @@ mod tests {
         // mapped spelling of a private address is refused from the
         // loopback base just as its dotted spelling is.
         assert!(at(&stub, "https://[::ffff:192.168.1.10]/img").is_err());
+        // Audit A50-127: a NAT64 local-use spelling carrying
+        // 10.0.0.1 in its routed position and loopback in its
+        // last 32 bits is judged by both positions at the
+        // trust seats. Plain http refuses it, because the
+        // private position cannot be trusted as loopback,
+        // and https refuses it with the non-public reason
+        // the private position earns.
+        assert!(at(&stub, "http://[64:ff9b:1:a00:0:100:7f00:1]/img").is_err());
+        let err = at(&stub, "https://[64:ff9b:1:a00:0:100:7f00:1]/img").unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("the target is a non-public IP address"),
+            "{err}"
+        );
     }
 
     #[test]

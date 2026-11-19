@@ -330,32 +330,36 @@ class PlainInt(int):
         raise ValueError("plain comparison failure")
 
 
-def test_place_photo_bomb_int_converts():
-    client = Client("test-key")
-    with pytest.raises(ConfigError) as caught:
-        client.place_photo(
-            "places/x/photos/y", max_width_px=BombInt(100)
-        )
-    assert caught.value.message == (
-        "an argument for place_photo raised while it was being "
-        "validated: <unrepresentable ReprBomb>"
+def test_place_photo_bomb_int_judged_on_its_stored_value():
+    # Audit A50-138 supersedes this pin's first form, which
+    # pinned the argument wrap converting the comparison
+    # detonation. The dimension validator now coerces the
+    # value to a plain int inside its guard and judges that,
+    # so the comparisons are never spent, no detonation
+    # reaches the wrap at this seat, and the seat returns
+    # the judged plain value for the native call.
+    from placekit.client import _Base
+
+    width, height = _Base._validate_photo_args(
+        "places/x/photos/y", BombInt(100), None, False, "place_photo"
     )
-    assert caught.value.context == "place_photo"
-    assert caught.value.__cause__ is BOMB
+    assert width == 100
+    assert type(width) is int
+    assert height is None
 
 
-def test_place_photo_plain_int_control():
-    client = Client("test-key")
-    with pytest.raises(ConfigError) as caught:
-        client.place_photo(
-            "places/x/photos/y", max_width_px=PlainInt(100)
-        )
-    assert caught.value.message == (
-        "an argument for place_photo raised while it was being "
-        "validated: ValueError('plain comparison failure')"
+def test_place_photo_plain_int_judged_on_its_stored_value():
+    # The control twin of the pin above: an ordinary
+    # Exception from the comparisons is defused the same
+    # way, by never being spent.
+    from placekit.client import _Base
+
+    width, height = _Base._validate_photo_args(
+        "places/x/photos/y", PlainInt(100), None, False, "place_photo"
     )
-    assert caught.value.context == "place_photo"
-    assert isinstance(caught.value.__cause__, ValueError)
+    assert width == 100
+    assert type(width) is int
+    assert height is None
 
 
 class FloatBomb(float):
@@ -364,12 +368,17 @@ class FloatBomb(float):
 
 
 def test_text_search_min_rating_float_bomb_converts():
+    # Audit A50-197 supersedes this pin's message: the float
+    # validator's conversion catch now spans the whole
+    # Exception family, so the detonation refuses inside the
+    # validator with the seat's own message and the
+    # detonation chained, where the argument wrap's generic
+    # wording previously carried it.
     client = Client("test-key")
     with pytest.raises(ConfigError) as caught:
         client.text_search("coffee", min_rating=FloatBomb(3.0))
     assert caught.value.message == (
-        "an argument for text_search raised while it was being "
-        "validated: <unrepresentable ReprBomb>"
+        "min_rating must be an int or float between 0 and 5, got 3.0"
     )
     assert caught.value.context == "text_search"
     assert caught.value.__cause__ is BOMB

@@ -242,6 +242,18 @@ def _validate_coordinate(name: str, value: Any, low: float, high: float) -> floa
         # message instead of the builtin escaping (audit
         # A50-133).
         result = math.inf
+    except Exception as exc:
+        # A caller conversion that raises, a float subclass
+        # whose __float__ detonates, refuses with this seat's
+        # message and the detonation chained, matching the
+        # models layer's whole family catch for the same
+        # operation (audit A50-197).
+        rendered, detonation = _guarded_repr(value)
+        _refuse(
+            f"{name} must be finite and within {low:g} to {high:g}, "
+            f"got {rendered}",
+            detonation if detonation is not None else exc,
+        )
     if not math.isfinite(result) or not low <= result <= high:
         rendered, detonation = _guarded_repr(value)
         _refuse(
@@ -325,6 +337,17 @@ def _circle_body(
         # refuses it with this seat's message instead of the
         # builtin escaping (audit A50-133).
         radius = math.inf
+    except Exception as exc:
+        # A caller conversion that raises, a float subclass
+        # whose __float__ detonates, refuses with this seat's
+        # message and the detonation chained, matching the
+        # models layer's whole family catch for the same
+        # operation (audit A50-197).
+        rendered, detonation = _guarded_repr(radius_m)
+        _refuse(
+            f"radius_m must be a finite int or float, got {rendered}",
+            detonation if detonation is not None else exc,
+        )
     if not math.isfinite(radius):
         rendered, detonation = _guarded_repr(radius_m)
         _refuse(
@@ -956,17 +979,26 @@ class _Base:
         max_height_px: Optional[int],
         skip_http_redirect: Any,
         context: str,
-    ) -> None:
+    ) -> tuple[Optional[int], Optional[int]]:
         """place_photo validation, enforced here before the native
         call: a string name, each dimension in range, at least one
-        dimension present, and a real bool for the redirect flag."""
+        dimension present, and a real bool for the redirect flag.
+
+        The validated dimensions are returned as the plain ints
+        the validator judged, and the caller passes those onward
+        to the native call, so the value judged is the value the
+        native extraction reads (audit A50-138)."""
         _Base._require_str("photo_name", photo_name, context)
         try:
-            _Base._validate_int_range("max_width_px", max_width_px, 1, 4800)
-            _Base._validate_int_range("max_height_px", max_height_px, 1, 4800)
+            width = _Base._validate_int_range(
+                "max_width_px", max_width_px, 1, 4800
+            )
+            height = _Base._validate_int_range(
+                "max_height_px", max_height_px, 1, 4800
+            )
         except ConfigError as exc:
             raise _Base._with_context(exc, context)
-        if max_width_px is None and max_height_px is None:
+        if width is None and height is None:
             raise ConfigError(
                 "place_photo requires at least one of max_width_px "
                 "and max_height_px",
@@ -979,6 +1011,7 @@ class _Base:
                 detonation,
                 context=context,
             )
+        return width, height
 
     @staticmethod
     def _validate_int_range(
@@ -987,21 +1020,45 @@ class _Base:
         """Validate an optional integer argument before it reaches the
         core, where a negative or oversized value would otherwise
         escape the typed hierarchy as a bare OverflowError or a
-        ValueError carrying one."""
+        ValueError carrying one.
+
+        The value is coerced to a plain int inside the guard and
+        the plain value is what is judged and returned, the same
+        discipline the constructor's cap seat states (audit
+        A50-128) and the float seats beside this one follow
+        (A50-133). Judging the caller's object would trust its
+        comparisons, and a subclass can answer them in range for
+        a stored value outside it, so the value judged and the
+        value sent could be different values; a coercion that
+        raises refuses here with the seat's message instead of
+        detonating at the comparison (audit A50-138).
+        """
         if value is None:
             return None
-        if (
-            isinstance(value, bool)
-            or not isinstance(value, int)
-            or not low <= value <= high
-        ):
+        if isinstance(value, bool) or not isinstance(value, int):
             rendered, detonation = _guarded_repr(value)
             _refuse(
                 f"{name} must be an integer between {low} and {high}, "
                 f"got {rendered}",
                 detonation,
             )
-        return value
+        try:
+            converted = int(value)
+        except Exception as exc:
+            rendered, detonation = _guarded_repr(value)
+            _refuse(
+                f"{name} must be an integer between {low} and {high}, "
+                f"got {rendered}",
+                detonation if detonation is not None else exc,
+            )
+        if not low <= converted <= high:
+            rendered, detonation = _guarded_repr(value)
+            _refuse(
+                f"{name} must be an integer between {low} and {high}, "
+                f"got {rendered}",
+                detonation,
+            )
+        return converted
 
     @staticmethod
     def _validate_float_range(
@@ -1026,6 +1083,18 @@ class _Base:
             # refuses it with this seat's message instead of
             # the builtin escaping (audit A50-133).
             converted = math.inf
+        except Exception as exc:
+            # A caller conversion that raises, a float subclass
+            # whose __float__ detonates, refuses with this
+            # seat's message and the detonation chained,
+            # matching the models layer's whole family catch
+            # for the same operation (audit A50-197).
+            rendered, detonation = _guarded_repr(value)
+            _refuse(
+                f"{name} must be an int or float between {low:g} and "
+                f"{high:g}, got {rendered}",
+                detonation if detonation is not None else exc,
+            )
         if not math.isfinite(converted) or not low <= converted <= high:
             rendered, detonation = _guarded_repr(value)
             _refuse(
@@ -1625,7 +1694,7 @@ class Client(_Base):
             )
             name = _validate_code_string("photo_name", name)
             context = f"place_photo name={name}"
-            self._validate_photo_args(
+            width, height = self._validate_photo_args(
                 name, width, height, skip_http_redirect, context
             )
         except ConfigError as exc:
@@ -2097,7 +2166,7 @@ class AsyncClient(_Base):
             )
             name = _validate_code_string("photo_name", name)
             context = f"place_photo name={name}"
-            self._validate_photo_args(
+            width, height = self._validate_photo_args(
                 name, width, height, skip_http_redirect, context
             )
         except ConfigError as exc:
