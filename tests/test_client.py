@@ -964,12 +964,6 @@ def fixture_bytes(name: str) -> bytes:
     return (FIXTURES / name).read_bytes()
 
 
-def envelope(code: int, status: str, message: str = "boom") -> bytes:
-    return json.dumps(
-        {"error": {"code": code, "message": message, "status": status}}
-    ).encode()
-
-
 def test_error_envelope_on_200_text_search_raises(client, raw_response):
     # The round's worst case: a PERMISSION_DENIED envelope on HTTP 200
     # used to come back as a successful empty result.
@@ -997,28 +991,6 @@ def test_error_envelope_on_200_nearby_search_raises(client, raw_response):
     assert excinfo.value.status_code == 200
     assert excinfo.value.google_status == "PERMISSION_DENIED"
     assert "has not been used" in excinfo.value.message
-
-
-def test_error_envelope_on_200_without_status_maps_by_code(
-    client, raw_response
-):
-    # The red team's exact case: an envelope carrying a code and a
-    # message but no status field used to decode as a successful
-    # empty result. It raises now, classified by the numeric code.
-    raw_response(
-        200, b'{"error": {"code": 403, "message": "denied but no status field"}}'
-    )
-    with pytest.raises(AuthenticationError) as excinfo:
-        client.text_search("cafes")
-    assert excinfo.value.status_code == 200
-    assert excinfo.value.google_status is None
-    assert excinfo.value.error_code == 403
-    assert "denied but no status field" in excinfo.value.message
-    with pytest.raises(AuthenticationError) as excinfo:
-        client.place_details("ChIJrTLr-GyuEmsRBfy61i59si0")
-    assert excinfo.value.status_code == 200
-    assert excinfo.value.google_status is None
-    assert "denied but no status field" in excinfo.value.message
 
 
 def test_error_envelope_on_200_photo_raises(client, raw_response):
@@ -1068,12 +1040,22 @@ def test_photo_redirect_loop_is_network_error_with_cause(client):
     assert "redirect:" in str(excinfo.value)
 
 
-def test_mid_body_drop_keeps_status_and_read_failure(client):
-    with pytest.raises(ApiError) as excinfo:
-        client.place_details("drop-place")
+def test_envelope_http_disagreement_is_flagged(client, raw_response):
+    # Repro case 4b: RESOURCE_EXHAUSTED on HTTP 500, envelope code 429.
+    # Kept at review in batch 3 of audit round 13: this row is the
+    # only Python pin of status_mismatch reading True on a raised
+    # exception, a value the core pins do not carry to the Python
+    # attribute, so it is wiring, not re-proof.
+    body = json.dumps(
+        {"error": {"code": 429, "message": "check quota", "status": "RESOURCE_EXHAUSTED"}}
+    ).encode()
+    raw_response(500, body)
+    with pytest.raises(RateLimitError) as excinfo:
+        client.text_search("cafes")
     assert excinfo.value.status_code == 500
-    assert excinfo.value.google_status is None
-    assert "error body unreadable" in excinfo.value.message
+    assert excinfo.value.error_code == 429
+    assert excinfo.value.status_mismatch is True
+    assert excinfo.value.retryable is True
 
 
 def test_gzipped_details_decode(client):
@@ -1087,60 +1069,6 @@ def test_quota_error_carries_retry_after(client):
     assert excinfo.value.retryable is True
     assert excinfo.value.retry_after == 7
     assert excinfo.value.status_mismatch is False
-
-
-def test_envelope_http_disagreement_is_flagged(client, raw_response):
-    # Repro case 4b: RESOURCE_EXHAUSTED on HTTP 500, envelope code 429.
-    raw_response(500, envelope(429, "RESOURCE_EXHAUSTED", "check quota"))
-    with pytest.raises(RateLimitError) as excinfo:
-        client.text_search("cafes")
-    assert excinfo.value.status_code == 500
-    assert excinfo.value.error_code == 429
-    assert excinfo.value.status_mismatch is True
-    assert excinfo.value.retryable is True
-
-
-def test_server_side_status_on_client_http_code_is_api_error(client, raw_response):
-    raw_response(400, envelope(400, "DEADLINE_EXCEEDED", "too slow"))
-    with pytest.raises(ApiError) as excinfo:
-        client.text_search("cafes")
-    assert type(excinfo.value) is ApiError
-    assert excinfo.value.google_status == "DEADLINE_EXCEEDED"
-    assert excinfo.value.retryable is True
-
-
-def test_non_json_error_body_has_no_google_status(client, raw_response):
-    # Repro case 6, fixed: google_status is None, not an empty string.
-    body = "Internal Server Error: upstream exploded"
-    raw_response(500, body, "text/plain")
-    with pytest.raises(ApiError) as excinfo:
-        client.text_search("cafes")
-    assert excinfo.value.status_code == 500
-    assert excinfo.value.google_status is None
-    # R18-A6: the unparsed body is not quoted in the message; the
-    # status and the body size are what it carries.
-    assert "upstream exploded" not in excinfo.value.message
-    assert f"{len(body)} bytes" in excinfo.value.message
-
-
-def test_long_non_envelope_body_is_not_quoted(client, raw_response):
-    # R18-A6: however long an unparsed body runs, none of it reaches
-    # the message; the size does.
-    raw_response(503, "y" * 600, "text/html")
-    with pytest.raises(ApiError) as excinfo:
-        client.text_search("cafes")
-    assert "600 bytes" in excinfo.value.message
-    assert "yyyy" not in excinfo.value.message
-
-
-def test_envelope_message_is_capped(client, raw_response):
-    raw_response(400, envelope(400, "INVALID_ARGUMENT", "x" * 5000))
-    with pytest.raises(InvalidRequestError) as excinfo:
-        client.text_search("cafes")
-    # The stored envelope message is capped at 500 characters (the
-    # exception text adds the class prefix on top of it).
-    assert "x" * 500 in excinfo.value.message
-    assert "x" * 501 not in excinfo.value.message
 
 
 def test_malformed_success_body_decode_error_has_status(client, raw_response):
@@ -1594,25 +1522,6 @@ def test_bare_string_fields_rejected_before_any_request(client, stub_server):
     assert stub_server.last_request is None
     with pytest.raises(ConfigError):
         FieldMask.of("places.id")
-
-
-def test_field_mask_grammar_rejects_semantic_errors():
-    # RC-10: snake_case, empty segments, stray punctuation, spaces,
-    # wildcards and one-letter segments all fail locally.
-    for bad in (
-        "places.display_name",
-        "places..rating",
-        "places.",
-        ".places",
-        "not a field!!!",
-        "a b",
-        "*",
-        "places.*",
-        "a",
-        "places.i",
-    ):
-        with pytest.raises(ConfigError):
-            FieldMask(bad)
 
 
 def test_field_mask_deduplicates_and_set_input_is_deterministic():

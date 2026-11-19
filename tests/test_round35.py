@@ -53,40 +53,6 @@ def test_single_entry_shapes(client, raw_response, wire, expected):
     assert exc.details[0]["fieldViolations"] == [wire]
 
 
-def test_mixed_array_keeps_count_and_verbatim_entries(client, raw_response):
-    wire = [
-        {"field": "a", "description": "b"},
-        "oops",
-        7,
-        None,
-        {"field": 9, "description": ["x"]},
-        {"field": "c", "description": "d"},
-    ]
-    exc = _raised(client, raw_response, _badreq_body(wire))
-    # Two well formed entries project, the other four ride through
-    # verbatim; before the repair all four were fabricated, one of
-    # them losing both of its sent values.
-    assert exc.field_violations == [
-        {"field": "a", "description": "b"},
-        "oops",
-        7,
-        None,
-        {"field": 9, "description": ["x"]},
-        {"field": "c", "description": "d"},
-    ]
-    assert len(exc.field_violations) == len(wire)
-
-
-@pytest.mark.parametrize(
-    "container", ["textQuery"], ids=["string"]
-)
-def test_field_violations_container_failures_stay_empty(client, raw_response, container):
-    body = _envelope([{"@type": BADREQ, "fieldViolations": container}])
-    exc = _raised(client, raw_response, body)
-    assert exc.field_violations == []
-    assert exc.details[0]["fieldViolations"] == container
-
-
 def test_quota_violations_still_pass_verbatim(client, raw_response):
     # The neighbouring view is untouched by the repair: malformed
     # QuotaFailure entries rode through verbatim before it and

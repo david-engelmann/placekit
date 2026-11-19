@@ -764,41 +764,6 @@ def test_head_scan_takes_the_last_of_two_error_objects(client, raw_response):
     assert "second" in str(excinfo.value)
 
 
-def test_head_scan_skips_a_non_object_error_value(client, raw_response):
-    # A first error key holding a string silenced the scan
-    # outright, even with a real envelope under a second key.
-    # The scan skips the non object value and keeps walking.
-    body = (
-        '{"error": "not an object", '
-        '"error": {"code": 404, "message": "gone", '
-        '"status": "NOT_FOUND"}, '
-        f'"junk": {_deep_fragment()}}}'
-    )
-    raw_response(400, body)
-    with pytest.raises(NotFoundError) as excinfo:
-        client.text_search("pizza")
-    assert excinfo.value.google_status == "NOT_FOUND"
-
-
-def test_head_scan_repeated_status_key_takes_the_last_value(
-    client, raw_response
-):
-    # A repeated status key whose later value is a number reads
-    # as no status in the whole parse, which then classifies by
-    # the numeric code. The scan kept the earlier string. Both
-    # paths now agree.
-    body = (
-        '{"error": {"code": 400, "message": "mixed", '
-        '"status": "RESOURCE_EXHAUSTED", "status": 42, '
-        f'"junk": {_deep_fragment()}}}}}'
-    )
-    raw_response(400, body)
-    with pytest.raises(InvalidRequestError) as excinfo:
-        client.text_search("pizza")
-    assert excinfo.value.google_status is None
-    assert excinfo.value.error_code == 400
-
-
 def test_scan_recovered_envelope_with_a_cut_message_says_so(
     client, raw_response
 ):

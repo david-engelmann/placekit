@@ -193,22 +193,6 @@ def _giant_envelope(member_text, code=400, status_text="INVALID_ARGUMENT"):
     )
 
 
-def test_giant_integer_in_a_violation_keeps_the_classification(client, raw_response):
-    body = _giant_envelope(
-        '{"@type": "'
-        + BADREQ
-        + '", "fieldViolations": [{"field": "pageSize", "description": '
-        + BIG_LITERAL
-        + "}]}"
-    )
-    exc = _raised(client, raw_response, body)
-    assert exc.google_status == "INVALID_ARGUMENT"
-    assert exc.error_code == 400
-    assert exc.details == []
-    assert exc.field_violations == []
-    assert exc.quota_violations == []
-
-
 # ------------------------------------------------------------------
 # Finding 4: entry level details recovery on the scan route
 # ------------------------------------------------------------------
@@ -314,7 +298,10 @@ def test_async_parity_on_the_repaired_shapes(api_key, base_url, raw_response):
     giant_exc, surrogate_exc = asyncio.run(run())
     assert isinstance(giant_exc, InvalidRequestError)
     assert giant_exc.google_status == "INVALID_ARGUMENT"
+    assert giant_exc.error_code == 400
     assert giant_exc.details == []
+    assert giant_exc.field_violations == []
+    assert giant_exc.quota_violations == []
     assert isinstance(surrogate_exc, InvalidRequestError)
     assert len(surrogate_exc.details) == 1
     assert surrogate_exc.details[0]["detail"] == "kept"
