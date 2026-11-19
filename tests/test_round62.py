@@ -1015,9 +1015,17 @@ def test_sample_blocks_expand_to_the_lines_they_replace():
     # Audit round 13 batch 2, red team finding 1: the import
     # sentinel's restoration is the one the analyzer cannot
     # catch, because the analyzer is indifferent to the
-    # suppress import line. This pin holds the whole table:
-    # every sentinel expands to the line it replaces, so a
-    # dropped or renamed entry fails here instead of passing
+    # suppress import line. This pin holds the table against
+    # expectations written out here, independent of the
+    # table itself, so a dropped or renamed entry, or a
+    # wrong mapped value, fails here instead of passing
     # silently on shortened samples.
-    for sentinel, line in _SAMPLE_BLOCKS.items():
+    expected = {
+        "# @@R62:shape@@": "def test_shape(client, raw_response):",
+        "    # @@R62:import@@": "    from contextlib import suppress",
+        "    # @@R62:name@@": f'    fixture_name = "{OTHER}"',
+        "    # @@R62:with@@": "    with suppress(AssertionError):",
+    }
+    assert _SAMPLE_BLOCKS == expected
+    for sentinel, line in expected.items():
         assert _expand(sentinel) == line
