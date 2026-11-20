@@ -1116,7 +1116,9 @@ class TestPhotoUriArmAndNullDimensions:
         )
         with pytest.raises(DecodeError) as caught:
             client.place_photo(
-                "places/x/photos/y", skip_http_redirect=True
+                "places/x/photos/y",
+                max_width_px=100,
+                skip_http_redirect=True,
             )
         assert caught.value.status_code == 200
         assert "5000 digits" in caught.value.message
