@@ -1013,3 +1013,128 @@ class TestConversionStatusAndGuardCoverage:
                 )
 
         asyncio.run(run())
+
+
+class _ShortPayloadInner:
+    """A native stand-in whose JSON result breaks the core
+    contract, carrying two elements where the result tuple
+    promises three (audit A50-243)."""
+
+    def text_search(self, body, fields_list):
+        return ({}, "{}")
+
+
+class _NonePayloadInner:
+    """A native stand-in whose JSON result is not a tuple at
+    all (audit A50-243)."""
+
+    def text_search(self, body, fields_list):
+        return None
+
+
+class _DictPayloadInner:
+    """A native stand-in whose JSON result is a mapping where
+    the result tuple belongs (audit A50-243, repair)."""
+
+    def text_search(self, body, fields_list):
+        return {"typed": {}, "body": "{}"}
+
+
+class _ShortPayloadAsyncInner:
+    def text_search_async(self, body, fields_list):
+        return None
+
+
+class TestConvertBodyGuardCoverage:
+    """A50-243: the native payload unpack sits inside the
+    conversion guard, so a malformed result tuple surfaces as
+    the conversion DecodeError instead of a bare builtin from
+    the method, the repair the photo seats received at
+    A50-226."""
+
+    def test_short_payload_is_a_decode_error(self, client, monkeypatch):
+        monkeypatch.setattr(client, "_inner", _ShortPayloadInner())
+        with pytest.raises(DecodeError):
+            client.text_search("cafes")
+
+    def test_non_tuple_payload_is_a_decode_error(
+        self, client, monkeypatch
+    ):
+        monkeypatch.setattr(client, "_inner", _NonePayloadInner())
+        with pytest.raises(DecodeError):
+            client.text_search("cafes")
+
+    def test_mapping_payload_is_a_decode_error(
+        self, client, monkeypatch
+    ):
+        # A50-243 repair: a mapping payload fails the status
+        # read with KeyError, the third builtin the read can
+        # raise, and the guard covers it on the red team's
+        # reproduced instance.
+        monkeypatch.setattr(client, "_inner", _DictPayloadInner())
+        with pytest.raises(DecodeError):
+            client.text_search("cafes")
+
+    def test_short_payload_is_a_decode_error_async(
+        self, api_key, base_url, monkeypatch
+    ):
+        async def fake_await_native(handle):
+            return ({}, "{}")
+
+        monkeypatch.setattr(
+            "placekit.client._await_native", fake_await_native
+        )
+
+        async def run():
+            client = AsyncClient(api_key, base_url=base_url)
+            monkeypatch.setattr(client, "_inner", _ShortPayloadAsyncInner())
+            with pytest.raises(DecodeError):
+                await client.text_search("cafes")
+
+        asyncio.run(run())
+
+
+class TestPhotoUriArmAndNullDimensions:
+    """A50-244 and A50-245: the photo URI arm's refusal renders
+    once with its status, and a null photo dimension decodes
+    as zero."""
+
+    def test_photo_uri_giant_integer_refusal_renders_once(
+        self, client, raw_response
+    ):
+        # A50-244: the URI arm threaded no status into the typed
+        # conversion and rewrapped the finished giant integer
+        # refusal, nesting its rendering inside a second decode
+        # rendering. The refusal now propagates as itself, as on
+        # the JSON endpoints. This pin is also the constructible
+        # half of A50-231's trigger, fired by this edit.
+        raw_response(
+            200,
+            '{"name": "places/x/photos/y", '
+            '"photoUri": "https://example.test/p", '
+            '"futureCounter": ' + "9" * 5000 + "}",
+        )
+        with pytest.raises(DecodeError) as caught:
+            client.place_photo(
+                "places/x/photos/y",
+                max_width_px=100,
+                skip_http_redirect=True,
+            )
+        assert caught.value.status_code == 200
+        assert "5000 digits" in caught.value.message
+        assert "PlacesError" not in caught.value.message
+
+    def test_null_photo_dimension_decodes_as_zero(
+        self, client, raw_response
+    ):
+        # A50-245: an explicit null at widthPx reads as the
+        # field's absent form, zero, instead of failing the
+        # whole details decode.
+        raw_response(
+            200,
+            '{"id": "ChIJx", "photos": [{"name": "places/x/photos/y", '
+            '"widthPx": null, "heightPx": 600}]}',
+        )
+        place = client.place_details("ChIJx")
+        assert place.photos[0].width_px == 0
+        assert place.photos[0].height_px == 600
