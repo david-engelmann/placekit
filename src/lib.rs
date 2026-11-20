@@ -1123,12 +1123,12 @@ fn photo_to_py(
                 .map_err(|e| photo_conversion_err(py, e, status))?
                 .unbind()
                 .into_any();
-            let status = status
+            let status_py = status
                 .into_pyobject(py)
                 .map_err(|e| photo_conversion_err(py, e, status))?
                 .unbind()
                 .into_any();
-            let tuple = PyTuple::new(py, [tag, bytes, content_type, status])
+            let tuple = PyTuple::new(py, [tag, bytes, content_type, status_py])
                 .map_err(|e| photo_conversion_err(py, e, status))?;
             Ok(tuple.unbind().into_any())
         }
@@ -1165,12 +1165,12 @@ fn photo_to_py(
                 .map_err(|e| photo_conversion_err(py, e, status))?
                 .unbind()
                 .into_any();
-            let status = status
+            let status_py = status
                 .into_pyobject(py)
                 .map_err(|e| photo_conversion_err(py, e, status))?
                 .unbind()
                 .into_any();
-            let tuple = PyTuple::new(py, [tag, typed, body, status])
+            let tuple = PyTuple::new(py, [tag, typed, body, status_py])
                 .map_err(|e| photo_conversion_err(py, e, status))?;
             Ok(tuple.unbind().into_any())
         }
