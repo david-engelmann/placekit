@@ -6,6 +6,7 @@ Each test names the register entry it pins. The register lives at
 
 from __future__ import annotations
 
+import asyncio
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -721,6 +722,43 @@ class TestErrorSurfaceRepairs:
         assert "could not be read" in str(caught.value)
         assert "failed to decode" not in str(caught.value)
 
+    def test_convert_wrap_passes_a_family_error_through_untouched(self):
+        # Audit A50-225: the conversion wrap translated the builtin
+        # tuple into DecodeError, and ConfigError's deliberate
+        # ValueError ancestry captured it into that translation,
+        # reclassifying a family error the R55 rule says passes
+        # through untouched. The wrap now carries the family
+        # passthrough arm every models guard already had.
+        from placekit.client import _Base
+
+        refusal = ConfigError("the construction guard refused")
+
+        def convert(data):
+            raise refusal
+
+        with pytest.raises(ConfigError) as caught:
+            _Base._convert(convert, {}, "test conversion")
+        assert caught.value is refusal
+
+    def test_convert_wrap_still_fills_a_decode_error(self):
+        # Audit A50-225, the arm order half of the repair: the
+        # family passthrough arm sits below the DecodeError arm,
+        # so a DecodeError raised inside a conversion still gets
+        # its context and status filled by the wrap. With the
+        # family arm above, the fill would silently stop.
+        from placekit.client import _Base
+
+        failure = DecodeError("the payload refused")
+
+        def convert(data):
+            raise failure
+
+        with pytest.raises(DecodeError) as caught:
+            _Base._convert(convert, {}, "test conversion", status=200)
+        assert caught.value is failure
+        assert caught.value.context == "test conversion"
+        assert caught.value.status_code == 200
+
 
 class _RaisingConversionInt(int):
     def __int__(self):
@@ -889,3 +927,89 @@ def test_exact_string_members_skip_the_construction_exercise(monkeypatch):
     with pytest.raises(ConfigError):
         FieldMask(Member("places.id"))
     FieldMask("places.id")
+
+
+class _ShortTupleInner:
+    """A native stand-in whose photo result breaks the core
+    contract, carrying three elements where the tagged tuple
+    promises four (audit A50-226)."""
+
+    def place_photo(self, name, width, height, skip_http_redirect):
+        return ("bytes", b"x", "image/jpeg")
+
+
+class _ShortTupleAsyncInner:
+    def place_photo_async(self, name, width, height, skip_http_redirect):
+        return None
+
+
+class TestConversionStatusAndGuardCoverage:
+    """A50-224 and A50-226: conversion failures carry the status
+    they arrived with, and the photo status read sits under the
+    conversion guard at both photo methods."""
+
+    def test_giant_integer_refusal_carries_the_response_status(
+        self, client, raw_response
+    ):
+        # A50-224: an untyped field carrying an integer past the
+        # interpreter limit survives typed decode verbatim and
+        # refuses only at the bindings conversion, which held the
+        # response status and reported none.
+        raw_response(
+            200,
+            '{"id": "places/ChIJrTLr-GyuEmsRBfy61i59si0", "untypedCounter": '
+            + "9" * 4301
+            + "}",
+        )
+        with pytest.raises(DecodeError) as caught:
+            client.place_details("ChIJrTLr-GyuEmsRBfy61i59si0")
+        assert caught.value.status_code == 200
+
+    def test_giant_integer_refusal_carries_the_response_status_async(
+        self, api_key, base_url, raw_response
+    ):
+        raw_response(
+            200,
+            '{"id": "places/ChIJrTLr-GyuEmsRBfy61i59si0", "untypedCounter": '
+            + "9" * 4301
+            + "}",
+        )
+
+        async def run():
+            client = AsyncClient(api_key, base_url=base_url)
+            with pytest.raises(DecodeError) as caught:
+                await client.place_details("ChIJrTLr-GyuEmsRBfy61i59si0")
+            return caught.value
+
+        assert asyncio.run(run()).status_code == 200
+
+    def test_photo_status_read_stays_inside_the_conversion_guard(
+        self, client, monkeypatch
+    ):
+        # A50-226: the status element was read by index outside
+        # the conversion guard, so a short tuple raised a bare
+        # IndexError from the method instead of the conversion
+        # DecodeError the same tuple draws inside the guard.
+        monkeypatch.setattr(client, "_inner", _ShortTupleInner())
+        with pytest.raises(DecodeError):
+            client.place_photo("places/x/photos/y", max_width_px=100)
+
+    def test_photo_status_read_stays_inside_the_conversion_guard_async(
+        self, api_key, base_url, monkeypatch
+    ):
+        async def fake_await_native(handle):
+            return ("bytes", b"x", "image/jpeg")
+
+        monkeypatch.setattr(
+            "placekit.client._await_native", fake_await_native
+        )
+
+        async def run():
+            client = AsyncClient(api_key, base_url=base_url)
+            monkeypatch.setattr(client, "_inner", _ShortTupleAsyncInner())
+            with pytest.raises(DecodeError):
+                await client.place_photo(
+                    "places/x/photos/y", max_width_px=100
+                )
+
+        asyncio.run(run())
