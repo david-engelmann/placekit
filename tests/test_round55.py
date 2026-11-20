@@ -131,6 +131,56 @@ def test_binding_verdict_over_hand_traces():
     assert verdict([(0, 1), (0, _MAX_PAYLOAD_DEPTH + 1), (1, 2)]) is False
 
 
+def test_walk_trace_over_a_mixed_tree_is_the_literal_sequence(monkeypatch):
+    # The trace the walk hands the core is the contract the
+    # depth verdict reads, and no verdict pin can see its
+    # order. A child push order change would visit the same
+    # containers, answer the same verdicts on shallow trees,
+    # and still hand the core a different sequence. Capture
+    # the trace at the crossing and hold it against the
+    # literal sequence the tree's shape forces, root first,
+    # each mapping's children visited last pushed first
+    # (audit A50-259).
+    captured = []
+
+    def capture(trace):
+        captured.append(list(trace))
+        return True
+
+    monkeypatch.setattr(
+        _placekit, "models_payload_depth_within_limit", capture
+    )
+    inner = LogDict("inner")
+    inner["leaf"] = {}
+    payload = {
+        "a": [{"x": inner}, []],
+        "b": {"c": []},
+        "t": ({"m": []}, [()]),
+        "z": {"deep": {"deeper": []}},
+    }
+    _validate_payload(payload, "Place")
+    assert captured == [
+        [
+            (0, 1),
+            (0, 2),
+            (0, 3),
+            (1, 4),
+            (1, 2),
+            (1, 3),
+            (1, 4),
+            (0, 3),
+            (1, 4),
+            (0, 2),
+            (1, 3),
+            (1, 2),
+            (1, 3),
+            (0, 3),
+            (0, 4),
+            (0, 5),
+        ]
+    ]
+
+
 def test_depths_inside_the_limit_validate():
     for total in (2, 100, 127, 128):
         _validate_payload(_chain_dicts(total), "Place")
