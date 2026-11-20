@@ -227,7 +227,9 @@ where
     // (audit A50-092). This seat carried its own inline copy of
     // the same catch and conversion before the fold.
     let stored = result.and_then(|(value, body, status)| {
-        to_value_guarded(&value).map(|json| (json, body, status))
+        to_value_guarded(&value)
+            .map(|json| (json, body, status))
+            .map_err(|e| attach_status(e, status))
     });
     CallOutput::Json(stored)
 }
@@ -394,6 +396,28 @@ fn record_failure(slot: &mut Option<String>, result: PyResult<()>) {
     }
 }
 
+/// Attach the response status to a decode error that does not
+/// already carry one (audit A50-224). Conversion seats that hold
+/// the status of the response being converted call this before
+/// the error crosses, so a conversion failure reports the status
+/// it arrived with, like every sibling decode seat in the core.
+/// An error that already carries a status, and every non-decode
+/// error, passes unchanged.
+fn attach_status(err: CoreError, status: u16) -> CoreError {
+    match err {
+        CoreError::Decode {
+            detail,
+            status: None,
+            source,
+        } => CoreError::Decode {
+            detail,
+            status: Some(status),
+            source,
+        },
+        other => other,
+    }
+}
+
 fn to_pyerr(py: Python<'_>, err: CoreError) -> PyErr {
     let pyerr = PyErr::new::<PlacesError, _>(err.to_string());
     let instance = pyerr.value(py);
@@ -449,12 +473,12 @@ fn to_pyerr(py: Python<'_>, err: CoreError) -> PyErr {
     // that call.
     let details_result = serde_json::to_value(err.details())
         .map_err(|e| e.to_string())
-        .and_then(|details| value_to_py(py, &details).map_err(|e| e.to_string()));
+        .and_then(|details| value_to_py(py, &details, None).map_err(|e| e.to_string()));
     let field_violations_result =
-        value_to_py(py, &serde_json::Value::Array(err.field_violations()))
+        value_to_py(py, &serde_json::Value::Array(err.field_violations()), None)
             .map_err(|e| e.to_string());
     let quota_violations_result =
-        value_to_py(py, &serde_json::Value::Array(err.quota_violations()))
+        value_to_py(py, &serde_json::Value::Array(err.quota_violations()), None)
             .map_err(|e| e.to_string());
     // The typed violation entries (audit A50-027) ride the same
     // best effort surface. They are built from the same details,
@@ -472,6 +496,7 @@ fn to_pyerr(py: Python<'_>, err: CoreError) -> PyErr {
                 })
                 .collect(),
         ),
+        None,
     )
     .map_err(|e| e.to_string());
     let quota_violation_entries_result = value_to_py(
@@ -490,6 +515,7 @@ fn to_pyerr(py: Python<'_>, err: CoreError) -> PyErr {
                 })
                 .collect(),
         ),
+        None,
     )
     .map_err(|e| e.to_string());
     match (
@@ -881,36 +907,41 @@ where
     })
 }
 
-fn value_to_py(py: Python<'_>, value: &Value) -> PyResult<PyObject> {
+fn value_to_py(py: Python<'_>, value: &Value, status: Option<u16>) -> PyResult<PyObject> {
     // Converted by hand rather than through a generic converter
     // (R4-19): with arbitrary precision numbers, a serde_json Number
     // serializes through a private envelope shape that generic
     // converters hand back as a dict, so every numeric field broke.
     // Here an integer keeps its exact value at any size (Python ints
-    // are arbitrary precision too) and a float stays a float.
+    // are arbitrary precision too) and a float stays a float. The
+    // status is the response the value came from, where the caller
+    // holds one; it rides to the one refusal inside the conversion
+    // that builds a decode error, so that error carries the status
+    // it arrived with (audit A50-224). Callers with no response in
+    // hand pass None.
     match value {
         Value::Null => Ok(py.None()),
         Value::Bool(b) => Ok(b.into_pyobject(py)?.to_owned().unbind().into_any()),
-        Value::Number(n) => number_to_py(py, n),
+        Value::Number(n) => number_to_py(py, n, status),
         Value::String(s) => Ok(s.as_str().into_pyobject(py)?.unbind().into_any()),
         Value::Array(items) => {
             let list = pyo3::types::PyList::empty(py);
             for item in items {
-                list.append(value_to_py(py, item)?)?;
+                list.append(value_to_py(py, item, status)?)?;
             }
             Ok(list.unbind().into_any())
         }
         Value::Object(map) => {
             let dict = PyDict::new(py);
             for (key, item) in map {
-                dict.set_item(key, value_to_py(py, item)?)?;
+                dict.set_item(key, value_to_py(py, item, status)?)?;
             }
             Ok(dict.unbind().into_any())
         }
     }
 }
 
-fn number_to_py(py: Python<'_>, n: &serde_json::Number) -> PyResult<PyObject> {
+fn number_to_py(py: Python<'_>, n: &serde_json::Number, status: Option<u16>) -> PyResult<PyObject> {
     if let Some(i) = n.as_i64() {
         return Ok(i.into_pyobject(py)?.unbind().into_any());
     }
@@ -979,7 +1010,7 @@ fn number_to_py(py: Python<'_>, n: &serde_json::Number) -> PyResult<PyObject> {
                         "an integer in the response carries {} digits, beyond the interpreter limit for exact conversion",
                         text.trim_start_matches('-').len()
                     ),
-                    status: None,
+                    status,
                     source: None,
                 },
             )),
@@ -996,7 +1027,7 @@ fn number_to_py(py: Python<'_>, n: &serde_json::Number) -> PyResult<PyObject> {
 /// tuple. Shared by the sync path through [`result_to_py`] and by
 /// call handle collection, so both paths build the identical tuple.
 fn json_tuple_to_py(py: Python<'_>, json: &Value, body: String, status: u16) -> PyResult<PyObject> {
-    let typed = value_to_py(py, json)?;
+    let typed = value_to_py(py, json, Some(status))?;
     let body = body.into_pyobject(py)?.unbind().into_any();
     let status = status.into_pyobject(py)?.unbind().into_any();
     let tuple = PyTuple::new(py, [typed, body, status])?;
@@ -1041,7 +1072,8 @@ where
 {
     match result {
         Ok((value, body, status)) => {
-            let json = to_value_guarded(&value).map_err(|e| to_pyerr(py, e))?;
+            let json =
+                to_value_guarded(&value).map_err(|e| to_pyerr(py, attach_status(e, status)))?;
             json_tuple_to_py(py, &json, body, status)
         }
         Err(e) => Err(to_pyerr(py, e)),
@@ -1059,13 +1091,15 @@ where
 /// can carry it.
 /// A photo result conversion failure is a decode failure of this
 /// layer (R4-22), reported inside the exception hierarchy like every
-/// other conversion failure here, never as a bare PyValueError.
-fn photo_conversion_err(py: Python<'_>, e: impl std::fmt::Display) -> PyErr {
+/// other conversion failure here, never as a bare PyValueError. The
+/// error carries the status of the response being converted, which
+/// both arms hold (audit A50-224).
+fn photo_conversion_err(py: Python<'_>, e: impl std::fmt::Display, status: u16) -> PyErr {
     to_pyerr(
         py,
         CoreError::Decode {
             detail: e.to_string(),
-            status: None,
+            status: Some(status),
             source: None,
         },
     )
@@ -1079,29 +1113,29 @@ fn photo_to_py(
         Ok((placekit_core::models::PhotoMedia::Bytes(photo), _, status)) => {
             let tag = "bytes"
                 .into_pyobject(py)
-                .map_err(|e| photo_conversion_err(py, e))?
+                .map_err(|e| photo_conversion_err(py, e, status))?
                 .unbind()
                 .into_any();
             let bytes = PyBytes::new(py, &photo.bytes).unbind().into_any();
             let content_type = photo
                 .content_type
                 .into_pyobject(py)
-                .map_err(|e| photo_conversion_err(py, e))?
+                .map_err(|e| photo_conversion_err(py, e, status))?
                 .unbind()
                 .into_any();
-            let status = status
+            let status_py = status
                 .into_pyobject(py)
-                .map_err(|e| photo_conversion_err(py, e))?
+                .map_err(|e| photo_conversion_err(py, e, status))?
                 .unbind()
                 .into_any();
-            let tuple = PyTuple::new(py, [tag, bytes, content_type, status])
-                .map_err(|e| photo_conversion_err(py, e))?;
+            let tuple = PyTuple::new(py, [tag, bytes, content_type, status_py])
+                .map_err(|e| photo_conversion_err(py, e, status))?;
             Ok(tuple.unbind().into_any())
         }
         Ok((placekit_core::models::PhotoMedia::Uri(media), body, status)) => {
             let tag = "uri"
                 .into_pyobject(py)
-                .map_err(|e| photo_conversion_err(py, e))?
+                .map_err(|e| photo_conversion_err(py, e, status))?
                 .unbind()
                 .into_any();
             // The typed dict crosses as the attribute source, like on
@@ -1118,25 +1152,26 @@ fn photo_to_py(
                 // rather than its rendered form, which already
                 // carries the decode prefix (audit A50-092, red
                 // team repair).
-                CoreError::Decode { detail, .. } => photo_conversion_err(py, detail),
-                other => photo_conversion_err(py, other),
+                CoreError::Decode { detail, .. } => photo_conversion_err(py, detail, status),
+                other => photo_conversion_err(py, other, status),
             })?;
-            let typed = value_to_py(py, &json).map_err(|e| photo_conversion_err(py, e))?;
+            let typed =
+                value_to_py(py, &json, None).map_err(|e| photo_conversion_err(py, e, status))?;
             let body = body.ok_or_else(|| {
-                photo_conversion_err(py, "photo URI result carried no response body")
+                photo_conversion_err(py, "photo URI result carried no response body", status)
             })?;
             let body = body
                 .into_pyobject(py)
-                .map_err(|e| photo_conversion_err(py, e))?
+                .map_err(|e| photo_conversion_err(py, e, status))?
                 .unbind()
                 .into_any();
-            let status = status
+            let status_py = status
                 .into_pyobject(py)
-                .map_err(|e| photo_conversion_err(py, e))?
+                .map_err(|e| photo_conversion_err(py, e, status))?
                 .unbind()
                 .into_any();
-            let tuple = PyTuple::new(py, [tag, typed, body, status])
-                .map_err(|e| photo_conversion_err(py, e))?;
+            let tuple = PyTuple::new(py, [tag, typed, body, status_py])
+                .map_err(|e| photo_conversion_err(py, e, status))?;
             Ok(tuple.unbind().into_any())
         }
         Err(e) => Err(to_pyerr(py, e)),
@@ -1488,6 +1523,81 @@ mod tests {
             S: serde::Serializer,
         {
             panic!("synthetic serialization panic for the guard pin")
+        }
+    }
+
+    /// A value whose serialization fails outright, for the
+    /// A50-224 pins. Distinct from PanickingValue above, whose
+    /// serialization panics and settles as the runtime panic
+    /// error. Test only.
+    struct FailingSerialize;
+
+    impl serde::Serialize for FailingSerialize {
+        fn serialize<S>(&self, _serializer: S) -> Result<S::Ok, S::Error>
+        where
+            S: serde::Serializer,
+        {
+            Err(serde::ser::Error::custom("synthetic serialization failure"))
+        }
+    }
+
+    /// The pin for the A50-224 helper. Only a statusless decode
+    /// error gains the status; an error already carrying one
+    /// keeps it, and every other error passes unchanged.
+    #[test]
+    fn attach_status_fills_only_a_statusless_decode_error() {
+        let filled = attach_status(
+            CoreError::Decode {
+                detail: "boom".to_string(),
+                status: None,
+                source: None,
+            },
+            200,
+        );
+        match filled {
+            CoreError::Decode { status, .. } => assert_eq!(status, Some(200)),
+            _ => panic!("a decode error must stay a decode error"),
+        }
+        let kept = attach_status(
+            CoreError::Decode {
+                detail: "boom".to_string(),
+                status: Some(404),
+                source: None,
+            },
+            200,
+        );
+        match kept {
+            CoreError::Decode { status, .. } => assert_eq!(status, Some(404)),
+            _ => panic!("a decode error must stay a decode error"),
+        }
+        let untouched = attach_status(
+            CoreError::Network {
+                detail: "down".to_string(),
+                source: None,
+            },
+            200,
+        );
+        match untouched {
+            CoreError::Network { detail, .. } => assert_eq!(detail, "down"),
+            _ => panic!("a network error must pass unchanged"),
+        }
+    }
+
+    /// The pin for the A50-224 stored form seat. A serialization
+    /// failure inside stored_json consumed a result tuple that
+    /// carried the response status, and the stored error now
+    /// carries that status instead of none.
+    #[test]
+    fn stored_json_attaches_the_status_to_a_serialization_failure() {
+        match stored_json(Ok((FailingSerialize, "body".to_string(), 200))) {
+            CallOutput::Json(Err(CoreError::Decode { detail, status, .. })) => {
+                assert!(
+                    detail.contains("synthetic serialization failure"),
+                    "{detail}"
+                );
+                assert_eq!(status, Some(200));
+            }
+            _ => panic!("a serialization failure must store as a decode error carrying the status"),
         }
     }
 

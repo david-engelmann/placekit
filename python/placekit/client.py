@@ -19,7 +19,7 @@ from typing import Any, Callable, Iterable, NoReturn, Optional
 
 from . import _placekit
 from ._placekit import PlacesError as _CorePlacesError
-from .exceptions import ConfigError, DecodeError, raise_translated
+from .exceptions import ConfigError, DecodeError, PlacesError, raise_translated
 from .fields import (
     FieldsLike,
     normalize_fields,
@@ -1117,7 +1117,12 @@ class _Base:
         converted, which the core threads across with the body, a
         conversion failure carries that status too, so a payload the
         Python layer refuses still reports the status it arrived
-        with.
+        with. A PlacesError raised inside a conversion passes
+        through untouched, under the one rule everywhere for the
+        library's own errors (R55); only non-PlacesError exceptions
+        convert. ConfigError needs the arm stated, since its
+        deliberate ValueError ancestry would otherwise capture it
+        into the builtin translation below (audit A50-225).
         """
         try:
             return convert(data)
@@ -1126,6 +1131,8 @@ class _Base:
                 exc.context = context
             if exc.status_code is None and status is not None:
                 exc.status_code = status
+            raise
+        except PlacesError:
             raise
         except (KeyError, TypeError, ValueError, AttributeError, OverflowError) as exc:
             raise DecodeError(
@@ -1705,7 +1712,15 @@ class Client(_Base):
             )
         except _CorePlacesError as exc:
             raise_translated(exc, context)
-        return self._convert(_photo_result, tagged, context, status=tagged[3])
+        try:
+            status = tagged[3]
+        except IndexError:
+            # A tuple too short to carry its status is too short
+            # for the guarded conversion too. Run it without the
+            # status and let the guard translate the malformed
+            # shape into the conversion DecodeError (audit A50-226).
+            return self._convert(_photo_result, tagged, context)
+        return self._convert(_photo_result, tagged, context, status=status)
 
     def __enter__(self) -> "Client":
         return self
@@ -2179,7 +2194,15 @@ class AsyncClient(_Base):
             )
         except _CorePlacesError as exc:
             raise_translated(exc, context)
-        return self._convert(_photo_result, tagged, context, status=tagged[3])
+        try:
+            status = tagged[3]
+        except IndexError:
+            # A tuple too short to carry its status is too short
+            # for the guarded conversion too. Run it without the
+            # status and let the guard translate the malformed
+            # shape into the conversion DecodeError (audit A50-226).
+            return self._convert(_photo_result, tagged, context)
+        return self._convert(_photo_result, tagged, context, status=status)
 
     async def __aenter__(self) -> "AsyncClient":
         return self
