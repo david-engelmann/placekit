@@ -28,7 +28,6 @@ from placekit import AsyncClient, Client
 from placekit.exceptions import (
     ConfigError,
     PlacesError,
-    RateLimitError,
 )
 from placekit.fields import FieldMask, normalize_fields
 

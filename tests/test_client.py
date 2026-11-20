@@ -16,7 +16,7 @@ import pytest
 
 PHOTO_FIXTURE = Path(__file__).parent / "fixtures" / "photo.png"
 
-from conftest import header, serve_details as _serve_details
+from conftest import header, load_fixture as fixture_bytes, serve_details as _serve_details
 from placekit import (
     AsyncClient,
     Client,
@@ -956,12 +956,6 @@ def test_async_client_matches_sync(api_key, base_url):
 # ---------------------------------------------------------------------------
 # Round 2 (T4) regressions: error envelopes, hostile inputs, attributes
 # ---------------------------------------------------------------------------
-
-FIXTURES = Path(__file__).parent / "fixtures"
-
-
-def fixture_bytes(name: str) -> bytes:
-    return (FIXTURES / name).read_bytes()
 
 
 def test_error_envelope_on_200_text_search_raises(client, raw_response):
