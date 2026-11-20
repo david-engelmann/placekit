@@ -1268,12 +1268,14 @@ fn content_type_of(response: &reqwest::Response) -> Option<String> {
 }
 
 // The redirect and base URL screening family lives in its
-// own module (audit A50-160); the names the client and its
-// tests read are re-exported here so their paths do not
-// move. The facade is kept whole even where a name is
-// read only by tests.
-#[allow(unused_imports)]
-pub(crate) use crate::screening::{ipv6_embedded_ipv4, parse_base_url, screen_redirect_target};
+// own module (audit A50-160); the names the client reads
+// are re-exported here so their paths do not move. The
+// name only this module's tests read rides a second, test
+// gated re-export (audit A50-217), so no block needs an
+// unused import allow.
+#[cfg(test)]
+pub(crate) use crate::screening::ipv6_embedded_ipv4;
+pub(crate) use crate::screening::{parse_base_url, screen_redirect_target};
 
 fn validate_place_id(place_id: &str) -> Result<(), Error> {
     if place_id.trim().is_empty()

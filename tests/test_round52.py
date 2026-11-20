@@ -303,6 +303,7 @@ from __future__ import annotations
 import textwrap
 
 from test_corpus_accounting import (
+    _expand as _expand_blocks,
     _fixtures_a_test_loads,
     _loader_function_names,
     _loads,
@@ -946,14 +947,10 @@ _SAMPLE_BLOCKS = {
 
 
 def _expand(source: str) -> str:
-    lines = []
-    for line in source.split("\n"):
-        block = _SAMPLE_BLOCKS.get(line)
-        if block is None:
-            lines.append(line)
-        else:
-            lines.extend(block.split("\n"))
-    return "\n".join(lines)
+    # Audit A50-213: the expansion itself lives in
+    # test_corpus_accounting. This battery binds it over
+    # its own sentinel table.
+    return _expand_blocks(source, _SAMPLE_BLOCKS)
 
 
 def _derived_loaders(tmp_path, source: str) -> set[str]:
