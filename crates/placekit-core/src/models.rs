@@ -707,7 +707,7 @@ impl<'de> serde::Deserialize<'de> for WireFloat {
 
 /// A response list field with its wire presence state, on the same
 /// two option shape as [`WireString`].
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WireList<T>(Option<Option<Vec<T>>>);
 
 impl<T> WireList<T> {
@@ -1621,6 +1621,12 @@ mod tests {
         let sent: WireList<String> = serde_json::from_str("[\"cafe\"]").unwrap();
         assert!(!sent.is_null());
         assert!(!sent.is_absent());
+
+        // Audit A50-247: WireList names Eq whenever its element
+        // does, as WireString does unconditionally. The bound is
+        // compile time, so dropping the derive fails this build.
+        fn requires_eq<T: Eq>(_: &T) {}
+        requires_eq(&sent);
     }
 
     #[test]
