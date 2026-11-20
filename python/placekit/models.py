@@ -625,14 +625,16 @@ def _validate_payload(data: Any, model: str) -> None:
                 trace.append((_TRACE_KIND_MAPPING, depth))
                 if depth > _MAX_PAYLOAD_DEPTH:
                     break
-                stack.extend((child, depth + 1) for child in node.values())
+                for child in node.values():
+                    stack.append((child, depth + 1))
             elif isinstance(node, (list, tuple)):
                 if type(node) is not list and type(node) is not tuple:
                     plain = False
                 trace.append((_TRACE_KIND_SEQUENCE, depth))
                 if depth > _MAX_PAYLOAD_DEPTH:
                     break
-                stack.extend((child, depth + 1) for child in node)
+                for child in node:
+                    stack.append((child, depth + 1))
     except PlacesError:
         raise
     except Exception as exc:
