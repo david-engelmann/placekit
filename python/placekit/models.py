@@ -35,8 +35,9 @@ can be shared without one holder rebinding another holder's fields.
 The freeze is shallow by design. List fields and each ``raw`` dict
 remain mutable in place, so a holder can still append to
 ``place.types`` or edit ``place.raw``; only rebinding is refused.
-They stay unhashable where they carry list fields; ``LatLng``, the
-one pure pair, is hashable. Every ``raw`` is a deep copy of the
+They stay unhashable where they carry list fields, directly or
+inside a nested model. A model whose fields are all hashable hashes
+by value, as ``LatLng`` does. Every ``raw`` is a deep copy of the
 payload it came from, or at the top of a client call the parsed
 body itself, which the client built for that call and holds no
 other reference to. Either way the caller's dict, a result's raw

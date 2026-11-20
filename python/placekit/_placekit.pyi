@@ -39,6 +39,10 @@ def address_first_long_text_index(
     components: list[_Component],
     type_name: bytes,
 ) -> Optional[int]: ...
+# The bool reports whether the chain reached the postal carrier
+# before the postal locality field was read. When it is true the
+# rows are empty, and the caller reads the field and calls again
+# with postal_locality_read set and the read value in hand.
 def address_city_resolutions(
     components: list[_Component],
     postal_locality_read: bool,
