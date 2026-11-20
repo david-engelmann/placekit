@@ -243,7 +243,7 @@ impl Client {
         let builder = self
             .http
             .post(url)
-            .headers(self.headers(Some(mask))?)
+            .headers(self.headers(Some(mask)))
             .json(request);
         self.send_with_status(builder).await
     }
@@ -275,7 +275,7 @@ impl Client {
         let builder = self
             .http
             .post(url)
-            .headers(self.headers(Some(mask))?)
+            .headers(self.headers(Some(mask)))
             .json(request);
         self.send_with_status(builder).await
     }
@@ -301,7 +301,7 @@ impl Client {
         // URL safe already, so this is a no-op for them.
         let url = format!("{}/places/{}", self.base_url, encode_path_segment(place_id));
         let mask = fields.unwrap_or_else(|| FieldMask::place_details_default());
-        let mut builder = self.http.get(url).headers(self.headers(Some(mask))?);
+        let mut builder = self.http.get(url).headers(self.headers(Some(mask)));
         // An empty optional value means "not supplied" and is omitted,
         // not sent as an empty query parameter (R4-23, the query side
         // of the R4-17 body rule).
@@ -383,7 +383,7 @@ impl Client {
         let builder = self
             .http
             .post(url)
-            .headers(self.headers(fields)?)
+            .headers(self.headers(fields))
             .json(request);
         self.send_with_status(builder).await
     }
@@ -727,13 +727,13 @@ impl Client {
     /// when the endpoint uses one. Both header values are built before
     /// the request path (the key's at build time, the mask's at its
     /// construction, audit A50-212), so this seat only clones them.
-    fn headers(&self, mask: Option<&FieldMask>) -> Result<HeaderMap, Error> {
+    fn headers(&self, mask: Option<&FieldMask>) -> HeaderMap {
         let mut headers = HeaderMap::new();
         headers.insert(API_KEY_HEADER, self.api_key_header.clone());
         if let Some(mask) = mask {
             headers.insert(FIELD_MASK_HEADER, mask.header_send_value().clone());
         }
-        Ok(headers)
+        headers
     }
 
     /// Send a JSON request and decode the success body, keeping the
@@ -1727,10 +1727,10 @@ mod tests {
     fn headers_carry_api_key_and_field_mask() {
         let client = test_client();
         let mask = FieldMask::new(vec!["places.id".to_owned()]).unwrap();
-        let headers = client.headers(Some(&mask)).unwrap();
+        let headers = client.headers(Some(&mask));
         assert_eq!(headers.get("x-goog-api-key").unwrap(), "test-key");
         assert_eq!(headers.get("x-goog-fieldmask").unwrap(), "places.id");
-        let bare = client.headers(None).unwrap();
+        let bare = client.headers(None);
         assert!(bare.get("x-goog-fieldmask").is_none());
     }
 
