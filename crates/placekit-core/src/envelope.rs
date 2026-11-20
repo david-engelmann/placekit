@@ -207,7 +207,11 @@ fn cap_detail_strings(value: &mut serde_json::Value) {
     while let Some(node) = stack.pop() {
         match node {
             serde_json::Value::String(text) => {
-                if text.chars().count() > ENVELOPE_TEXT_CAP_CHARS {
+                // Audit A50-249: the verdict depends only on the
+                // first cap plus one characters, so the count is
+                // bounded there like every sibling cap seat.
+                if text.chars().take(ENVELOPE_TEXT_CAP_CHARS + 1).count() > ENVELOPE_TEXT_CAP_CHARS
+                {
                     *text = text.chars().take(ENVELOPE_TEXT_CAP_CHARS).collect();
                 }
             }
