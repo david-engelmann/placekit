@@ -1544,18 +1544,30 @@ mod tests {
     /// The pin for the A50-224 helper. Only a statusless decode
     /// error gains the status; an error already carrying one
     /// keeps it, and every other error passes unchanged.
+    /// The decode arms bind the detail as well as the status,
+    /// and the filled arm binds the source, so a rebuild of the
+    /// error that dropped either fails here (A50-230).
     #[test]
     fn attach_status_fills_only_a_statusless_decode_error() {
         let filled = attach_status(
             CoreError::Decode {
                 detail: "boom".to_string(),
                 status: None,
-                source: None,
+                source: Some(Box::new(std::io::Error::other("root cause"))),
             },
             200,
         );
         match filled {
-            CoreError::Decode { status, .. } => assert_eq!(status, Some(200)),
+            CoreError::Decode {
+                detail,
+                status,
+                source,
+            } => {
+                assert_eq!(detail, "boom");
+                assert_eq!(status, Some(200));
+                let source = source.expect("the filled error keeps its source");
+                assert_eq!(source.to_string(), "root cause");
+            }
             _ => panic!("a decode error must stay a decode error"),
         }
         let kept = attach_status(
@@ -1567,7 +1579,10 @@ mod tests {
             200,
         );
         match kept {
-            CoreError::Decode { status, .. } => assert_eq!(status, Some(404)),
+            CoreError::Decode { detail, status, .. } => {
+                assert_eq!(detail, "boom");
+                assert_eq!(status, Some(404));
+            }
             _ => panic!("a decode error must stay a decode error"),
         }
         let untouched = attach_status(
