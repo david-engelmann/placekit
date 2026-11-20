@@ -190,28 +190,6 @@ pub(crate) fn a7_rtl_index0() -> FixturePlace {
     }
 }
 
-pub(crate) fn a7_rtl_index1() -> FixturePlace {
-    FixturePlace {
-        components: vec![
-            ComponentData { long_text: Some("Level 3, Armani Hotel Dubai".as_bytes().to_vec()), short_text: Some("".as_bytes().to_vec()), types: vec![] },
-            ComponentData { long_text: Some("برج خليفة".as_bytes().to_vec()), short_text: Some("برج خليفة".as_bytes().to_vec()), types: vec![Some("premise".as_bytes().to_vec())] },
-            ComponentData { long_text: Some("بوليفارد الشيخ محمد بن راشد".as_bytes().to_vec()), short_text: Some("بوليفارد الشيخ محمد بن راشد".as_bytes().to_vec()), types: vec![Some("route".as_bytes().to_vec())] },
-            ComponentData { long_text: Some("وسط مدينة دبي".as_bytes().to_vec()), short_text: Some("وسط مدينة دبي".as_bytes().to_vec()), types: vec![Some("neighborhood".as_bytes().to_vec()), Some("political".as_bytes().to_vec())] },
-            ComponentData { long_text: Some("برج خليفة".as_bytes().to_vec()), short_text: Some("برج خليفة".as_bytes().to_vec()), types: vec![Some("sublocality_level_1".as_bytes().to_vec()), Some("sublocality".as_bytes().to_vec()), Some("political".as_bytes().to_vec())] },
-            ComponentData { long_text: Some("دبي".as_bytes().to_vec()), short_text: Some("دبي".as_bytes().to_vec()), types: vec![Some("locality".as_bytes().to_vec()), Some("political".as_bytes().to_vec())] },
-            ComponentData { long_text: Some("دبي".as_bytes().to_vec()), short_text: Some("دبي".as_bytes().to_vec()), types: vec![Some("administrative_area_level_1".as_bytes().to_vec()), Some("political".as_bytes().to_vec())] },
-            ComponentData { long_text: Some("الإمارات العربية المتحدة".as_bytes().to_vec()), short_text: Some("AE".as_bytes().to_vec()), types: vec![Some("country".as_bytes().to_vec()), Some("political".as_bytes().to_vec())] },
-        ],
-        postal: Some(FixturePostal {
-            region_code: Some("AE"),
-            postal_code: None,
-            locality: Some("دبي"),
-            sublocality: None,
-            administrative_area: None,
-        }),
-    }
-}
-
 pub(crate) fn a9_no_postal_codes() -> FixturePlace {
     FixturePlace {
         components: vec![

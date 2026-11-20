@@ -60,7 +60,6 @@ const TYPE_LOCALITY: &[u8] = CARRIER_LOCALITY.as_bytes();
 const TYPE_POSTAL_TOWN: &[u8] = CARRIER_POSTAL_TOWN.as_bytes();
 const TYPE_SUBLOCALITY_LEVEL_1: &[u8] = CARRIER_SUBLOCALITY_LEVEL_1.as_bytes();
 const TYPE_SUBLOCALITY_LEVEL_2: &[u8] = CARRIER_SUBLOCALITY_LEVEL_2.as_bytes();
-const TYPE_COUNTRY: &[u8] = b"country";
 const TYPE_STREET_NUMBER: &[u8] = b"street_number";
 const TYPE_ROUTE: &[u8] = b"route";
 const TYPE_PREMISE: &[u8] = b"premise";
@@ -179,17 +178,6 @@ pub fn matching_indices(components: &[ComponentData], type_name: &[u8]) -> Vec<u
         .collect()
 }
 
-/// The indices of every component whose types list is empty, in
-/// list order.
-pub fn untyped_indices(components: &[ComponentData]) -> Vec<usize> {
-    components
-        .iter()
-        .enumerate()
-        .filter(|(_, component)| component.types.is_empty())
-        .map(|(index, _)| index)
-        .collect()
-}
-
 /// The first nonempty long text among the matches for a type
 /// name. A match whose long text is empty is skipped and the
 /// scan keeps going, so this form never returns an empty text.
@@ -211,40 +199,6 @@ pub fn first_long_text_index(components: &[ComponentData], type_name: &[u8]) -> 
         .enumerate()
         .filter(|(_, component)| has_type(component, type_name))
         .find_map(|(index, component)| nonempty(&component.long_text).map(|_| index))
-}
-
-/// The first nonempty short text among the matches for a type
-/// name, on the same skip rule as [`first_long_text`].
-pub fn first_short_text(components: &[ComponentData], type_name: &[u8]) -> Option<Vec<u8>> {
-    components
-        .iter()
-        .filter(|component| has_type(component, type_name))
-        .find_map(|component| nonempty(&component.short_text).map(<[u8]>::to_vec))
-}
-
-/// The nonempty long texts of every match, in list order.
-pub fn long_texts(components: &[ComponentData], type_name: &[u8]) -> Vec<Vec<u8>> {
-    components
-        .iter()
-        .filter(|component| has_type(component, type_name))
-        .filter_map(|component| nonempty(&component.long_text).map(<[u8]>::to_vec))
-        .collect()
-}
-
-/// The nonempty short texts of every match, in list order.
-pub fn short_texts(components: &[ComponentData], type_name: &[u8]) -> Vec<Vec<u8>> {
-    components
-        .iter()
-        .filter(|component| has_type(component, type_name))
-        .filter_map(|component| nonempty(&component.short_text).map(<[u8]>::to_vec))
-        .collect()
-}
-
-/// The short text of the country component, the first country
-/// component with a nonempty short text. The value comes back
-/// as sent and is never uppercased or mapped to another code.
-pub fn country_code_from_components(components: &[ComponentData]) -> Option<Vec<u8>> {
-    first_short_text(components, TYPE_COUNTRY)
 }
 
 /// Routing into a stated answer or the generic chain matches
@@ -589,78 +543,6 @@ pub fn component_flags(components: &[ComponentData]) -> ComponentFlags {
     }
 }
 
-/// Whether one code point is whitespace under the Python
-/// `str.strip` rule the compound code split follows. The set is
-/// the Unicode White_Space characters plus the information
-/// separators the Python rule also strips.
-fn is_python_space(code_point: u32) -> bool {
-    matches!(
-        code_point,
-        0x9..=0xD
-            | 0x1C..=0x1F
-            | 0x20
-            | 0x85
-            | 0xA0
-            | 0x1680
-            | 0x2000..=0x200A
-            | 0x2028
-            | 0x2029
-            | 0x202F
-            | 0x205F
-            | 0x3000
-    )
-}
-
-/// Strip the Python whitespace set off both ends of one byte
-/// string, unit by unit, so a multibyte whitespace character
-/// strips whole and a lone surrogate unit never strips.
-fn strip_python_space(bytes: &[u8]) -> &[u8] {
-    let mut start = 0;
-    while start < bytes.len() {
-        match decode_unit(bytes, start) {
-            Some((code_point, width)) if is_python_space(code_point) => {
-                start += width;
-            }
-            _ => break,
-        }
-    }
-    let mut end = bytes.len();
-    while end > start {
-        let mut unit_start = end - 1;
-        while unit_start > start && (bytes[unit_start] & 0xC0) == 0x80 {
-            unit_start -= 1;
-        }
-        match decode_unit(bytes, unit_start) {
-            Some((code_point, width))
-                if unit_start + width == end && is_python_space(code_point) =>
-            {
-                end = unit_start;
-            }
-            _ => break,
-        }
-    }
-    &bytes[start..end]
-}
-
-/// Split a compound plus code into its code and locality text,
-/// split at its first space. The split returns `None` when the
-/// input holds no space, or nothing before it, or nothing but
-/// whitespace after it, so a locality text is never an empty
-/// string. The input here is already validated as a string by
-/// the Python layer, which owns the None and wrong type cases.
-pub fn split_compound_code(compound_code: &[u8]) -> Option<(Vec<u8>, Vec<u8>)> {
-    let split = compound_code.iter().position(|byte| *byte == b' ')?;
-    let code_part = &compound_code[..split];
-    if code_part.is_empty() {
-        return None;
-    }
-    let locality = strip_python_space(&compound_code[split + 1..]);
-    if locality.is_empty() {
-        return None;
-    }
-    Some((code_part.to_vec(), locality.to_vec()))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -749,7 +631,7 @@ mod tests {
     }
 
     #[test]
-    fn texts_collect_nonempty_in_order_and_skip_null_types() {
+    fn first_long_text_takes_the_first_match_and_indices_read_past_null_types() {
         let components = vec![
             typed("One", "1", &["route"]),
             comp(Some(""), Some(""), &[Some("route")]),
@@ -757,16 +639,7 @@ mod tests {
             typed("Two", "2", &["route"]),
             typed("Other", "o", &["locality"]),
         ];
-        assert_eq!(
-            long_texts(&components, b"route"),
-            vec![bytes("One"), bytes("Two")]
-        );
-        assert_eq!(
-            short_texts(&components, b"route"),
-            vec![bytes("1"), bytes("2")]
-        );
         assert_eq!(text(&first_long_text(&components, b"route")), Some("One"));
-        assert_eq!(text(&first_short_text(&components, b"route")), Some("1"));
         assert_eq!(matching_indices(&components, b"route"), vec![0, 1, 2, 3]);
     }
 
@@ -782,47 +655,6 @@ mod tests {
         assert_eq!(first_long_text_index(&components, b"premise"), None);
         let empty_only = vec![comp(Some(""), Some(""), &[Some("route")])];
         assert_eq!(first_long_text_index(&empty_only, b"route"), None);
-    }
-
-    #[test]
-    fn untyped_components_surface_in_order() {
-        // Mirrors test_jp_premise_duplication_shape and
-        // test_ae_typeless_most_specific_text.
-        let jp = a13_premise_and_subpremise();
-        assert_eq!(untyped_indices(&jp.components), vec![0]);
-        assert_eq!(
-            text(&jp.components[0].long_text),
-            Some("1 Asakusa, Taito-ku")
-        );
-        let ae = a7_rtl_index1();
-        let untyped = untyped_indices(&ae.components);
-        let texts: Vec<_> = untyped
-            .iter()
-            .map(|i| text(&ae.components[*i].long_text))
-            .collect();
-        assert_eq!(texts, vec![Some("Level 3, Armani Hotel Dubai")]);
-        for type_name in ["premise", "route", "locality", "country"] {
-            assert!(!matching_indices(&ae.components, type_name.as_bytes()).contains(&untyped[0]));
-        }
-    }
-
-    #[test]
-    fn country_code_comes_back_as_sent() {
-        let place = a8_tokyo_english();
-        assert_eq!(
-            text(&country_code_from_components(&place.components)),
-            Some("JP")
-        );
-        let everest = p1_no_address();
-        assert_eq!(country_code_from_components(&everest.components), None);
-        let empty_short = vec![
-            typed("Nowhere", "", &["country"]),
-            typed("Somewhere", "SW", &["country"]),
-        ];
-        assert_eq!(
-            text(&country_code_from_components(&empty_short)),
-            Some("SW")
-        );
     }
 
     // --- Byte text fidelity, the surrogatepass crossing
@@ -1298,86 +1130,5 @@ mod tests {
         let flags = component_flags(&street_only);
         assert!(flags.has_street_number);
         assert!(!flags.has_no_street_level);
-    }
-
-    // --- Plus code splitting, mirroring test_split_compound_code_edges
-    // and the recorded split pins
-
-    #[test]
-    fn split_compound_code_recorded_forms() {
-        assert_eq!(
-            split_compound_code("P27Q+Q9 Brooklyn, NY, USA".as_bytes()),
-            Some((bytes("P27Q+Q9"), bytes("Brooklyn, NY, USA")))
-        );
-        assert_eq!(
-            split_compound_code("83G4+2P Santa Clara, CA, USA".as_bytes()),
-            Some((bytes("83G4+2P"), bytes("Santa Clara, CA, USA")))
-        );
-        assert_eq!(
-            split_compound_code("QMX9+V7 Tan Son Hoa, Ho Chi Minh, Vietnam".as_bytes()),
-            Some((bytes("QMX9+V7"), bytes("Tan Son Hoa, Ho Chi Minh, Vietnam")))
-        );
-    }
-
-    #[test]
-    fn split_compound_code_refusals() {
-        assert_eq!(split_compound_code(b""), None);
-        assert_eq!(split_compound_code("87G8P27Q+Q9".as_bytes()), None);
-        assert_eq!(split_compound_code("P27Q+Q9 ".as_bytes()), None);
-        assert_eq!(split_compound_code(" P27Q+Q9".as_bytes()), None);
-        assert_eq!(split_compound_code(b" "), None);
-        assert_eq!(split_compound_code("C ".as_bytes()), None);
-        assert_eq!(split_compound_code(" C".as_bytes()), None);
-    }
-
-    #[test]
-    fn split_compound_code_keeps_inner_spaces_and_strips_python_whitespace() {
-        assert_eq!(
-            split_compound_code("AB CD EF".as_bytes()),
-            Some((bytes("AB"), bytes("CD EF")))
-        );
-        assert_eq!(
-            split_compound_code("CODE  Double  Space".as_bytes()),
-            Some((bytes("CODE"), bytes("Double  Space")))
-        );
-        // A tab is not the split point, so it stays inside the
-        // code token when a space follows later, and the strip
-        // rule is the Python set, which includes the information
-        // separators and the next line character beside the
-        // White_Space set.
-        assert_eq!(
-            split_compound_code("CODE\tTabbed Locality".as_bytes()),
-            Some((bytes("CODE\tTabbed"), bytes("Locality")))
-        );
-        assert_eq!(
-            split_compound_code("CODE Locality\u{1c}Town".as_bytes()),
-            Some((bytes("CODE"), bytes("Locality\u{1c}Town")))
-        );
-        assert_eq!(
-            split_compound_code("CODE \u{a0}Town".as_bytes()),
-            Some((bytes("CODE"), bytes("Town")))
-        );
-        assert_eq!(
-            split_compound_code("CODE Locality\u{85}".as_bytes()),
-            Some((bytes("CODE"), bytes("Locality")))
-        );
-    }
-
-    #[test]
-    fn split_compound_code_strips_multibyte_space_and_keeps_surrogates() {
-        // The ideographic space is a three byte unit and strips
-        // whole off both ends, and a surrogate unit inside the
-        // locality text is no space and survives the strip.
-        let mut input: Vec<u8> = Vec::new();
-        input.extend_from_slice("CODE".as_bytes());
-        input.push(b' ');
-        input.extend_from_slice("\u{3000}".as_bytes());
-        input.extend_from_slice(b"Town");
-        input.extend_from_slice(&[0xED, 0xA0, 0x80]);
-        input.extend_from_slice("\u{3000}".as_bytes());
-        let mut locality: Vec<u8> = Vec::new();
-        locality.extend_from_slice(b"Town");
-        locality.extend_from_slice(&[0xED, 0xA0, 0x80]);
-        assert_eq!(split_compound_code(&input), Some((bytes("CODE"), locality)));
     }
 }
