@@ -305,7 +305,7 @@ def _validate_lat_lng(
         rendered, detonation = _guarded_repr(value)
         _refuse(
             f"{name} must be a LatLng, a (latitude, longitude) pair or "
-            f"a latitude/longitude dict, got {rendered}",
+            f"a latitude/longitude mapping, got {rendered}",
             detonation,
         )
     return {
@@ -503,7 +503,7 @@ def _location_body(
     if not isinstance(value, Mapping):
         rendered, detonation = _guarded_repr(value)
         _refuse(
-            f"location bias or restriction must be a dict, "
+            f"location bias or restriction must be a mapping, "
             f"got {rendered}",
             detonation,
         )
@@ -538,7 +538,7 @@ def _routing_body(value: Optional[Mapping[str, Any]]) -> Optional[dict[str, Any]
     if not isinstance(value, Mapping):
         rendered, detonation = _guarded_repr(value)
         _refuse(
-            f"routing_parameters must be a dict, got {rendered}", detonation
+            f"routing_parameters must be a mapping, got {rendered}", detonation
         )
     result = _mapping_copy("routing_parameters", value)
     origin = result.get("origin")
@@ -554,7 +554,7 @@ def _mapping_body(name: str, value: Optional[Mapping[str, Any]]) -> Optional[dic
         return None
     if not isinstance(value, Mapping):
         rendered, detonation = _guarded_repr(value)
-        _refuse(f"{name} must be a dict, got {rendered}", detonation)
+        _refuse(f"{name} must be a mapping, got {rendered}", detonation)
     result = _mapping_copy(name, value)
     _validate_dict_body(name, result)
     return result

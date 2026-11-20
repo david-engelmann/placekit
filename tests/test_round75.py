@@ -523,7 +523,7 @@ def test_lat_lng_else_bomb():
         client.autocomplete("x", origin=ReprBomb())
     assert caught.value.message == (
         "origin must be a LatLng, a (latitude, longitude) pair "
-        "or a latitude/longitude dict, "
+        "or a latitude/longitude mapping, "
         "got <unrepresentable ReprBomb>"
     )
     assert WRAP_WORDING not in caught.value.message
@@ -576,7 +576,7 @@ def test_mapping_body_bomb():
     with pytest.raises(ConfigError) as caught:
         client.text_search("q", ev_options=ReprBomb())
     assert caught.value.message == (
-        "ev_options must be a dict, got <unrepresentable ReprBomb>"
+        "ev_options must be a mapping, got <unrepresentable ReprBomb>"
     )
     assert WRAP_WORDING not in caught.value.message
     assert caught.value.__cause__ is REPR_BOOM
@@ -587,7 +587,7 @@ def test_location_body_bomb():
     with pytest.raises(ConfigError) as caught:
         client.text_search("q", location_bias=ReprBomb())
     assert caught.value.message == (
-        "location bias or restriction must be a dict, "
+        "location bias or restriction must be a mapping, "
         "got <unrepresentable ReprBomb>"
     )
     assert WRAP_WORDING not in caught.value.message
@@ -600,7 +600,7 @@ def test_routing_body_bomb():
     with pytest.raises(ConfigError) as caught:
         client.text_search("q", routing_parameters=ReprBomb())
     assert caught.value.message == (
-        "routing_parameters must be a dict, "
+        "routing_parameters must be a mapping, "
         "got <unrepresentable ReprBomb>"
     )
     assert WRAP_WORDING not in caught.value.message
