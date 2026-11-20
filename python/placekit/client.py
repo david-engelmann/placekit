@@ -21,12 +21,14 @@ from . import _placekit
 from ._placekit import PlacesError as _CorePlacesError
 from .exceptions import ConfigError, DecodeError, raise_translated
 from .fields import (
-    MAX_MATERIALIZED_ITEMS,
     FieldsLike,
+    normalize_fields,
+)
+from ._guarded import (
+    MAX_MATERIALIZED_ITEMS,
     _materialize_bounded,
     _safe_repr,
     _safe_type_name,
-    normalize_fields,
 )
 from .types import COLLECTION_CITIES, COLLECTION_REGIONS
 from .models import (
@@ -49,11 +51,11 @@ def _guarded_repr(value: Any) -> tuple[str, Optional[Exception]]:
     """Render a caller supplied value for a refusal message and
     capture the failure its raw repr raised, if it raised one.
 
-    The rendered form is the shared safe repr from the fields
-    module, which is the plain repr unchanged wherever the repr
-    works, so an ordinary value renders byte identically to the
-    raw formatting it replaces. Where the repr raises, the safe
-    form names the type through the guarded name reading, or
+    The rendered form is the shared safe repr from ._guarded,
+    the leaf module, which is the plain repr unchanged wherever
+    the repr works, so an ordinary value renders byte identically
+    to the raw formatting it replaces. Where the repr raises, the
+    safe form names the type through the guarded name reading, or
     stands in the fixed unrepresentable form where even the name
     cannot be read as a plain string. The probe read exists only
     to capture the original exception, so the refusal that uses
@@ -75,7 +77,7 @@ def _guarded_name(value: Any) -> tuple[str, Optional[Exception]]:
     raised one.
 
     The rendering decision is the shared guarded name reading
-    from the fields module. Where the name reads as a plain
+    from ._guarded, the leaf module. Where the name reads as a plain
     string it is returned unchanged, so an ordinary value names
     its type byte identically to the raw read it replaces. Where
     the name cannot be read as a plain string, because the read
@@ -152,7 +154,7 @@ def _string_list(
     memory runs out, and anything the iterable raises while being
     read surfaces as a ConfigError with the original exception
     chained (R20-F10). The read itself is the one shared bounded
-    loop in the fields module.
+    loop in ._guarded, the leaf module.
 
     Every slot this helper serves carries codes (type filters,
     price levels, region codes), so each item passes the same
@@ -314,12 +316,6 @@ def _validate_lat_lng(
     }
 
 
-def _point(
-    value: LatLng | tuple[float, float] | list[float] | Mapping[str, Any],
-) -> dict[str, float]:
-    return _validate_lat_lng(value, "location")
-
-
 def _circle_body(
     location: LatLng | tuple[float, float] | list[float] | Mapping[str, Any],
     radius_m: float,
@@ -389,8 +385,8 @@ def _mapping_copy(name: str, value: Mapping) -> dict[str, Any]:
     """Copy one caller mapping under the materialisation ceiling.
 
     The copy is built from the mapping's item stream through the
-    one shared bounded read loop in the fields module, which
-    counts items as they are consumed rather than entries
+    one shared bounded read loop in ._guarded, the leaf module,
+    which counts items as they are consumed rather than entries
     stored. A mapping whose stream never ends is refused after
     the ceiling instead of being consumed forever, including a
     stream that cycles over keys it already yielded and so never

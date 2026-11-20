@@ -5350,6 +5350,21 @@ def _loads(source: str) -> set[str]:
     return _fixtures_a_test_loads(textwrap.dedent(source), RECORDED_LOADERS)
 
 
+def _expand(source: str, blocks: dict) -> str:
+    # Audit A50-213: the one home of the sentinel expansion
+    # the round52 and round62 batteries used to define in
+    # byte identical copies. Each battery keeps its own
+    # table and binds this over it.
+    lines = []
+    for line in source.split("\n"):
+        block = blocks.get(line)
+        if block is None:
+            lines.append(line)
+        else:
+            lines.extend(block.split("\n"))
+    return "\n".join(lines)
+
+
 def _case_map():
     return {case["id"]: case for case in MANIFEST["cases"]}
 

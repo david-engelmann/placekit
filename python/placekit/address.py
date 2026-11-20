@@ -88,7 +88,7 @@ from typing import Optional, Sequence
 
 from . import _placekit, types
 from .exceptions import ConfigError
-from .fields import MAX_MATERIALIZED_ITEMS, _materialize_bounded, _safe_repr
+from ._guarded import MAX_MATERIALIZED_ITEMS, _materialize_bounded, _safe_repr
 from .models import AddressComponent, Place, PlusCode, PostalAddress
 
 # Component carriers assign from the types module constants so one
