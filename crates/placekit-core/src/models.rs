@@ -890,6 +890,14 @@ where
     D: serde::Deserializer<'de>,
 {
     let value = Value::deserialize(deserializer)?;
+    // An explicit null reads as the field's absent form, zero,
+    // the posture the family's option shell takes at its seats
+    // (audit A50-245). This function's only callers are the two
+    // Photo dimension fields, whose absent form already means
+    // zero.
+    if value == Value::Null {
+        return Ok(0);
+    }
     lenient_u32_value(&value)
         .ok_or_else(|| serde::de::Error::custom("expected a non-negative integer"))
 }
@@ -1761,6 +1769,15 @@ mod tests {
         .unwrap();
         assert_eq!(place.photos[0].width_px, 800);
         assert_eq!(place.photos[0].height_px, 600);
+        // Audit A50-245: an explicit null at a Photo dimension
+        // reads as the field's absent form, zero, the posture
+        // the family's option shell takes at its seats.
+        let place: Place = serde_json::from_str(
+            r#"{"id":"ChIJx","photos":[{"name":"p","widthPx":null,"heightPx":null}]}"#,
+        )
+        .unwrap();
+        assert_eq!(place.photos[0].width_px, 0);
+        assert_eq!(place.photos[0].height_px, 0);
         // Values the typed fields cannot represent are decode errors,
         // never silent truncations.
         assert!(serde_json::from_str::<Place>(r#"{"id":"ChIJx","userRatingCount":-3}"#).is_err());

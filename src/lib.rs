@@ -1155,8 +1155,19 @@ fn photo_to_py(
                 CoreError::Decode { detail, .. } => photo_conversion_err(py, detail, status),
                 other => photo_conversion_err(py, other, status),
             })?;
-            let typed =
-                value_to_py(py, &json, None).map_err(|e| photo_conversion_err(py, e, status))?;
+            let typed = value_to_py(py, &json, Some(status)).map_err(|e| {
+                // A finished PlacesError out of the conversion (the
+                // giant integer refusal in number_to_py is the seat
+                // that builds one) propagates as itself, exactly as
+                // it does on the JSON endpoints; only raw conversion
+                // failures take the photo wrap R4-22 requires
+                // (audit A50-244).
+                if e.is_instance_of::<PlacesError>(py) {
+                    e
+                } else {
+                    photo_conversion_err(py, e, status)
+                }
+            })?;
             let body = body.ok_or_else(|| {
                 photo_conversion_err(py, "photo URI result carried no response body", status)
             })?;

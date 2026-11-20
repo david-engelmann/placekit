@@ -1159,14 +1159,22 @@ class _Base:
         decode window, because the client built both sources for
         this call alone and drops them when the call returns.
         """
-        typed, body_text, status = payload
-
         def build(data: Any) -> Any:
+            typed, body_text, _status = data
             raw = json.loads(body_text)
             with _owned_decode(raw):
-                return convert(data, raw=raw)
+                return convert(typed, raw=raw)
 
-        return _Base._convert(build, typed, context, status=status)
+        try:
+            status = payload[2]
+        except (IndexError, TypeError, KeyError):
+            # A payload too malformed to carry its status is too
+            # malformed for the honest path too. Run it without
+            # the status and let the guarded conversion translate
+            # the shape into the conversion DecodeError (audit
+            # A50-243, the A50-226 pattern at the photo seats).
+            return _Base._convert(build, payload, context)
+        return _Base._convert(build, payload, context, status=status)
 
     # Body builders shared by the sync and async method sets.
 
