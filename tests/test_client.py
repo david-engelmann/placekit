@@ -10,7 +10,9 @@ from __future__ import annotations
 import asyncio
 import copy
 import json
+from collections.abc import Mapping
 from pathlib import Path
+from types import MappingProxyType
 
 import pytest
 
@@ -1699,6 +1701,96 @@ def test_location_body_requires_a_mapping(client):
         client.text_search("cafes", location_bias=[("circle", {})])
     with pytest.raises(ConfigError):
         client.text_search("cafes", location_bias="circle")
+
+
+def test_location_body_refuses_out_of_range_mapping_shapes(client, stub_server):
+    # A50-237 repair: the nested circle and rectangle were gated
+    # on dict alone, so a non dict mapping's center and corners
+    # were never range checked although the outer value accepts
+    # any mapping. Each out of range coordinate refuses here.
+    with pytest.raises(ConfigError):
+        client.text_search(
+            "cafes",
+            location_bias={
+                "circle": MappingProxyType(
+                    {
+                        "center": {"latitude": 999.0, "longitude": 0.0},
+                        "radius": 100.0,
+                    }
+                )
+            },
+        )
+    assert stub_server.last_request is None
+    with pytest.raises(ConfigError):
+        client.text_search(
+            "cafes",
+            location_restriction={
+                "rectangle": MappingProxyType(
+                    {
+                        "low": {"latitude": -999.0, "longitude": 0.0},
+                        "high": {"latitude": 1.0, "longitude": 1.0},
+                    }
+                )
+            },
+        )
+    assert stub_server.last_request is None
+
+
+def test_location_body_converts_mapping_shapes(client, stub_server):
+    # A50-237 repair: valid non dict mapping shapes are opened
+    # and their coordinates converted to wire shape, as dict
+    # shapes are, instead of passing through unconverted.
+    client.text_search(
+        "cafes",
+        location_bias={
+            "circle": MappingProxyType({"center": (10.0, 20.0), "radius": 100.0})
+        },
+    )
+    body = json.loads(stub_server.last_request["body"])
+    assert body["locationBias"]["circle"]["center"] == {
+        "latitude": 10.0,
+        "longitude": 20.0,
+    }
+    assert body["locationBias"]["circle"]["radius"] == 100.0
+    client.text_search(
+        "cafes",
+        location_restriction={
+            "rectangle": MappingProxyType({"low": (1.0, 2.0), "high": (3.0, 4.0)})
+        },
+    )
+    body = json.loads(stub_server.last_request["body"])
+    assert body["locationRestriction"]["rectangle"]["low"] == {
+        "latitude": 1.0,
+        "longitude": 2.0,
+    }
+    assert body["locationRestriction"]["rectangle"]["high"] == {
+        "latitude": 3.0,
+        "longitude": 4.0,
+    }
+
+
+def test_location_body_circle_read_detonation_is_a_config_error(client):
+    # A50-237 second repair: the circle gate looked for the
+    # center on the caller's mapping before copying it, so a
+    # mapping whose reads raise escaped as the bare error. The
+    # copy now runs first, through the guarded copy, and the
+    # detonation surfaces as a ConfigError with the original
+    # exception chained.
+    boom = RuntimeError("read boom")
+
+    class RaisingMapping(Mapping):
+        def __getitem__(self, key):
+            raise boom
+
+        def __iter__(self):
+            return iter(("center",))
+
+        def __len__(self):
+            return 1
+
+    with pytest.raises(ConfigError) as caught:
+        client.text_search("cafes", location_bias={"circle": RaisingMapping()})
+    assert caught.value.__cause__ is boom
 
 
 def test_radius_must_be_a_finite_number(client):
