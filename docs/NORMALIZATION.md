@@ -975,7 +975,7 @@ for source in (brooklyn_place, mall_place, saigon_place):
     parts = address.split_plus_code(source.plus_code)
     code_part = parts.code_part
     locality_text = parts.locality_text
-global_parts = address.split_plus_code(everest_place)
+global_parts = address.split_plus_code(everest_place.plus_code)
 ```
 
 [Cannot promise] The locality text of a compound plus code is reference
