@@ -1297,7 +1297,7 @@ pub struct AutocompleteResponse {
 }
 
 /// Downloaded photo media.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PhotoResponse {
     pub bytes: Vec<u8>,
     pub content_type: Option<String>,
@@ -1627,6 +1627,20 @@ mod tests {
         // compile time, so dropping the derive fails this build.
         fn requires_eq<T: Eq>(_: &T) {}
         requires_eq(&sent);
+    }
+
+    #[test]
+    fn photo_response_names_eq() {
+        // Audit A50-257: PhotoResponse was the one constructed
+        // record stopping at PartialEq although both its fields
+        // are Eq. The bound is compile time, so dropping the
+        // derive fails this build.
+        fn requires_eq<T: Eq>(_: &T) {}
+        let response = PhotoResponse {
+            bytes: vec![1, 2, 3],
+            content_type: Some("image/jpeg".to_owned()),
+        };
+        requires_eq(&response);
     }
 
     #[test]
