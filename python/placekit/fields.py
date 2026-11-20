@@ -463,11 +463,14 @@ def _valid_path(path: str) -> bool:
 
     Since Round 54 this function is the caller side exercise of
     the construction check. The constructor runs it at the old
-    site so a member whose own reads raise surfaces the raise
-    exactly where it always did, and its answer is no longer the
-    verdict. The verdict comes from the core over the value as
-    sent, which the module docstring states as the delegation
-    boundary.
+    site for every member whose type is not exactly str, so a
+    member whose own reads raise surfaces the raise exactly
+    where it always did, and its answer is no longer the
+    verdict. An exact string member skips the exercise, since
+    its reads run on the string's own buffer and no caller code
+    can run inside them (audit A50-209). The verdict comes from
+    the core over the value as sent, which the module docstring
+    states as the delegation boundary.
     """
     if not path or path.strip() != path or "," in path:
         return False

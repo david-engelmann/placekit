@@ -273,7 +273,7 @@ def _validate_lat_lng(
     """Validate one coordinate pair and return it in wire shape.
 
     Only ordered containers are accepted (LatLng, tuple, list, or a
-    wire-shape dict); a set would unpack latitude and longitude in an
+    wire-shape mapping); a set would unpack latitude and longitude in an
     arbitrary order. Values must be int or float instances,
     bools are not numbers here, NaN and infinity are rejected
     instead of serializing as JSON null, and the ranges match
@@ -486,11 +486,11 @@ def _location_body(
     value: Optional[Mapping[str, Any]],
     name: str = "location bias or restriction",
 ) -> Optional[dict[str, Any]]:
-    """Normalize a location bias or restriction dict into wire shape.
+    """Normalize a location bias or restriction mapping into wire shape.
 
     Callers may describe a circle as ``{"circle": {"center":
     (latitude, longitude), "radius": meters}}`` with the center as a
-    ``LatLng``, a tuple, a list or a wire-shape dict, or pass a
+    ``LatLng``, a tuple, a list or a wire-shape mapping, or pass a
     rectangle with ``low`` and ``high`` corners in any of those forms.
     Values already in wire shape pass through. Coordinates are range
     checked here; the Rust core validates the rest (one shape only,
@@ -509,14 +509,15 @@ def _location_body(
         )
     result = _mapping_copy(name, value)
     circle = result.get("circle")
-    if isinstance(circle, dict) and "center" in circle:
+    if isinstance(circle, Mapping):
         circle = _mapping_copy(name, circle)
-        center = circle["center"]
-        if isinstance(center, (LatLng, tuple, list, Mapping)):
-            circle["center"] = _validate_lat_lng(center, "circle center")
-        result["circle"] = circle
+        if "center" in circle:
+            center = circle["center"]
+            if isinstance(center, (LatLng, tuple, list, Mapping)):
+                circle["center"] = _validate_lat_lng(center, "circle center")
+            result["circle"] = circle
     rectangle = result.get("rectangle")
-    if isinstance(rectangle, dict):
+    if isinstance(rectangle, Mapping):
         rectangle = _mapping_copy(name, rectangle)
         for corner in ("low", "high"):
             point = rectangle.get(corner)
@@ -531,7 +532,7 @@ def _location_body(
 
 def _routing_body(value: Optional[Mapping[str, Any]]) -> Optional[dict[str, Any]]:
     """Normalize routing parameters, converting an origin given as a
-    ``LatLng``, a tuple, a list or a wire-shape dict into wire shape."""
+    ``LatLng``, a tuple, a list or a wire-shape mapping into wire shape."""
     if value is None:
         return None
     if not isinstance(value, Mapping):
@@ -1431,7 +1432,7 @@ class Client(_Base):
         ``search_along_route`` take the API's camelCase dict shapes.
         ``routing_parameters`` takes a dict whose ``origin`` may be a
         ``LatLng``, a ``(latitude, longitude)`` tuple or list, or a
-        latitude and longitude dict. The dict shaped parameters
+        latitude and longitude mapping. The dict shaped parameters
         (``location_bias``, ``location_restriction``, ``ev_options``,
         ``search_along_route`` and ``routing_parameters``) accept any
         mapping, not only a dict.
@@ -1493,7 +1494,7 @@ class Client(_Base):
         """Search for places around ``location`` within ``radius_m`` meters.
 
         ``location`` may be a ``LatLng``, a ``(latitude, longitude)``
-        tuple or list, or a latitude and longitude dict.
+        tuple or list, or a latitude and longitude mapping.
         ``rank_preference`` is ``"DISTANCE"`` or ``"POPULARITY"``.
         The type filters take up to 50 place types each, and a type
         listed in both an included and an excluded filter is an
@@ -1613,7 +1614,7 @@ class Client(_Base):
         """Get place predictions for partial input text.
 
         Pass ``origin`` (a ``LatLng``, a ``(latitude, longitude)``
-        tuple or list, or a latitude and longitude dict) to get
+        tuple or list, or a latitude and longitude mapping) to get
         ``distance_meters`` on predictions; without an
         origin the API returns no distances. ``included_primary_types``
         takes up to 5 place types, or the single collection ``(cities)``
@@ -1921,7 +1922,7 @@ class AsyncClient(_Base):
         ``search_along_route`` take the API's camelCase dict shapes.
         ``routing_parameters`` takes a dict whose ``origin`` may be a
         ``LatLng``, a ``(latitude, longitude)`` tuple or list, or a
-        latitude and longitude dict. The dict shaped parameters
+        latitude and longitude mapping. The dict shaped parameters
         (``location_bias``, ``location_restriction``, ``ev_options``,
         ``search_along_route`` and ``routing_parameters``) accept any
         mapping, not only a dict.
@@ -1982,7 +1983,7 @@ class AsyncClient(_Base):
         """Async version of ``Client.nearby_search``.
 
         ``location`` may be a ``LatLng``, a ``(latitude, longitude)``
-        tuple or list, or a latitude and longitude dict.
+        tuple or list, or a latitude and longitude mapping.
         ``rank_preference`` is ``"DISTANCE"`` or ``"POPULARITY"``.
         The type filters take up to 50 place types each, and a type
         listed in both an included and an excluded filter is an
@@ -2102,7 +2103,7 @@ class AsyncClient(_Base):
         """Async version of ``Client.autocomplete``.
 
         Pass ``origin`` (a ``LatLng``, a ``(latitude, longitude)``
-        tuple or list, or a latitude and longitude dict) to get
+        tuple or list, or a latitude and longitude mapping) to get
         ``distance_meters`` on predictions; without an
         origin the API returns no distances. ``included_primary_types``
         takes up to 5 place types, or the single collection ``(cities)``
@@ -2156,17 +2157,24 @@ class AsyncClient(_Base):
     ) -> PhotoMedia | PhotoUriResult:
         """Async version of ``Client.place_photo``.
 
-        A ``Photo`` object may be passed instead of its name, with
-        the same size defaulting as the sync method. With a
-        ``Photo`` and neither size argument, the width defaults to
-        the photo native width capped at 4800, or the height when
-        the photo carries no width. A native width can be large,
-        so a caller who wants a thumbnail must pass a size.
-        Passing either size argument switches the defaulting off.
-        A bare name still requires at least one size argument.
+        Download a photo by its resource name.
 
-        By default awaiting this follows the endpoint's redirect
-        and returns a ``PhotoMedia`` with the image bytes. With
+        ``photo_name`` comes from ``Place.photos[i].name``. At least one of
+        ``max_width_px`` and ``max_height_px`` is required (each 1 to 4800).
+
+        A ``Photo`` object from ``Place.photos`` may be passed
+        instead of its name. With a ``Photo`` and neither size
+        argument, one size defaults from the photo itself. The
+        width becomes the photo native width capped at 4800, or
+        the height when the photo carries no width. A native width
+        can be large, so a caller who wants a thumbnail must pass
+        a size. Passing either size argument switches the
+        defaulting off and uses the sizes exactly as given. A bare
+        name carries no dimensions, so nothing can default from
+        it and the at least one size rule above stands for names.
+
+        By default awaiting this follows the endpoint's redirect and returns a
+        ``PhotoMedia`` with the image bytes. With
         ``skip_http_redirect=True`` it returns a ``PhotoUriResult``
         carrying the photo's short lived URI instead, with the full
         JSON form the endpoint returned preserved on its ``raw``.
