@@ -2197,9 +2197,10 @@ class Place:
     ev_charge_options: Optional[EvChargeOptions] = None
     address_descriptor: Optional[AddressDescriptor] = None
     #: The full response payload for this place, including any fields this
-    #: client version does not model yet. A deep copy of the payload, so
-    #: it shares no mutable state with the caller's dict. Excluded from
-    #: repr and equality, which are about the modelled fields.
+    #: client version does not model yet. A deep copy of the payload, or
+    #: at the top of a client call the parsed body itself, so it shares
+    #: no mutable state with the caller's dict. Excluded from repr and
+    #: equality, which are about the modelled fields.
     raw: dict[str, Any] = field(default_factory=dict, repr=False, compare=False)
 
     def __post_init__(self) -> None:
