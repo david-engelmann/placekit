@@ -111,7 +111,7 @@ impl LatLng {
 }
 
 /// A text value paired with its language.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LocalizedText {
     #[serde(default, skip_serializing_if = "wire_string_absent")]
@@ -223,7 +223,7 @@ pub struct EvOptions {
 }
 
 /// A polyline in encoded or GeoJSON form, used by search along route.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Polyline {
     #[serde(default, skip_serializing_if = "none_or_empty_string")]
@@ -231,13 +231,13 @@ pub struct Polyline {
 }
 
 /// Parameters for Text Search along a route.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SearchAlongRouteParameters {
     pub polyline: Polyline,
 }
 
 /// Route features to avoid when computing routing summaries.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RouteModifiers {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -954,7 +954,7 @@ fn none_or_empty_vec(value: &Option<Vec<String>>) -> bool {
 }
 
 /// A photo attached to a place.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Photo {
     /// Resource name, for example `places/{id}/photos/{ref}`. Pass this to
@@ -986,7 +986,7 @@ pub struct Photo {
 }
 
 /// Attribution for a photo or a place.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AuthorAttribution {
     #[serde(default, skip_serializing_if = "wire_string_absent")]
@@ -1000,7 +1000,7 @@ pub struct AuthorAttribution {
 }
 
 /// Provider attribution attached to a place (Place Details responses).
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Attribution {
     #[serde(default, skip_serializing_if = "wire_string_absent")]
@@ -1013,7 +1013,7 @@ pub struct Attribution {
 
 /// A calendar date, as used by opening hour points. A zero field means
 /// that component is unset in the API value.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Date {
     #[serde(default, skip_serializing_if = "is_zero_i32")]
     pub year: i32,
@@ -1028,7 +1028,7 @@ pub struct Date {
 /// One end of an opening period. `day` is 0 for Sunday through 6 for
 /// Saturday, but the first period in a list does not start on any fixed
 /// day, and period order is independent of weekday description order.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OpeningPoint {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1046,7 +1046,7 @@ pub struct OpeningPoint {
 }
 
 /// A single open/close span within opening hours.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Period {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1058,7 +1058,7 @@ pub struct Period {
 }
 
 /// Regular opening hours of a place.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OpeningHours {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1072,7 +1072,7 @@ pub struct OpeningHours {
 }
 
 /// One component of a structured address.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AddressComponent {
     #[serde(default, skip_serializing_if = "wire_string_absent")]
@@ -1088,7 +1088,7 @@ pub struct AddressComponent {
 }
 
 /// Plus code location reference for a place.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PlusCode {
     #[serde(default, skip_serializing_if = "wire_string_absent")]
@@ -1100,7 +1100,7 @@ pub struct PlusCode {
 }
 
 /// A postal address in structured form.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PostalAddress {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1210,7 +1210,7 @@ pub struct SearchResponse {
 /// presence based (R4-24): a start offset of 0 is a real value the API
 /// sends, so the fields are optional rather than zero-skipped, and a
 /// decoded 0 survives reserialization instead of vanishing from `raw`.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StringMatch {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1222,7 +1222,7 @@ pub struct StringMatch {
 }
 
 /// Text with match ranges, as returned by Autocomplete.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FormattedText {
     #[serde(default, skip_serializing_if = "wire_string_absent")]
@@ -1234,7 +1234,7 @@ pub struct FormattedText {
 }
 
 /// The main/secondary split of a prediction's display text.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StructuredFormat {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1246,7 +1246,7 @@ pub struct StructuredFormat {
 }
 
 /// A predicted place from Autocomplete.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PlacePrediction {
     /// Resource name of the suggested place, for example
@@ -1272,7 +1272,7 @@ pub struct PlacePrediction {
 }
 
 /// One autocomplete suggestion.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Suggestion {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1284,7 +1284,7 @@ pub struct Suggestion {
 }
 
 /// Response of Autocomplete.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AutocompleteResponse {
     #[serde(default, skip_serializing_if = "wire_list_absent")]
@@ -1305,7 +1305,7 @@ pub struct PhotoResponse {
 
 /// The JSON form of the photo media response, returned when the redirect
 /// is skipped: a short lived URI the caller can render or fetch.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PhotoMediaJson {
     #[serde(default, skip_serializing_if = "wire_string_absent")]
@@ -1318,7 +1318,7 @@ pub struct PhotoMediaJson {
 
 /// Result of a photo media request: downloaded bytes by default, or the
 /// JSON photo URI form when the caller asked to skip the redirect.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PhotoMedia {
     Bytes(PhotoResponse),
     Uri(PhotoMediaJson),
@@ -1641,6 +1641,40 @@ mod tests {
             content_type: Some("image/jpeg".to_owned()),
         };
         requires_eq(&response);
+    }
+
+    #[test]
+    fn serde_models_name_eq_where_their_members_allow() {
+        // Audit A50-258: the serde model family stopped at
+        // PartialEq as one uniform set, although most members
+        // support Eq through their whole field closure. The
+        // bound is compile time, so dropping any one derive
+        // fails this build. The barred remainder carries a
+        // float, directly, through WireFloat, or inside a
+        // nested model.
+        fn requires_eq<T: Eq>(_: &T) {}
+        requires_eq(&LocalizedText::default());
+        requires_eq(&Polyline::default());
+        requires_eq(&SearchAlongRouteParameters::default());
+        requires_eq(&RouteModifiers::default());
+        requires_eq(&Photo::default());
+        requires_eq(&AuthorAttribution::default());
+        requires_eq(&Attribution::default());
+        requires_eq(&Date::default());
+        requires_eq(&OpeningPoint::default());
+        requires_eq(&Period::default());
+        requires_eq(&OpeningHours::default());
+        requires_eq(&AddressComponent::default());
+        requires_eq(&PlusCode::default());
+        requires_eq(&PostalAddress::default());
+        requires_eq(&StringMatch::default());
+        requires_eq(&FormattedText::default());
+        requires_eq(&StructuredFormat::default());
+        requires_eq(&PlacePrediction::default());
+        requires_eq(&Suggestion::default());
+        requires_eq(&AutocompleteResponse::default());
+        requires_eq(&PhotoMediaJson::default());
+        requires_eq(&PhotoMedia::Uri(PhotoMediaJson::default()));
     }
 
     #[test]
