@@ -957,10 +957,12 @@ class TestConversionStatusAndGuardCoverage:
         # response status and reported none.
         raw_response(
             200,
-            '{"id": "places/x", "untypedCounter": ' + "9" * 4301 + "}",
+            '{"id": "places/ChIJrTLr-GyuEmsRBfy61i59si0", "untypedCounter": '
+            + "9" * 4301
+            + "}",
         )
         with pytest.raises(DecodeError) as caught:
-            client.place_details("places/x")
+            client.place_details("ChIJrTLr-GyuEmsRBfy61i59si0")
         assert caught.value.status_code == 200
 
     def test_giant_integer_refusal_carries_the_response_status_async(
@@ -968,13 +970,15 @@ class TestConversionStatusAndGuardCoverage:
     ):
         raw_response(
             200,
-            '{"id": "places/x", "untypedCounter": ' + "9" * 4301 + "}",
+            '{"id": "places/ChIJrTLr-GyuEmsRBfy61i59si0", "untypedCounter": '
+            + "9" * 4301
+            + "}",
         )
 
         async def run():
             client = AsyncClient(api_key, base_url=base_url)
             with pytest.raises(DecodeError) as caught:
-                await client.place_details("places/x")
+                await client.place_details("ChIJrTLr-GyuEmsRBfy61i59si0")
             return caught.value
 
         assert asyncio.run(run()).status_code == 200
