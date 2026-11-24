@@ -4,11 +4,15 @@ Round 66 taught the build to carry the cargo audit disposition
 record at .cargo/audit.toml in the source distribution, through
 an include entry on the [tool.maturin] table of pyproject.toml.
 The build tool's standing dot path rule would otherwise leave
-the file out, and an audit run from the sdist would resurface
-two published advisories without the dispositions and the
-reachability rationale the repository records for them. Nothing
-pinned the carriage, so a later edit dropping the include entry
-would regress it silently. These pins parse the manifest with
+the file out, and an audit run from the sdist would read a
+different record than the one the repository keeps. The record
+once carried dispositions for two published advisories against
+the old PyO3, each with the reachability rationale the
+repository recorded for it. Since the move to PyO3 0.29 the
+record carries an empty ignore list, and the pins below hold
+it there. Nothing pinned the carriage, so a later edit
+dropping the include entry would regress it silently. These
+pins parse the manifest with
 a real TOML parser on every interpreter, tomllib where the
 interpreter carries it and tomli, the backport of the same
 parser, on the floor interpreter that does not. A hand rolled
@@ -21,12 +25,13 @@ counts only when it is exactly one entry whose path is exactly
 .cargo/audit.toml and whose format is exactly sdist, with no
 second entry beside it and no extra key on the entry. The
 audit record itself is read as parsed data too, and it counts
-only when its ignore list names exactly the two recorded
-advisories, so a record emptied to zero bytes fails the pin
-the same way a missing one does. The mutation and spelling
-cases beside the control case hold the pins to those
-decisions, so they cannot pass on a manifest that merely
-mentions the file. The pins stay static. The guard at the
+only when its ignore list is exactly empty, so a record
+emptied to zero bytes fails the pin the same way a missing
+one does, and an ignore returning to the list fails it too.
+The mutation and spelling cases beside the control case hold
+the pins to those decisions, so they cannot pass on a manifest
+that merely mentions the file. The pins stay static. The
+guard at the
 end of this module goes one step further and builds the
 real source distribution with maturin, then asserts on the
 artifact itself. It names the audit record member under the
@@ -76,7 +81,6 @@ AUDIT_RECORD = ROOT / ".cargo" / "audit.toml"
 AUDIT_PATH = ".cargo/audit.toml"
 SDIST_FORMAT = "sdist"
 EXPECTED_ENTRY = {"path": AUDIT_PATH, "format": SDIST_FORMAT}
-RECORDED_ADVISORIES = ["RUSTSEC-2025-0020", "RUSTSEC-2026-0177"]
 INCLUDE_LINE = 'include = [{ path = ".cargo/audit.toml", format = "sdist" }]'
 
 
@@ -106,15 +110,9 @@ def recorded_advisories(text: str) -> object:
     return advisories.get("ignore")
 
 
-def audit_record_names_the_recorded_advisories(text: str) -> bool:
-    """Whether the record names exactly the two recorded advisories."""
-    ignore = recorded_advisories(text)
-    return (
-        isinstance(ignore, list)
-        and len(ignore) == len(RECORDED_ADVISORIES)
-        and all(isinstance(item, str) for item in ignore)
-        and set(ignore) == set(RECORDED_ADVISORIES)
-    )
+def audit_record_ignores_no_advisories(text: str) -> bool:
+    """Whether the record's ignore list is exactly empty."""
+    return recorded_advisories(text) == []
 
 
 def manifest_text() -> str:
@@ -137,8 +135,8 @@ def test_sdist_include_carries_the_audit_record() -> None:
     assert carries_audit_record(manifest_text())
 
 
-def test_audit_record_names_the_recorded_advisories() -> None:
-    assert audit_record_names_the_recorded_advisories(audit_record_text())
+def test_audit_record_ignores_no_advisories() -> None:
+    assert audit_record_ignores_no_advisories(audit_record_text())
 
 
 def test_pin_fails_without_the_include_entry() -> None:
@@ -200,23 +198,21 @@ def test_pin_passes_with_whitespace_in_the_section_header() -> None:
 def test_pin_fails_on_an_emptied_audit_record() -> None:
     text = audit_record_text()
     assert text != ""
-    assert not audit_record_names_the_recorded_advisories("")
+    assert not audit_record_ignores_no_advisories("")
 
 
-def test_pin_fails_when_an_advisory_is_dropped_from_the_record() -> None:
-    lines = audit_record_text().splitlines()
-    kept = [line for line in lines if "RUSTSEC-2026-0177" not in line]
-    assert len(kept) < len(lines)
-    assert not audit_record_names_the_recorded_advisories("\n".join(kept))
+def test_pin_fails_when_a_retired_advisory_is_ignored_again() -> None:
+    text = audit_record_text()
+    mutated = text.replace("ignore = []", 'ignore = ["RUSTSEC-2025-0020"]')
+    assert mutated != text
+    assert not audit_record_ignores_no_advisories(mutated)
 
 
 def test_pin_fails_with_an_extra_advisory_in_the_record() -> None:
     text = audit_record_text()
-    mutated = text.replace(
-        '"RUSTSEC-2026-0177",', '"RUSTSEC-2026-0177",\n    "RUSTSEC-9999-9999",'
-    )
+    mutated = text.replace("ignore = []", 'ignore = ["RUSTSEC-9999-9999"]')
     assert mutated != text
-    assert not audit_record_names_the_recorded_advisories(mutated)
+    assert not audit_record_ignores_no_advisories(mutated)
 
 
 # The artifact guard. The pins above decide the manifest and the
