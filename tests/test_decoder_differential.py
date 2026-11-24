@@ -88,6 +88,16 @@ to something that is not itself. The literals' key order is the
 sorted order the locked serde_json build (no preserve_order
 feature) emits at every object level.
 
+Slice 1 adds the number envelope expectations at the end of this
+module. Where the sample above pins the oracle on three bodies,
+the envelope set pins values per case, for both routes: integer
+text at and past the machine boundaries in flatten seats and in
+the known numeric seats whose typed carriers decide their fate,
+the carriers' three accepted encodings and the values they
+surface, float text at its precision edges, and the refusals at
+the carriers' hard edge, where a value the carrier cannot hold
+is a decode error on both routes rather than a correction.
+
 The comparator carries its own pins below, because a comparator
 that cannot fail proves nothing: int against float, bool against
 int, negative zero against positive zero, a missing key, a
@@ -567,3 +577,452 @@ def test_oracle_matches_hand_built_expectations(
     assert_same_python_object(typed, expected_typed)
     assert body_text == body.decode()
     assert status == 200
+
+
+
+# -- slice 1: the number envelope expectations ------------------------------
+#
+# Slice 0 compared route against route and pinned the oracle to a
+# three case sample. This section pins the number envelope itself:
+# every case below carries a hand-built expected typed dict, and
+# both routes are checked against the literal, so the envelope is
+# pinned to values rather than to agreement between two copies of
+# the same code. The verdicts are derived from the two places that
+# decide a number's fate. In the bindings, number_to_py keeps an
+# integer exact at any size (an i64, then a u64, then the exact
+# decimal text read by Python's int) and sends any token carrying
+# a fraction or an exponent to f64. In the core, the typed carriers
+# decide first: rating is a plain f64, and the lenient count and
+# dimension decoders accept an integer token, a canonical unsigned
+# decimal string, or an exactly integral float inside the carrier,
+# and refuse anything the carrier cannot hold (past the top,
+# negative, fractional) as a decode error rather than correcting
+# it. Unknown fields skip the carriers and ride the flatten maps
+# straight to number_to_py.
+
+ENVELOPE_CASES = [
+    pytest.param(
+        "details",
+        b'{"id": "dec1-flat", "xI64Max": 9223372036854775807,'
+        b' "xI64Min": -9223372036854775808,'
+        b' "xNegOne": -1, "xNegZero": -0, "xZero": 0}',
+        {
+            # The i64 edges cross as exact ints. A negative zero
+            # integer token has no fraction or exponent, so it
+            # takes the integer path and crosses as the int 0:
+            # integer zero carries no sign across the boundary.
+            "id": "dec1-flat",
+            "xI64Max": 9223372036854775807,
+            "xI64Min": -9223372036854775808,
+            "xNegOne": -1,
+            "xNegZero": 0,
+            "xZero": 0,
+        },
+        id="flatten-i64-edges",
+    ),
+    pytest.param(
+        "details",
+        b'{"id": "dec1-flat", "xI64Past": 9223372036854775808,'
+        b' "xI64MinPast": -9223372036854775809,'
+        b' "xU64Max": 18446744073709551615}',
+        {
+            # One past each i64 edge and the u64 top still cross
+            # exact: past i64 the value rides the u64 arm of
+            # number_to_py, and below i64 min it rides the exact
+            # decimal text arm. Neither is rounded.
+            "id": "dec1-flat",
+            "xI64MinPast": -9223372036854775809,
+            "xI64Past": 9223372036854775808,
+            "xU64Max": 18446744073709551615,
+        },
+        id="flatten-past-i64",
+    ),
+    pytest.param(
+        "details",
+        b'{"id": "dec1-flat",'
+        b' "xLong": 123456789012345678901234567890123456789012345678901234567890,'
+        b' "xLongNeg": -9876543210987654321098765432109876543210,'
+        b' "xU64Past": 18446744073709551616}',
+        {
+            # Past u64 the integer text arm still crosses exact,
+            # at sixty digits as at twenty. The only ceiling on
+            # this arm is the interpreter digit limit, whose
+            # refusal slice 0 already pins.
+            "id": "dec1-flat",
+            "xLong": 123456789012345678901234567890123456789012345678901234567890,
+            "xLongNeg": -9876543210987654321098765432109876543210,
+            "xU64Past": 18446744073709551616,
+        },
+        id="flatten-past-u64",
+    ),
+    pytest.param(
+        "details",
+        b'{"id": "dec1-flat", "xExp": 1e2, "xExpCap": 1E2,'
+        b' "xExpNeg": 123e-3, "xHuge": 1e400, "xHugeNeg": -1e400,'
+        b' "xIntValuedExp": 7e22,'
+        b' "xJustAboveOne": 1.0000000000000002,'
+        b' "xLongDecimal": 3.141592653589793238462643383279,'
+        b' "xLossy": 0.30000000000000004,'
+        b' "xNegZero": -0.0, "xNegZeroExp": -0e0,'
+        b' "xPast53": 9007199254740993.0,'
+        b' "xPointZero": 42.0, "xPosZero": 0.0,'
+        b' "xTiny": 1e-400, "xTinyNeg": -1e-400}',
+        {
+            # Every token here carries a fraction or an exponent,
+            # so every verdict is number_to_py's float arm, stated
+            # as the value that arm produces. Exponent forms are
+            # floats even when their value is integral. A float
+            # token naming an integer one past 2**53 rounds to
+            # 2**53. Underflow lands on a signed zero, which the
+            # comparator's repr check keeps apart from its twin.
+            # Overflow does not saturate: the arbitrary precision
+            # Number's as_f64 returns None for a magnitude past
+            # the f64 range, and the float arm's fallback for
+            # None is NaN (src/lib.rs, number_to_py), so both
+            # huge tokens cross as NaN and the negative one's
+            # sign is lost with its magnitude. The pin records
+            # that verdict as it stands; a candidate serializer
+            # that saturates to infinity fails here.
+            "id": "dec1-flat",
+            "xExp": 100.0,
+            "xExpCap": 100.0,
+            "xExpNeg": 0.123,
+            "xHuge": float("nan"),
+            "xHugeNeg": float("nan"),
+            "xIntValuedExp": 7e22,
+            "xJustAboveOne": 1.0000000000000002,
+            "xLongDecimal": 3.141592653589793238462643383279,
+            "xLossy": 0.30000000000000004,
+            "xNegZero": -0.0,
+            "xNegZeroExp": -0.0,
+            "xPast53": 9007199254740992.0,
+            "xPointZero": 42.0,
+            "xPosZero": 0.0,
+            "xTiny": 0.0,
+            "xTinyNeg": -0.0,
+        },
+        id="flatten-float-verdicts",
+    ),
+    pytest.param(
+        "details",
+        b'{"id": "dec1-rating", "rating": 4}',
+        {
+            # The rating carrier is an f64, so an integer token
+            # crosses as the float it names.
+            "id": "dec1-rating",
+            "rating": 4.0,
+        },
+        id="rating-int-token",
+    ),
+    pytest.param(
+        "details",
+        b'{"id": "dec1-rating",'
+        b' "rating": 4.123456789012345678901234567890}',
+        {
+            # A long decimal rating keeps the carrier's f64
+            # verdict, which is not the double Python's own
+            # parser picks for the same text: the core parses
+            # the token through serde_json's arbitrary precision
+            # float conversion, which lands one ULP above the
+            # correctly rounded neighbour on this token. The
+            # literal below is the double the carrier actually
+            # holds (its repr), and the pin records the
+            # carrier's verdict because reproducing it, not the
+            # ideal rounding, is the batch's obligation.
+            "id": "dec1-rating",
+            "rating": 4.123456789012346,
+        },
+        id="rating-long-decimal",
+    ),
+    pytest.param(
+        "details",
+        b'{"id": "dec1-rating", "rating": 1e2}',
+        {"id": "dec1-rating", "rating": 100.0},
+        id="rating-exponent-hundred",
+    ),
+    pytest.param(
+        "details",
+        b'{"id": "dec1-rating", "rating": 5e-1}',
+        {"id": "dec1-rating", "rating": 0.5},
+        id="rating-exponent-fraction",
+    ),
+    pytest.param(
+        "details",
+        b'{"id": "dec1-rating", "rating": -0.0}',
+        {
+            # The f64 carrier holds the sign of zero and the
+            # conversion keeps it.
+            "id": "dec1-rating",
+            "rating": -0.0,
+        },
+        id="rating-negative-zero",
+    ),
+    pytest.param(
+        "details",
+        b'{"id": "dec1-count", "userRatingCount": 0}',
+        {
+            # A count of zero is a sent value, not an absence:
+            # the field's skip guard is absence only, so the key
+            # stays with its zero.
+            "id": "dec1-count",
+            "userRatingCount": 0,
+        },
+        id="count-zero",
+    ),
+    pytest.param(
+        "details",
+        b'{"id": "dec1-count",'
+        b' "userRatingCount": 18446744073709551615}',
+        {
+            # The u64 carrier's own top, as an integer token,
+            # crosses exact.
+            "id": "dec1-count",
+            "userRatingCount": 18446744073709551615,
+        },
+        id="count-u64-max",
+    ),
+    pytest.param(
+        "details",
+        b'{"id": "dec1-count", "userRatingCount": "42"}',
+        {"id": "dec1-count", "userRatingCount": 42},
+        id="count-string-small",
+    ),
+    pytest.param(
+        "details",
+        b'{"id": "dec1-count",'
+        b' "userRatingCount": "18446744073709551615"}',
+        {
+            # The string form is the canonical unsigned decimal,
+            # and it reaches the same top of the carrier.
+            "id": "dec1-count",
+            "userRatingCount": 18446744073709551615,
+        },
+        id="count-string-u64-max",
+    ),
+    pytest.param(
+        "details",
+        b'{"id": "dec1-count", "userRatingCount": 42.0}',
+        {
+            # An exactly integral float encoding carries the
+            # same count as the integer token. Note the contrast
+            # with a flatten seat, where 42.0 stays a float: the
+            # carrier decides the fate, not the token alone.
+            "id": "dec1-count",
+            "userRatingCount": 42,
+        },
+        id="count-float-integral",
+    ),
+    pytest.param(
+        "details",
+        b'{"id": "dec1-count", "userRatingCount": 1e19}',
+        {
+            # 1e19 is exactly representable as an f64 and sits
+            # inside the carrier, so the float encoding surfaces
+            # as that exact integer.
+            "id": "dec1-count",
+            "userRatingCount": 10000000000000000000,
+        },
+        id="count-float-big",
+    ),
+    pytest.param(
+        "details",
+        b'{"id": "dec1-count", "userRatingCount": -0.0}',
+        {
+            # Negative zero as a float encoding is integral and
+            # not below zero (the lenient range admits it as
+            # zero), so it surfaces as the count 0.
+            "id": "dec1-count",
+            "userRatingCount": 0,
+        },
+        id="count-float-negative-zero",
+    ),
+    pytest.param(
+        "details",
+        b'{"id": "dec1-photo", "photos": [{'
+        b'"name": "places/dec1-photo/photos/p",'
+        b' "widthPx": "4800", "heightPx": 300.0}]}',
+        {
+            # The dimension carriers are u32 behind the same
+            # lenient decoder: the string form and the integral
+            # float form both surface as ints.
+            "id": "dec1-photo",
+            "photos": [
+                {
+                    "heightPx": 300,
+                    "name": "places/dec1-photo/photos/p",
+                    "widthPx": 4800,
+                }
+            ],
+        },
+        id="photo-dimension-forms",
+    ),
+    pytest.param(
+        "details",
+        b'{"id": "dec1-photo", "photos": [{'
+        b'"name": "places/dec1-photo/photos/p",'
+        b' "widthPx": 4294967295, "heightPx": "4294967295"}]}',
+        {
+            # The u32 top in both encodings.
+            "id": "dec1-photo",
+            "photos": [
+                {
+                    "heightPx": 4294967295,
+                    "name": "places/dec1-photo/photos/p",
+                    "widthPx": 4294967295,
+                }
+            ],
+        },
+        id="photo-dimension-max",
+    ),
+    pytest.param(
+        "details",
+        b'{"id": "dec1-photo", "photos": [{'
+        b'"name": "places/dec1-photo/photos/p",'
+        b' "widthPx": 0, "heightPx": null}]}',
+        {
+            # A zero dimension is the field's absent form and
+            # its key is omitted; an explicit null reads as the
+            # same zero, so both keys are gone and the photo
+            # carries only its name.
+            "id": "dec1-photo",
+            "photos": [{"name": "places/dec1-photo/photos/p"}],
+        },
+        id="photo-dimension-zero-and-null",
+    ),
+    pytest.param(
+        "search",
+        b'{"places": [{"id": "dec1-s",'
+        b' "rating": 4.567890123456789,'
+        b' "userRatingCount": 9223372036854775807}]}',
+        {
+            # The same carriers at the search seat: the rating
+            # keeps its f64 precision and the count crosses
+            # exact at the i64 top.
+            "places": [
+                {
+                    "id": "dec1-s",
+                    "rating": 4.567890123456789,
+                    "userRatingCount": 9223372036854775807,
+                }
+            ],
+        },
+        id="search-known-carriers",
+    ),
+]
+
+
+@pytest.mark.parametrize("seat,body,expected_typed", ENVELOPE_CASES)
+def test_number_envelope_matches_hand_built_expectations(
+    oracle_native,
+    subject_native,
+    raw_response,
+    seat,
+    body,
+    expected_typed,
+):
+    raw_response(200, body)
+    oracle_typed, body_text, status = _run_oracle(oracle_native, seat)
+    assert_same_python_object(oracle_typed, expected_typed)
+    subject_typed, subject_body, subject_status = _run_subject(
+        subject_native, seat
+    )
+    assert_same_python_object(subject_typed, expected_typed)
+    assert subject_body == body_text == body.decode()
+    assert subject_status == status == 200
+
+
+# The envelope's hard edge. A value the typed carrier cannot hold
+# is refused as a decode error by both routes with the same
+# message: the leniency stops at representability, so past the
+# carrier's top, below zero, or fractional is never saturated,
+# rounded, or truncated into the carrier. These refusals are the
+# count and dimension carriers' half of the envelope; the
+# interpreter digit limit refusal in slice 0 is the bindings'
+# half, and it stands as it was.
+
+ENVELOPE_REFUSAL_CASES = [
+    pytest.param(
+        "details",
+        b'{"id": "dec1-count",'
+        b' "userRatingCount": 18446744073709551616}',
+        id="count-past-u64-int",
+    ),
+    pytest.param(
+        "details",
+        b'{"id": "dec1-count",'
+        b' "userRatingCount": 18446744073709551616.0}',
+        # The float encoding of exactly 2**64: the lenient
+        # decoder's bound is strict (u64 max as an f64 rounds up
+        # to 2**64 itself), so this is refused, not saturated
+        # to the carrier's top.
+        id="count-at-two-to-64-float",
+    ),
+    pytest.param(
+        "details",
+        b'{"id": "dec1-count", "userRatingCount": -1}',
+        id="count-negative",
+    ),
+    pytest.param(
+        "details",
+        b'{"id": "dec1-count", "userRatingCount": 42.5}',
+        id="count-fractional",
+    ),
+    pytest.param(
+        "details",
+        b'{"id": "dec1-count",'
+        b' "userRatingCount": "18446744073709551616"}',
+        id="count-string-past-u64",
+    ),
+    pytest.param(
+        "details",
+        b'{"id": "dec1-count", "userRatingCount": "042"}',
+        # Zero padding is not the canonical unsigned decimal
+        # the string form admits.
+        id="count-string-zero-padded",
+    ),
+    pytest.param(
+        "details",
+        b'{"id": "dec1-count", "userRatingCount": "+42"}',
+        id="count-string-signed",
+    ),
+    pytest.param(
+        "details",
+        b'{"id": "dec1-count", "userRatingCount": "4.0"}',
+        id="count-string-decimal",
+    ),
+    pytest.param(
+        "details",
+        b'{"id": "dec1-photo", "photos": [{'
+        b'"name": "places/dec1-photo/photos/p",'
+        b' "widthPx": 4294967296}]}',
+        id="width-past-u32",
+    ),
+    pytest.param(
+        "details",
+        b'{"id": "dec1-photo", "photos": [{'
+        b'"name": "places/dec1-photo/photos/p",'
+        b' "widthPx": -1}]}',
+        id="width-negative",
+    ),
+    pytest.param(
+        "details",
+        b'{"id": "dec1-photo", "photos": [{'
+        b'"name": "places/dec1-photo/photos/p",'
+        b' "heightPx": 1.5}]}',
+        id="height-fractional",
+    ),
+]
+
+
+@pytest.mark.parametrize("seat,body", ENVELOPE_REFUSAL_CASES)
+def test_number_envelope_refused_by_both_routes(
+    oracle_native, subject_native, raw_response, seat, body
+):
+    raw_response(200, body)
+    with pytest.raises(_placekit.PlacesError) as oracle_exc:
+        _run_oracle(oracle_native, seat)
+    with pytest.raises(_placekit.PlacesError) as subject_exc:
+        _run_subject(subject_native, seat)
+    assert oracle_exc.value.kind == "decode"
+    assert subject_exc.value.kind == oracle_exc.value.kind
+    assert str(subject_exc.value) == str(oracle_exc.value)
