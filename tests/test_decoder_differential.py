@@ -98,6 +98,16 @@ surface, float text at its precision edges, and the refusals at
 the carriers' hard edge, where a value the carrier cannot hold
 is a decode error on both routes rather than a correction.
 
+Slice 2 adds the flatten placement expectations at the end of
+this module. Where slice 0's flatten set compared route against
+route, the placement set pins values and positions per case, for
+both routes: unknowns at every typed nesting level and beside
+the known fields they share a sorted map with, unknowns inside
+unknowns, the duplicate spellings (a case variant of a known
+field, and a spelling known only at a different level), empty
+unknowns, and unknowns in the search envelope and its routing
+summaries.
+
 The comparator carries its own pins below, because a comparator
 that cannot fail proves nothing: int against float, bool against
 int, negative zero against positive zero, a missing key, a
@@ -1026,3 +1036,344 @@ def test_number_envelope_refused_by_both_routes(
     assert oracle_exc.value.kind == "decode"
     assert subject_exc.value.kind == oracle_exc.value.kind
     assert str(subject_exc.value) == str(oracle_exc.value)
+
+
+# -- slice 2: the flatten placement expectations ----------------------------
+#
+# Slice 0 compared the flatten-heavy bodies route against route,
+# so placement rested on agreement between two copies of the same
+# walk. This section pins placement itself: every case carries a
+# hand-built expected typed dict, checked against both routes, in
+# the key order the walk emits. The deriving mechanism has three
+# parts. In the core, every typed struct holds the fields it does
+# not declare in a flattened extra map, and a field name is scoped
+# to its struct: a spelling the struct does not declare is an
+# unknown there even when another struct declares it. Serializing
+# the typed value merges the extra map into the same object as the
+# known fields. And the locked serde_json build carries no
+# preserve_order feature, so its map is a sorted map: the DOM
+# holds every object level in sorted key order, known and unknown
+# keys interleaved by spelling alone, and value_to_py builds the
+# Python dict in that order. An unknown's value is itself a raw
+# Value tree, so objects inside unknowns are sorted the same way
+# at every depth, and objects inside a raw passthrough (the
+# routing summaries riding the search envelope's extra map) are
+# no exception.
+
+FLATTEN_PLACEMENT_CASES = [
+    pytest.param(
+        "details",
+        b'{"id": "dec2-p", "name": "places/dec2-p", "rating": 4.25,'
+        b' "xAlpha": 1, "aFirst": "sorts-before-id", "xZulu": [true]}',
+        {
+            # Known fields and unknowns share the one sorted map
+            # the flatten merge produces, so placement is by
+            # spelling alone: the unknown aFirst leads the dict,
+            # ahead of the known id, and the x unknowns close it
+            # in their own sorted order.
+            "aFirst": "sorts-before-id",
+            "id": "dec2-p",
+            "name": "places/dec2-p",
+            "rating": 4.25,
+            "xAlpha": 1,
+            "xZulu": [True],
+        },
+        id="place-unknowns-beside-knowns",
+    ),
+    pytest.param(
+        "details",
+        b'{"id": "dec2-p",'
+        b' "displayName": {"text": "Deep", "languageCode": "en",'
+        b'  "xNote": 7, "aNote": "first"},'
+        b' "location": {"latitude": 1.5, "longitude": 2.5,'
+        b'  "xCoord": "c"}}',
+        {
+            # The same merge one level down, inside two different
+            # typed children: the localized text's extra map and
+            # the coordinate's extra map each interleave with
+            # their own struct's fields, in sorted order at that
+            # level.
+            "displayName": {
+                "aNote": "first",
+                "languageCode": "en",
+                "text": "Deep",
+                "xNote": 7,
+            },
+            "id": "dec2-p",
+            "location": {"latitude": 1.5, "longitude": 2.5, "xCoord": "c"},
+        },
+        id="text-and-coordinate-unknowns",
+    ),
+    pytest.param(
+        "details",
+        b'{"id": "dec2-p", "regularOpeningHours": {'
+        b'  "openNow": false, "xHours": "h",'
+        b'  "periods": [{"xPeriod": 1,'
+        b'    "open": {"day": 2, "hour": 8, "minute": 30,'
+        b'      "xPoint": true,'
+        b'      "date": {"year": 2026, "month": 12, "day": 25,'
+        b'        "xDate": "d"}},'
+        b'    "close": {"day": 2, "hour": 17, "minute": 0,'
+        b'      "xClose": null}}],'
+        b'  "weekdayDescriptions": ["Tuesday: 8 AM - 5 PM"]}}',
+        {
+            # Unknowns at the deepest typed nesting the models
+            # carry: the hours object, its period, the period's
+            # opening point, and the point's date each hold their
+            # own extra map, and each level sorts its merged keys
+            # independently (the date's xDate lands between month
+            # and year, not at either end).
+            "id": "dec2-p",
+            "regularOpeningHours": {
+                "openNow": False,
+                "periods": [
+                    {
+                        "close": {
+                            "day": 2,
+                            "hour": 17,
+                            "minute": 0,
+                            "xClose": None,
+                        },
+                        "open": {
+                            "date": {
+                                "day": 25,
+                                "month": 12,
+                                "xDate": "d",
+                                "year": 2026,
+                            },
+                            "day": 2,
+                            "hour": 8,
+                            "minute": 30,
+                            "xPoint": True,
+                        },
+                        "xPeriod": 1,
+                    }
+                ],
+                "weekdayDescriptions": ["Tuesday: 8 AM - 5 PM"],
+                "xHours": "h",
+            },
+        },
+        id="opening-hours-deep-unknowns",
+    ),
+    pytest.param(
+        "details",
+        b'{"id": "dec2-p",'
+        b' "addressComponents": [{"longText": "1 Way",'
+        b'   "shortText": "1", "types": ["street_address"],'
+        b'   "languageCode": "en", "xComp": {"xInner": [1]}}],'
+        b' "photos": [{"name": "places/dec2-p/photos/p1",'
+        b'   "widthPx": 10, "heightPx": 20, "xPhoto": 1.5,'
+        b'   "authorAttributions": [{"displayName": "A U Thor",'
+        b'     "uri": "https://example.com/a",'
+        b'     "photoUri": "https://example.com/a/p",'
+        b'     "xAttr": "a"}]}],'
+        b' "attributions": [{"provider": "Prov",'
+        b'   "providerUri": "https://example.com/pr",'
+        b'   "xAttribution": 0}]}',
+        {
+            # Unknowns inside list elements and one level below
+            # them: the component's, the photo's, the photo
+            # attribution's, and the place attribution's extra
+            # maps each forward at their own level, and an
+            # unknown whose value is an object (xComp) keeps that
+            # object's own sorted interior.
+            "addressComponents": [
+                {
+                    "languageCode": "en",
+                    "longText": "1 Way",
+                    "shortText": "1",
+                    "types": ["street_address"],
+                    "xComp": {"xInner": [1]},
+                }
+            ],
+            "attributions": [
+                {
+                    "provider": "Prov",
+                    "providerUri": "https://example.com/pr",
+                    "xAttribution": 0,
+                }
+            ],
+            "id": "dec2-p",
+            "photos": [
+                {
+                    "authorAttributions": [
+                        {
+                            "displayName": "A U Thor",
+                            "photoUri": "https://example.com/a/p",
+                            "uri": "https://example.com/a",
+                            "xAttr": "a",
+                        }
+                    ],
+                    "heightPx": 20,
+                    "name": "places/dec2-p/photos/p1",
+                    "widthPx": 10,
+                    "xPhoto": 1.5,
+                }
+            ],
+        },
+        id="component-photo-attribution-unknowns",
+    ),
+    pytest.param(
+        "details",
+        b'{"id": "dec2-p",'
+        b' "viewport": {'
+        b'   "low": {"latitude": 1.0, "longitude": 2.0, "xLow": 1},'
+        b'   "high": {"xHigh": 2}, "xView": 5},'
+        b' "postalAddress": {"regionCode": "US",'
+        b'   "locality": "Probe", "postalCode": "12345",'
+        b'   "addressLines": ["Line 1"], "xPostal": "z"}}',
+        {
+            # The viewport's own extra map sits beside its two
+            # corners, and each corner is a coordinate with its
+            # own extra map. The high corner carries only an
+            # unknown: a corner the wire did carry is kept for
+            # what it carried (its skip guard omits only a corner
+            # with both coordinates absent and an empty extra
+            # map), so the corner survives holding just xHigh.
+            "id": "dec2-p",
+            "postalAddress": {
+                "addressLines": ["Line 1"],
+                "locality": "Probe",
+                "postalCode": "12345",
+                "regionCode": "US",
+                "xPostal": "z",
+            },
+            "viewport": {
+                "high": {"xHigh": 2},
+                "low": {"latitude": 1.0, "longitude": 2.0, "xLow": 1},
+                "xView": 5,
+            },
+        },
+        id="viewport-and-postal-unknowns",
+    ),
+    pytest.param(
+        "details",
+        b'{"id": "dec2-p", "xDeep": {'
+        b'  "level1": {"xArr": [{"b": 1, "a": 2}], "level2s": "s"},'
+        b'  "zTop": null}}',
+        {
+            # Unknowns inside unknowns: the whole xDeep value is
+            # one raw Value tree, never typed at any depth, and
+            # the sorted map still governs every object inside
+            # it, including the object inside the array (written
+            # b before a on the wire, landing a before b) and the
+            # keys at each nesting level.
+            "id": "dec2-p",
+            "xDeep": {
+                "level1": {"level2s": "s", "xArr": [{"a": 2, "b": 1}]},
+                "zTop": None,
+            },
+        },
+        id="unknowns-inside-unknowns",
+    ),
+    pytest.param(
+        "details",
+        b'{"id": "dec2-p", "rating": 3.5,'
+        b' "Rating": 9.9, "RATING": "high"}',
+        {
+            # Duplicate spellings, first shape: field matching is
+            # exact and case sensitive, so both case variants of
+            # the known rating are unknowns riding the extra map.
+            # Byte order places both ahead of the lowercase known
+            # field they shadow, the all-caps spelling first
+            # because its second byte sorts before a lowercase a.
+            "RATING": "high",
+            "Rating": 9.9,
+            "id": "dec2-p",
+            "rating": 3.5,
+        },
+        id="case-variant-duplicate-spellings",
+    ),
+    pytest.param(
+        "details",
+        b'{"id": "dec2-p",'
+        b' "periods": [{"xFake": 1}],'
+        b' "weekdayDescriptions": ["Fake: closed"],'
+        b' "displayName": {"text": "Collide",'
+        b'  "rating": 5, "openNow": true}}',
+        {
+            # Duplicate spellings, second shape: a spelling known
+            # only at a different level is an unknown at this
+            # one. periods and weekdayDescriptions belong to the
+            # opening hours struct, so at the place level they
+            # ride the place's extra map to the top; rating and
+            # openNow belong to the place and the hours struct,
+            # so inside the localized text they ride its extra
+            # map and stay inside the displayName dict.
+            "displayName": {
+                "openNow": True,
+                "rating": 5,
+                "text": "Collide",
+            },
+            "id": "dec2-p",
+            "periods": [{"xFake": 1}],
+            "weekdayDescriptions": ["Fake: closed"],
+        },
+        id="cross-level-spelling-collisions",
+    ),
+    pytest.param(
+        "details",
+        b'{"id": "dec2-p", "xEmptyObj": {}, "xEmptyArr": [],'
+        b' "xNull": null, "xEmptyStr": "",'
+        b' "xEmptyNested": {"xInnerEmpty": {}}}',
+        {
+            # Empty unknowns are values, not absences: the extra
+            # map holds an empty object, an empty array, a null,
+            # and an empty string verbatim, and the forwarding
+            # drops none of them. (The skip guards that omit
+            # empty known fields act on the typed fields, never
+            # on the extra map.)
+            "id": "dec2-p",
+            "xEmptyArr": [],
+            "xEmptyNested": {"xInnerEmpty": {}},
+            "xEmptyObj": {},
+            "xEmptyStr": "",
+            "xNull": None,
+        },
+        id="empty-unknowns",
+    ),
+    pytest.param(
+        "search",
+        b'{"places": [{"id": "dec2-s",'
+        b'  "xPlace": {"xPlaceInner": [null, false]}}],'
+        b' "nextPageToken": "tok",'
+        b' "routingSummaries": [{"legs": ['
+        b'   {"xLeg": 1, "travelMode": "DRIVE"}], "xSummary": "s"}],'
+        b' "xEnvelope": [{"xInArray": "yes"}]}',
+        {
+            # The search envelope's extra map works like any
+            # other level: xEnvelope lands after the known
+            # fields by spelling, and routingSummaries, which
+            # the response type does not declare at all, rides
+            # the same map as a raw Value whose interior objects
+            # (the summary, its leg) still emit in sorted order.
+            "nextPageToken": "tok",
+            "places": [{"id": "dec2-s", "xPlace": {"xPlaceInner": [None, False]}}],
+            "routingSummaries": [
+                {"legs": [{"travelMode": "DRIVE", "xLeg": 1}], "xSummary": "s"}
+            ],
+            "xEnvelope": [{"xInArray": "yes"}],
+        },
+        id="search-envelope-and-routing-unknowns",
+    ),
+]
+
+
+@pytest.mark.parametrize("seat,body,expected_typed", FLATTEN_PLACEMENT_CASES)
+def test_flatten_placement_matches_hand_built_expectations(
+    oracle_native,
+    subject_native,
+    raw_response,
+    seat,
+    body,
+    expected_typed,
+):
+    raw_response(200, body)
+    oracle_typed, body_text, status = _run_oracle(oracle_native, seat)
+    assert_same_python_object(oracle_typed, expected_typed)
+    subject_typed, subject_body, subject_status = _run_subject(
+        subject_native, seat
+    )
+    assert_same_python_object(subject_typed, expected_typed)
+    assert subject_body == body_text == body.decode()
+    assert subject_status == status == 200
