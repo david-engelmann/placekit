@@ -324,7 +324,7 @@ impl PyCallHandle {
     /// to Python objects on this thread. Runs exactly once per
     /// finished call from the Python layer. A call with no stored
     /// output fails with a decode class error rather than a panic.
-    fn take_result(&self, py: Python<'_>) -> PyResult<PyObject> {
+    fn take_result(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
         let output = match self.slot.output.lock() {
             Ok(mut guard) => guard.take(),
             Err(poisoned) => poisoned.into_inner().take(),
@@ -854,7 +854,7 @@ fn check_body_bools(value: &Bound<'_, PyAny>, depth: usize) -> Result<(), String
              check for a self-referential structure"
         ));
     }
-    if let Ok(map) = value.downcast::<PyDict>() {
+    if let Ok(map) = value.cast::<PyDict>() {
         for (key, item) in map.iter() {
             if let Ok(name) = key.extract::<&str>() {
                 if BOOL_BODY_FIELDS.contains(&name)
@@ -873,11 +873,11 @@ fn check_body_bools(value: &Bound<'_, PyAny>, depth: usize) -> Result<(), String
             }
             check_body_bools(&item, depth + 1)?;
         }
-    } else if let Ok(list) = value.downcast::<PyList>() {
+    } else if let Ok(list) = value.cast::<PyList>() {
         for item in list.iter() {
             check_body_bools(&item, depth + 1)?;
         }
-    } else if let Ok(tuple) = value.downcast::<PyTuple>() {
+    } else if let Ok(tuple) = value.cast::<PyTuple>() {
         for item in tuple.iter() {
             check_body_bools(&item, depth + 1)?;
         }
@@ -907,7 +907,7 @@ where
     })
 }
 
-fn value_to_py(py: Python<'_>, value: &Value, status: Option<u16>) -> PyResult<PyObject> {
+fn value_to_py(py: Python<'_>, value: &Value, status: Option<u16>) -> PyResult<Py<PyAny>> {
     // Converted by hand rather than through a generic converter
     // (R4-19): with arbitrary precision numbers, a serde_json Number
     // serializes through a private envelope shape that generic
@@ -941,7 +941,11 @@ fn value_to_py(py: Python<'_>, value: &Value, status: Option<u16>) -> PyResult<P
     }
 }
 
-fn number_to_py(py: Python<'_>, n: &serde_json::Number, status: Option<u16>) -> PyResult<PyObject> {
+fn number_to_py(
+    py: Python<'_>,
+    n: &serde_json::Number,
+    status: Option<u16>,
+) -> PyResult<Py<PyAny>> {
     if let Some(i) = n.as_i64() {
         return Ok(i.into_pyobject(py)?.unbind().into_any());
     }
@@ -1026,7 +1030,12 @@ fn number_to_py(py: Python<'_>, n: &serde_json::Number, status: Option<u16>) -> 
 /// Convert one stored JSON call output into the Python result
 /// tuple. Shared by the sync path through [`result_to_py`] and by
 /// call handle collection, so both paths build the identical tuple.
-fn json_tuple_to_py(py: Python<'_>, json: &Value, body: String, status: u16) -> PyResult<PyObject> {
+fn json_tuple_to_py(
+    py: Python<'_>,
+    json: &Value,
+    body: String,
+    status: u16,
+) -> PyResult<Py<PyAny>> {
     let typed = value_to_py(py, json, Some(status))?;
     let body = body.into_pyobject(py)?.unbind().into_any();
     let status = status.into_pyobject(py)?.unbind().into_any();
@@ -1066,7 +1075,7 @@ where
 fn result_to_py<T>(
     py: Python<'_>,
     result: Result<(T, String, u16), CoreError>,
-) -> PyResult<PyObject>
+) -> PyResult<Py<PyAny>>
 where
     T: serde::Serialize,
 {
@@ -1108,7 +1117,7 @@ fn photo_conversion_err(py: Python<'_>, e: impl std::fmt::Display, status: u16) 
 fn photo_to_py(
     py: Python<'_>,
     result: Result<(placekit_core::models::PhotoMedia, Option<String>, u16), CoreError>,
-) -> PyResult<PyObject> {
+) -> PyResult<Py<PyAny>> {
     match result {
         Ok((placekit_core::models::PhotoMedia::Bytes(photo), _, status)) => {
             let tag = "bytes"
@@ -1304,11 +1313,11 @@ impl PyClient {
         py: Python<'_>,
         body: Bound<'_, PyDict>,
         fields: Option<Vec<String>>,
-    ) -> PyResult<PyObject> {
+    ) -> PyResult<Py<PyAny>> {
         let request: TextSearchRequest = body_to_request(&body)?;
         let mask = mask_from(py, fields)?;
         let inner = self.handle(py)?;
-        let result = py.allow_threads(|| {
+        let result = py.detach(|| {
             block_on_guarded(async move { inner.text_search(&request, mask.as_ref()).await })
         });
         result_to_py(py, result)
@@ -1338,11 +1347,11 @@ impl PyClient {
         py: Python<'_>,
         body: Bound<'_, PyDict>,
         fields: Option<Vec<String>>,
-    ) -> PyResult<PyObject> {
+    ) -> PyResult<Py<PyAny>> {
         let request: NearbySearchRequest = body_to_request(&body)?;
         let mask = mask_from(py, fields)?;
         let inner = self.handle(py)?;
-        let result = py.allow_threads(|| {
+        let result = py.detach(|| {
             block_on_guarded(async move { inner.nearby_search(&request, mask.as_ref()).await })
         });
         result_to_py(py, result)
@@ -1375,10 +1384,10 @@ impl PyClient {
         language_code: Option<String>,
         region_code: Option<String>,
         session_token: Option<String>,
-    ) -> PyResult<PyObject> {
+    ) -> PyResult<Py<PyAny>> {
         let mask = mask_from(py, fields)?;
         let inner = self.handle(py)?;
-        let result = py.allow_threads(|| {
+        let result = py.detach(|| {
             block_on_guarded(async move {
                 inner
                     .place_details(
@@ -1427,11 +1436,11 @@ impl PyClient {
         py: Python<'_>,
         body: Bound<'_, PyDict>,
         fields: Option<Vec<String>>,
-    ) -> PyResult<PyObject> {
+    ) -> PyResult<Py<PyAny>> {
         let request: AutocompleteRequest = body_to_request(&body)?;
         let mask = mask_from(py, fields)?;
         let inner = self.handle(py)?;
-        let result = py.allow_threads(|| {
+        let result = py.detach(|| {
             block_on_guarded(async move { inner.autocomplete(&request, mask.as_ref()).await })
         });
         result_to_py(py, result)
@@ -1463,9 +1472,9 @@ impl PyClient {
         max_width_px: Option<u32>,
         max_height_px: Option<u32>,
         skip_http_redirect: bool,
-    ) -> PyResult<PyObject> {
+    ) -> PyResult<Py<PyAny>> {
         let inner = self.handle(py)?;
-        let result = py.allow_threads(|| {
+        let result = py.detach(|| {
             block_on_guarded(async move {
                 inner
                     .place_photo(&photo_name, max_width_px, max_height_px, skip_http_redirect)
