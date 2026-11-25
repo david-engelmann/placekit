@@ -1027,6 +1027,855 @@ fn number_to_py(
         .into_any())
 }
 
+/// The number envelope's serde name. Under the arbitrary precision
+/// build the workspace pins, every serde_json number serializes as a
+/// one field struct under this name whose single field carries the
+/// number's exact decimal text, so a direct serializer meets every
+/// number, typed or extra map alike, at this one seat.
+const NUMBER_ENVELOPE_NAME: &str = "$serde_json::private::Number";
+
+/// A direct serialization failure: either the Python error the
+/// conversion itself built, which propagates as itself, or a serde
+/// side message, which the seat renders as a decode failure.
+#[derive(Debug)]
+enum DirectError {
+    Python(PyErr),
+    Message(String),
+}
+
+impl From<PyErr> for DirectError {
+    fn from(err: PyErr) -> Self {
+        DirectError::Python(err)
+    }
+}
+
+impl From<std::convert::Infallible> for DirectError {
+    fn from(err: std::convert::Infallible) -> Self {
+        match err {}
+    }
+}
+
+impl std::fmt::Display for DirectError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            DirectError::Python(err) => write!(f, "{err}"),
+            DirectError::Message(message) => write!(f, "{message}"),
+        }
+    }
+}
+
+impl std::error::Error for DirectError {}
+
+impl serde::ser::Error for DirectError {
+    fn custom<T: std::fmt::Display>(msg: T) -> Self {
+        DirectError::Message(msg.to_string())
+    }
+}
+
+/// The decode error source for a direct serializer failure: the
+/// message is all the failure carries, rendered into the same decode
+/// shape the guarded conversion's failure takes.
+#[derive(Debug)]
+struct DirectSerializeError(String);
+
+impl std::fmt::Display for DirectSerializeError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+impl std::error::Error for DirectSerializeError {}
+
+/// Build the statusless decode failure a direct serialization
+/// failure settles as, the same shape [`to_value_guarded`] builds
+/// for the guarded conversion's failure.
+fn direct_serialize_failure(message: String) -> CoreError {
+    CoreError::Decode {
+        detail: message.clone(),
+        status: None,
+        source: Some(Box::new(DirectSerializeError(message))),
+    }
+}
+
+/// Build a Python dict from key and value pairs in the order given.
+fn dict_from_entries(
+    py: Python<'_>,
+    entries: Vec<(String, Py<PyAny>)>,
+) -> Result<Py<PyAny>, DirectError> {
+    let dict = PyDict::new(py);
+    for (key, value) in entries {
+        dict.set_item(key, value)?;
+    }
+    Ok(dict.unbind().into_any())
+}
+
+/// Build a Python list from items in the order given.
+fn list_from_items(py: Python<'_>, items: Vec<Py<PyAny>>) -> Result<Py<PyAny>, DirectError> {
+    let list = PyList::empty(py);
+    for item in items {
+        list.append(item)?;
+    }
+    Ok(list.unbind().into_any())
+}
+
+/// Build a Python int of any size from its exact decimal text, the
+/// conversion an out of range integer scalar takes, mirroring the
+/// text arm of [`number_to_py`].
+fn exact_int(py: Python<'_>, text: &str) -> Result<Py<PyAny>, DirectError> {
+    let builtins = PyModule::import(py, "builtins")?;
+    Ok(builtins.getattr("int")?.call1((text,))?.unbind())
+}
+
+/// The direct serializer: a serde serializer whose output is the
+/// Python object itself, building the typed result's Python form
+/// without materializing the whole result DOM the guarded
+/// conversion walks. Every verdict mirrors the two steps it
+/// replaces, [`serde_json::to_value`] and [`value_to_py`]: maps and
+/// structs emit their keys in byte sorted order with a repeated key
+/// keeping its sorted position and its last value, the flatten
+/// placement the derives produce through the map serializer;
+/// numbers cross through the number envelope at [`number_to_py`]
+/// itself; floats that are not finite cross as None; and a failure
+/// at any point aborts the whole conversion, exactly as a failure
+/// in either replaced step does.
+struct DirectSerializer<'py> {
+    py: Python<'py>,
+    status: Option<u16>,
+}
+
+impl<'py> serde::Serializer for DirectSerializer<'py> {
+    type Ok = Py<PyAny>;
+    type Error = DirectError;
+
+    type SerializeSeq = DirectSeq<'py>;
+    type SerializeTuple = DirectSeq<'py>;
+    type SerializeTupleStruct = DirectSeq<'py>;
+    type SerializeTupleVariant = DirectVariantSeq<'py>;
+    type SerializeMap = DirectMap<'py>;
+    type SerializeStruct = DirectStruct<'py>;
+    type SerializeStructVariant = DirectVariantMap<'py>;
+
+    fn serialize_bool(self, value: bool) -> Result<Self::Ok, Self::Error> {
+        Ok(value.into_pyobject(self.py)?.to_owned().unbind().into_any())
+    }
+
+    fn serialize_i8(self, value: i8) -> Result<Self::Ok, Self::Error> {
+        Ok((value as i64).into_pyobject(self.py)?.unbind().into_any())
+    }
+
+    fn serialize_i16(self, value: i16) -> Result<Self::Ok, Self::Error> {
+        Ok((value as i64).into_pyobject(self.py)?.unbind().into_any())
+    }
+
+    fn serialize_i32(self, value: i32) -> Result<Self::Ok, Self::Error> {
+        Ok((value as i64).into_pyobject(self.py)?.unbind().into_any())
+    }
+
+    fn serialize_i64(self, value: i64) -> Result<Self::Ok, Self::Error> {
+        Ok(value.into_pyobject(self.py)?.unbind().into_any())
+    }
+
+    fn serialize_i128(self, value: i128) -> Result<Self::Ok, Self::Error> {
+        exact_int(self.py, &value.to_string())
+    }
+
+    fn serialize_u8(self, value: u8) -> Result<Self::Ok, Self::Error> {
+        Ok((value as u64).into_pyobject(self.py)?.unbind().into_any())
+    }
+
+    fn serialize_u16(self, value: u16) -> Result<Self::Ok, Self::Error> {
+        Ok((value as u64).into_pyobject(self.py)?.unbind().into_any())
+    }
+
+    fn serialize_u32(self, value: u32) -> Result<Self::Ok, Self::Error> {
+        Ok((value as u64).into_pyobject(self.py)?.unbind().into_any())
+    }
+
+    fn serialize_u64(self, value: u64) -> Result<Self::Ok, Self::Error> {
+        Ok(value.into_pyobject(self.py)?.unbind().into_any())
+    }
+
+    fn serialize_u128(self, value: u128) -> Result<Self::Ok, Self::Error> {
+        exact_int(self.py, &value.to_string())
+    }
+
+    fn serialize_f32(self, value: f32) -> Result<Self::Ok, Self::Error> {
+        if value.is_finite() {
+            Ok((value as f64).into_pyobject(self.py)?.unbind().into_any())
+        } else {
+            Ok(self.py.None())
+        }
+    }
+
+    fn serialize_f64(self, value: f64) -> Result<Self::Ok, Self::Error> {
+        if value.is_finite() {
+            Ok(value.into_pyobject(self.py)?.unbind().into_any())
+        } else {
+            Ok(self.py.None())
+        }
+    }
+
+    fn serialize_char(self, value: char) -> Result<Self::Ok, Self::Error> {
+        Ok(value
+            .to_string()
+            .into_pyobject(self.py)?
+            .unbind()
+            .into_any())
+    }
+
+    fn serialize_str(self, value: &str) -> Result<Self::Ok, Self::Error> {
+        Ok(value.into_pyobject(self.py)?.unbind().into_any())
+    }
+
+    fn serialize_bytes(self, value: &[u8]) -> Result<Self::Ok, Self::Error> {
+        // Bytes serialize as a JSON array of numbers, the form the
+        // guarded conversion crosses; no result type reaches this
+        // seat, photo bytes cross as bytes objects elsewhere.
+        let items = value
+            .iter()
+            .map(|byte| Ok((*byte as u64).into_pyobject(self.py)?.unbind().into_any()))
+            .collect::<Result<Vec<Py<PyAny>>, DirectError>>()?;
+        list_from_items(self.py, items)
+    }
+
+    fn serialize_none(self) -> Result<Self::Ok, Self::Error> {
+        Ok(self.py.None())
+    }
+
+    fn serialize_some<T: serde::Serialize + ?Sized>(
+        self,
+        value: &T,
+    ) -> Result<Self::Ok, Self::Error> {
+        value.serialize(self)
+    }
+
+    fn serialize_unit(self) -> Result<Self::Ok, Self::Error> {
+        Ok(self.py.None())
+    }
+
+    fn serialize_unit_struct(self, _name: &'static str) -> Result<Self::Ok, Self::Error> {
+        Ok(self.py.None())
+    }
+
+    fn serialize_unit_variant(
+        self,
+        _name: &'static str,
+        _variant_index: u32,
+        variant: &'static str,
+    ) -> Result<Self::Ok, Self::Error> {
+        Ok(variant.into_pyobject(self.py)?.unbind().into_any())
+    }
+
+    fn serialize_newtype_struct<T: serde::Serialize + ?Sized>(
+        self,
+        _name: &'static str,
+        value: &T,
+    ) -> Result<Self::Ok, Self::Error> {
+        value.serialize(self)
+    }
+
+    fn serialize_newtype_variant<T: serde::Serialize + ?Sized>(
+        self,
+        _name: &'static str,
+        _variant_index: u32,
+        variant: &'static str,
+        value: &T,
+    ) -> Result<Self::Ok, Self::Error> {
+        let inner = value.serialize(DirectSerializer {
+            py: self.py,
+            status: self.status,
+        })?;
+        dict_from_entries(self.py, vec![(variant.to_string(), inner)])
+    }
+
+    fn serialize_seq(self, _len: Option<usize>) -> Result<Self::SerializeSeq, Self::Error> {
+        Ok(DirectSeq {
+            py: self.py,
+            status: self.status,
+            items: Vec::new(),
+        })
+    }
+
+    fn serialize_tuple(self, _len: usize) -> Result<Self::SerializeTuple, Self::Error> {
+        Ok(DirectSeq {
+            py: self.py,
+            status: self.status,
+            items: Vec::new(),
+        })
+    }
+
+    fn serialize_tuple_struct(
+        self,
+        _name: &'static str,
+        _len: usize,
+    ) -> Result<Self::SerializeTupleStruct, Self::Error> {
+        Ok(DirectSeq {
+            py: self.py,
+            status: self.status,
+            items: Vec::new(),
+        })
+    }
+
+    fn serialize_tuple_variant(
+        self,
+        _name: &'static str,
+        _variant_index: u32,
+        variant: &'static str,
+        _len: usize,
+    ) -> Result<Self::SerializeTupleVariant, Self::Error> {
+        Ok(DirectVariantSeq {
+            py: self.py,
+            status: self.status,
+            variant: variant.to_string(),
+            items: Vec::new(),
+        })
+    }
+
+    fn serialize_map(self, _len: Option<usize>) -> Result<Self::SerializeMap, Self::Error> {
+        Ok(DirectMap {
+            py: self.py,
+            status: self.status,
+            entries: Vec::new(),
+            pending_key: None,
+        })
+    }
+
+    fn serialize_struct(
+        self,
+        name: &'static str,
+        _len: usize,
+    ) -> Result<Self::SerializeStruct, Self::Error> {
+        if name == NUMBER_ENVELOPE_NAME {
+            Ok(DirectStruct::Number(DirectNumber {
+                py: self.py,
+                status: self.status,
+                text: None,
+            }))
+        } else {
+            Ok(DirectStruct::Map(DirectMap {
+                py: self.py,
+                status: self.status,
+                entries: Vec::new(),
+                pending_key: None,
+            }))
+        }
+    }
+
+    fn serialize_struct_variant(
+        self,
+        _name: &'static str,
+        _variant_index: u32,
+        variant: &'static str,
+        _len: usize,
+    ) -> Result<Self::SerializeStructVariant, Self::Error> {
+        Ok(DirectVariantMap {
+            py: self.py,
+            status: self.status,
+            variant: variant.to_string(),
+            entries: Vec::new(),
+        })
+    }
+
+    fn is_human_readable(&self) -> bool {
+        true
+    }
+}
+
+/// A sequence under construction for [`DirectSerializer`]: elements
+/// accumulate and cross as one Python list at the end.
+struct DirectSeq<'py> {
+    py: Python<'py>,
+    status: Option<u16>,
+    items: Vec<Py<PyAny>>,
+}
+
+impl DirectSeq<'_> {
+    fn finish(self) -> Result<Py<PyAny>, DirectError> {
+        list_from_items(self.py, self.items)
+    }
+
+    fn push<T: serde::Serialize + ?Sized>(&mut self, value: &T) -> Result<(), DirectError> {
+        let item = value.serialize(DirectSerializer {
+            py: self.py,
+            status: self.status,
+        })?;
+        self.items.push(item);
+        Ok(())
+    }
+}
+
+impl serde::ser::SerializeSeq for DirectSeq<'_> {
+    type Ok = Py<PyAny>;
+    type Error = DirectError;
+
+    fn serialize_element<T: serde::Serialize + ?Sized>(
+        &mut self,
+        value: &T,
+    ) -> Result<(), Self::Error> {
+        self.push(value)
+    }
+
+    fn end(self) -> Result<Self::Ok, Self::Error> {
+        self.finish()
+    }
+}
+
+impl serde::ser::SerializeTuple for DirectSeq<'_> {
+    type Ok = Py<PyAny>;
+    type Error = DirectError;
+
+    fn serialize_element<T: serde::Serialize + ?Sized>(
+        &mut self,
+        value: &T,
+    ) -> Result<(), Self::Error> {
+        self.push(value)
+    }
+
+    fn end(self) -> Result<Self::Ok, Self::Error> {
+        self.finish()
+    }
+}
+
+impl serde::ser::SerializeTupleStruct for DirectSeq<'_> {
+    type Ok = Py<PyAny>;
+    type Error = DirectError;
+
+    fn serialize_field<T: serde::Serialize + ?Sized>(
+        &mut self,
+        value: &T,
+    ) -> Result<(), Self::Error> {
+        self.push(value)
+    }
+
+    fn end(self) -> Result<Self::Ok, Self::Error> {
+        self.finish()
+    }
+}
+
+/// A tuple variant under construction: the elements cross as one
+/// list under the variant's name, the single key dict form the
+/// guarded conversion produces for a variant.
+struct DirectVariantSeq<'py> {
+    py: Python<'py>,
+    status: Option<u16>,
+    variant: String,
+    items: Vec<Py<PyAny>>,
+}
+
+impl serde::ser::SerializeTupleVariant for DirectVariantSeq<'_> {
+    type Ok = Py<PyAny>;
+    type Error = DirectError;
+
+    fn serialize_field<T: serde::Serialize + ?Sized>(
+        &mut self,
+        value: &T,
+    ) -> Result<(), Self::Error> {
+        let item = value.serialize(DirectSerializer {
+            py: self.py,
+            status: self.status,
+        })?;
+        self.items.push(item);
+        Ok(())
+    }
+
+    fn end(self) -> Result<Self::Ok, Self::Error> {
+        let list = list_from_items(self.py, self.items)?;
+        dict_from_entries(self.py, vec![(self.variant, list)])
+    }
+}
+
+/// A map or struct under construction for [`DirectSerializer`]:
+/// entries accumulate in arrival order and cross at the end sorted
+/// by key, reproducing the byte sorted order the DOM's map imposes
+/// at every level; a repeated key keeps its sorted position and its
+/// last value, as an insert into that map settles.
+struct DirectMap<'py> {
+    py: Python<'py>,
+    status: Option<u16>,
+    entries: Vec<(String, Py<PyAny>)>,
+    pending_key: Option<String>,
+}
+
+impl DirectMap<'_> {
+    fn finish(self) -> Result<Py<PyAny>, DirectError> {
+        let mut entries = self.entries;
+        entries.sort_by(|a, b| a.0.as_bytes().cmp(b.0.as_bytes()));
+        dict_from_entries(self.py, entries)
+    }
+
+    fn field<T: serde::Serialize + ?Sized>(
+        &mut self,
+        key: &str,
+        value: &T,
+    ) -> Result<(), DirectError> {
+        let converted = value.serialize(DirectSerializer {
+            py: self.py,
+            status: self.status,
+        })?;
+        self.entries.push((key.to_string(), converted));
+        Ok(())
+    }
+}
+
+impl serde::ser::SerializeMap for DirectMap<'_> {
+    type Ok = Py<PyAny>;
+    type Error = DirectError;
+
+    fn serialize_key<T: serde::Serialize + ?Sized>(&mut self, key: &T) -> Result<(), Self::Error> {
+        self.pending_key = Some(key.serialize(DirectText)?);
+        Ok(())
+    }
+
+    fn serialize_value<T: serde::Serialize + ?Sized>(
+        &mut self,
+        value: &T,
+    ) -> Result<(), Self::Error> {
+        let key = self
+            .pending_key
+            .take()
+            .ok_or_else(|| DirectError::Message("map value without a key".to_string()))?;
+        self.field(&key, value)
+    }
+
+    fn serialize_entry<K: serde::Serialize + ?Sized, V: serde::Serialize + ?Sized>(
+        &mut self,
+        key: &K,
+        value: &V,
+    ) -> Result<(), Self::Error> {
+        let key = key.serialize(DirectText)?;
+        self.field(&key, value)
+    }
+
+    fn end(self) -> Result<Self::Ok, Self::Error> {
+        self.finish()
+    }
+}
+
+impl serde::ser::SerializeStruct for DirectMap<'_> {
+    type Ok = Py<PyAny>;
+    type Error = DirectError;
+
+    fn serialize_field<T: serde::Serialize + ?Sized>(
+        &mut self,
+        key: &'static str,
+        value: &T,
+    ) -> Result<(), Self::Error> {
+        self.field(key, value)
+    }
+
+    fn end(self) -> Result<Self::Ok, Self::Error> {
+        self.finish()
+    }
+}
+
+/// A struct under construction for [`DirectSerializer`]: either a
+/// map in progress or the number envelope, whose single field's
+/// exact decimal text the capture holds for [`number_to_py`].
+enum DirectStruct<'py> {
+    Map(DirectMap<'py>),
+    Number(DirectNumber<'py>),
+}
+
+impl serde::ser::SerializeStruct for DirectStruct<'_> {
+    type Ok = Py<PyAny>;
+    type Error = DirectError;
+
+    fn serialize_field<T: serde::Serialize + ?Sized>(
+        &mut self,
+        key: &'static str,
+        value: &T,
+    ) -> Result<(), Self::Error> {
+        match self {
+            DirectStruct::Map(map) => serde::ser::SerializeStruct::serialize_field(map, key, value),
+            DirectStruct::Number(number) => number.field(value),
+        }
+    }
+
+    fn end(self) -> Result<Self::Ok, Self::Error> {
+        match self {
+            DirectStruct::Map(map) => serde::ser::SerializeStruct::end(map),
+            DirectStruct::Number(number) => number.end(),
+        }
+    }
+}
+
+/// The number envelope under construction: the field's value
+/// arrives carrying its exact decimal text, held until the end
+/// rebuilds the number and crosses it through [`number_to_py`], so
+/// every number verdict, the integer arms, the float fallback, the
+/// digit limit refusal, is the pinned conversion's own.
+struct DirectNumber<'py> {
+    py: Python<'py>,
+    status: Option<u16>,
+    text: Option<String>,
+}
+
+impl DirectNumber<'_> {
+    fn field<T: serde::Serialize + ?Sized>(&mut self, value: &T) -> Result<(), DirectError> {
+        self.text = Some(value.serialize(DirectText)?);
+        Ok(())
+    }
+
+    fn end(self) -> Result<Py<PyAny>, DirectError> {
+        let text = self
+            .text
+            .ok_or_else(|| DirectError::Message("number envelope carried no text".to_string()))?;
+        let number = serde_json::Number::from_string_unchecked(text);
+        Ok(number_to_py(self.py, &number, self.status)?)
+    }
+}
+
+/// A struct variant under construction: the fields cross as one
+/// sorted dict under the variant's name, the single key dict form
+/// the guarded conversion produces for a variant.
+struct DirectVariantMap<'py> {
+    py: Python<'py>,
+    status: Option<u16>,
+    variant: String,
+    entries: Vec<(String, Py<PyAny>)>,
+}
+
+impl serde::ser::SerializeStructVariant for DirectVariantMap<'_> {
+    type Ok = Py<PyAny>;
+    type Error = DirectError;
+
+    fn serialize_field<T: serde::Serialize + ?Sized>(
+        &mut self,
+        key: &'static str,
+        value: &T,
+    ) -> Result<(), Self::Error> {
+        let converted = value.serialize(DirectSerializer {
+            py: self.py,
+            status: self.status,
+        })?;
+        self.entries.push((key.to_string(), converted));
+        Ok(())
+    }
+
+    fn end(self) -> Result<Self::Ok, Self::Error> {
+        let mut entries = self.entries;
+        entries.sort_by(|a, b| a.0.as_bytes().cmp(b.0.as_bytes()));
+        let inner = dict_from_entries(self.py, entries)?;
+        dict_from_entries(self.py, vec![(self.variant, inner)])
+    }
+}
+
+/// A serializer that captures a string: map keys and the number
+/// envelope's text field cross through it. Every other seat is an
+/// error, as a non string key is under the guarded conversion.
+struct DirectText;
+
+impl serde::Serializer for DirectText {
+    type Ok = String;
+    type Error = DirectError;
+
+    type SerializeSeq = serde::ser::Impossible<String, DirectError>;
+    type SerializeTuple = serde::ser::Impossible<String, DirectError>;
+    type SerializeTupleStruct = serde::ser::Impossible<String, DirectError>;
+    type SerializeTupleVariant = serde::ser::Impossible<String, DirectError>;
+    type SerializeMap = serde::ser::Impossible<String, DirectError>;
+    type SerializeStruct = serde::ser::Impossible<String, DirectError>;
+    type SerializeStructVariant = serde::ser::Impossible<String, DirectError>;
+
+    fn serialize_bool(self, _value: bool) -> Result<Self::Ok, Self::Error> {
+        Err(DirectError::Message("expected text".to_string()))
+    }
+
+    fn serialize_i8(self, _value: i8) -> Result<Self::Ok, Self::Error> {
+        Err(DirectError::Message("expected text".to_string()))
+    }
+
+    fn serialize_i16(self, _value: i16) -> Result<Self::Ok, Self::Error> {
+        Err(DirectError::Message("expected text".to_string()))
+    }
+
+    fn serialize_i32(self, _value: i32) -> Result<Self::Ok, Self::Error> {
+        Err(DirectError::Message("expected text".to_string()))
+    }
+
+    fn serialize_i64(self, _value: i64) -> Result<Self::Ok, Self::Error> {
+        Err(DirectError::Message("expected text".to_string()))
+    }
+
+    fn serialize_u8(self, _value: u8) -> Result<Self::Ok, Self::Error> {
+        Err(DirectError::Message("expected text".to_string()))
+    }
+
+    fn serialize_u16(self, _value: u16) -> Result<Self::Ok, Self::Error> {
+        Err(DirectError::Message("expected text".to_string()))
+    }
+
+    fn serialize_u32(self, _value: u32) -> Result<Self::Ok, Self::Error> {
+        Err(DirectError::Message("expected text".to_string()))
+    }
+
+    fn serialize_u64(self, _value: u64) -> Result<Self::Ok, Self::Error> {
+        Err(DirectError::Message("expected text".to_string()))
+    }
+
+    fn serialize_f32(self, _value: f32) -> Result<Self::Ok, Self::Error> {
+        Err(DirectError::Message("expected text".to_string()))
+    }
+
+    fn serialize_f64(self, _value: f64) -> Result<Self::Ok, Self::Error> {
+        Err(DirectError::Message("expected text".to_string()))
+    }
+
+    fn serialize_char(self, value: char) -> Result<Self::Ok, Self::Error> {
+        Ok(value.to_string())
+    }
+
+    fn serialize_str(self, value: &str) -> Result<Self::Ok, Self::Error> {
+        Ok(value.to_string())
+    }
+
+    fn serialize_bytes(self, _value: &[u8]) -> Result<Self::Ok, Self::Error> {
+        Err(DirectError::Message("expected text".to_string()))
+    }
+
+    fn serialize_none(self) -> Result<Self::Ok, Self::Error> {
+        Err(DirectError::Message("expected text".to_string()))
+    }
+
+    fn serialize_some<T: serde::Serialize + ?Sized>(
+        self,
+        value: &T,
+    ) -> Result<Self::Ok, Self::Error> {
+        value.serialize(self)
+    }
+
+    fn serialize_unit(self) -> Result<Self::Ok, Self::Error> {
+        Err(DirectError::Message("expected text".to_string()))
+    }
+
+    fn serialize_unit_struct(self, _name: &'static str) -> Result<Self::Ok, Self::Error> {
+        Err(DirectError::Message("expected text".to_string()))
+    }
+
+    fn serialize_unit_variant(
+        self,
+        _name: &'static str,
+        _variant_index: u32,
+        variant: &'static str,
+    ) -> Result<Self::Ok, Self::Error> {
+        Ok(variant.to_string())
+    }
+
+    fn serialize_newtype_struct<T: serde::Serialize + ?Sized>(
+        self,
+        _name: &'static str,
+        value: &T,
+    ) -> Result<Self::Ok, Self::Error> {
+        value.serialize(self)
+    }
+
+    fn serialize_newtype_variant<T: serde::Serialize + ?Sized>(
+        self,
+        _name: &'static str,
+        _variant_index: u32,
+        _variant: &'static str,
+        _value: &T,
+    ) -> Result<Self::Ok, Self::Error> {
+        Err(DirectError::Message("expected text".to_string()))
+    }
+
+    fn serialize_seq(self, _len: Option<usize>) -> Result<Self::SerializeSeq, Self::Error> {
+        Err(DirectError::Message("expected text".to_string()))
+    }
+
+    fn serialize_tuple(self, _len: usize) -> Result<Self::SerializeTuple, Self::Error> {
+        Err(DirectError::Message("expected text".to_string()))
+    }
+
+    fn serialize_tuple_struct(
+        self,
+        _name: &'static str,
+        _len: usize,
+    ) -> Result<Self::SerializeTupleStruct, Self::Error> {
+        Err(DirectError::Message("expected text".to_string()))
+    }
+
+    fn serialize_tuple_variant(
+        self,
+        _name: &'static str,
+        _variant_index: u32,
+        _variant: &'static str,
+        _len: usize,
+    ) -> Result<Self::SerializeTupleVariant, Self::Error> {
+        Err(DirectError::Message("expected text".to_string()))
+    }
+
+    fn serialize_map(self, _len: Option<usize>) -> Result<Self::SerializeMap, Self::Error> {
+        Err(DirectError::Message("expected text".to_string()))
+    }
+
+    fn serialize_struct(
+        self,
+        _name: &'static str,
+        _len: usize,
+    ) -> Result<Self::SerializeStruct, Self::Error> {
+        Err(DirectError::Message("expected text".to_string()))
+    }
+
+    fn serialize_struct_variant(
+        self,
+        _name: &'static str,
+        _variant_index: u32,
+        _variant: &'static str,
+        _len: usize,
+    ) -> Result<Self::SerializeStructVariant, Self::Error> {
+        Err(DirectError::Message("expected text".to_string()))
+    }
+}
+
+/// How a guarded direct conversion settles: a core failure carries
+/// the core error out whole, a Python failure carries the Python
+/// error out as itself. The seats render each through their own
+/// standing mappings.
+enum DirectFailure {
+    Core(CoreError),
+    Python(PyErr),
+}
+
+/// Run a conversion closure under the panic guard, the same guard
+/// [`to_value_guarded`] gives the guarded conversion: the closure's
+/// settled result passes through whole, and a panic anywhere in the
+/// walk comes back as its payload rather than unwinding across the
+/// boundary, for the caller to settle as the runtime panic error.
+fn guarded_catch<T, E>(
+    run: impl FnOnce() -> Result<T, E>,
+) -> Result<Result<T, E>, Box<dyn std::any::Any + Send>> {
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(run)) {
+        Ok(settled) => Ok(settled),
+        Err(payload) => Err(payload),
+    }
+}
+
+/// Convert a typed result straight to its Python form through
+/// [`DirectSerializer`], under the panic guard. A failure the
+/// serializer reports as a message settles as the same statusless
+/// decode failure the guarded conversion's serialization failure
+/// takes; a failure the conversion built as a Python error (the
+/// digit limit refusal is the seat) passes through as itself, to be
+/// statused by the caller exactly as [`value_to_py`]'s failures
+/// are.
+fn direct_to_py_guarded<T: serde::Serialize>(
+    py: Python<'_>,
+    value: &T,
+    status: Option<u16>,
+) -> Result<Py<PyAny>, DirectFailure> {
+    match guarded_catch(|| match value.serialize(DirectSerializer { py, status }) {
+        Ok(converted) => Ok(converted),
+        Err(DirectError::Python(err)) => Err(DirectFailure::Python(err)),
+        Err(DirectError::Message(message)) => {
+            Err(DirectFailure::Core(direct_serialize_failure(message)))
+        }
+    }) {
+        Ok(settled) => settled,
+        Err(payload) => Err(DirectFailure::Core(runtime_panic_error(&*payload))),
+    }
+}
+
 /// Convert one stored JSON call output into the Python result
 /// tuple. Shared by the sync path through [`result_to_py`] and by
 /// call handle collection, so both paths build the identical tuple.
@@ -1037,6 +1886,19 @@ fn json_tuple_to_py(
     status: u16,
 ) -> PyResult<Py<PyAny>> {
     let typed = value_to_py(py, json, Some(status))?;
+    result_tuple(py, typed, body, status)
+}
+
+/// Build the Python result tuple from the converted typed form,
+/// the response body text and the HTTP status. Shared by every
+/// seat that crosses a converted result, so all of them build the
+/// identical tuple.
+fn result_tuple(
+    py: Python<'_>,
+    typed: Py<PyAny>,
+    body: String,
+    status: u16,
+) -> PyResult<Py<PyAny>> {
     let body = body.into_pyobject(py)?.unbind().into_any();
     let status = status.into_pyobject(py)?.unbind().into_any();
     let tuple = PyTuple::new(py, [typed, body, status])?;
@@ -1081,9 +1943,18 @@ where
 {
     match result {
         Ok((value, body, status)) => {
-            let json =
-                to_value_guarded(&value).map_err(|e| to_pyerr(py, attach_status(e, status)))?;
-            json_tuple_to_py(py, &json, body, status)
+            let typed = match direct_to_py_guarded(py, &value, Some(status)) {
+                Ok(typed) => typed,
+                Err(DirectFailure::Core(e)) => {
+                    return Err(to_pyerr(py, attach_status(e, status)));
+                }
+                // A failure the conversion built as a Python error
+                // carries its status from the conversion itself and
+                // propagates as itself, exactly as it did through
+                // the guarded path.
+                Err(DirectFailure::Python(e)) => return Err(e),
+            };
+            result_tuple(py, typed, body, status)
         }
         Err(e) => Err(to_pyerr(py, e)),
     }
@@ -1155,28 +2026,35 @@ fn photo_to_py(
             // the raw source. The core returns the body on this form
             // by construction. An absent body is a conversion failure
             // of this layer, never an empty raw.
-            let json = to_value_guarded(&media).map_err(|e| match e {
-                // The mapper renders its input into a fresh decode
-                // detail, so a decode error passes its bare detail
-                // rather than its rendered form, which already
-                // carries the decode prefix (audit A50-092, red
-                // team repair).
-                CoreError::Decode { detail, .. } => photo_conversion_err(py, detail, status),
-                other => photo_conversion_err(py, other, status),
-            })?;
-            let typed = value_to_py(py, &json, Some(status)).map_err(|e| {
-                // A finished PlacesError out of the conversion (the
-                // giant integer refusal in number_to_py is the seat
-                // that builds one) propagates as itself, exactly as
-                // it does on the JSON endpoints; only raw conversion
-                // failures take the photo wrap R4-22 requires
-                // (audit A50-244).
-                if e.is_instance_of::<PlacesError>(py) {
-                    e
-                } else {
-                    photo_conversion_err(py, e, status)
+            let typed = match direct_to_py_guarded(py, &media, Some(status)) {
+                Ok(typed) => typed,
+                Err(DirectFailure::Core(e)) => {
+                    return Err(match e {
+                        // The mapper renders its input into a fresh
+                        // decode detail, so a decode error passes
+                        // its bare detail rather than its rendered
+                        // form, which already carries the decode
+                        // prefix (audit A50-092, red team repair).
+                        CoreError::Decode { detail, .. } => {
+                            photo_conversion_err(py, detail, status)
+                        }
+                        other => photo_conversion_err(py, other, status),
+                    });
                 }
-            })?;
+                Err(DirectFailure::Python(e)) => {
+                    // A finished PlacesError out of the conversion
+                    // (the giant integer refusal in number_to_py is
+                    // the seat that builds one) propagates as
+                    // itself, exactly as it does on the JSON
+                    // endpoints; only raw conversion failures take
+                    // the photo wrap R4-22 requires (audit A50-244).
+                    return Err(if e.is_instance_of::<PlacesError>(py) {
+                        e
+                    } else {
+                        photo_conversion_err(py, e, status)
+                    });
+                }
+            };
             let body = body.ok_or_else(|| {
                 photo_conversion_err(py, "photo URI result carried no response body", status)
             })?;
@@ -1703,6 +2581,107 @@ mod tests {
         // A plain value still serializes whole.
         let json = to_value_guarded(&Value::from("plain")).expect("a plain value serializes");
         assert_eq!(json, Value::from("plain"));
+    }
+
+    /// The direct serializer's number envelope rebuilds each number
+    /// from the exact decimal text its serialization carries, which
+    /// is the number's own rendering: the wire parser normalizes an
+    /// exponent spelling on the way in, and the stored text is what
+    /// crosses. The rebuild from that carried text must be the same
+    /// number: same rendering, same integer arms, same float verdict
+    /// bit for bit. A rebuild that reprinted the text, rounded it,
+    /// or reclassified an integer as a float fails here on the
+    /// battery member it changes.
+    #[test]
+    fn direct_number_reconstruction_keeps_the_number_verdicts() {
+        let texts = [
+            "0",
+            "-0",
+            "1",
+            "-1",
+            "255",
+            "65535",
+            "4294967295",
+            "9007199254740993",
+            "9223372036854775807",
+            "-9223372036854775808",
+            "9223372036854775808",
+            "18446744073709551615",
+            "18446744073709551616",
+            "-9223372036854775809",
+            "340282366920938463463374607431768211456",
+            "123456789012345678901234567890123456789012345678901234567890",
+            "0.5",
+            "-0.0",
+            "5e-324",
+            "1.7976931348623157e308",
+            "1e400",
+            "-1e400",
+            "1e-400",
+            "4.123456789012345678901234567890",
+            "3.141592653589793238462643383279",
+        ];
+        for text in texts {
+            let wire: serde_json::Number =
+                serde_json::from_str(text).expect("the battery text parses as a number");
+            // The text the envelope carries is the number's own
+            // rendering, the stored text the wire parse settled.
+            let carried = wire.to_string();
+            let rebuilt = serde_json::Number::from_string_unchecked(carried.clone());
+            assert_eq!(rebuilt, wire, "{text}");
+            assert_eq!(rebuilt.to_string(), carried, "{text}");
+            assert_eq!(rebuilt.as_i64(), wire.as_i64(), "{text}");
+            assert_eq!(rebuilt.as_u64(), wire.as_u64(), "{text}");
+            assert_eq!(
+                rebuilt.as_f64().map(f64::to_bits),
+                wire.as_f64().map(f64::to_bits),
+                "{text}"
+            );
+        }
+    }
+
+    /// The direct conversion's own guard pin, the seat round 17's
+    /// read requires: a panic inside a direct conversion closure
+    /// comes back as its payload rather than unwinding across the
+    /// boundary, the payload settles as the runtime panic error
+    /// exactly as `direct_to_py_guarded` settles it, and the
+    /// ordinary shapes pass through untouched. Against an unguarded
+    /// closure this test fails by the panic escaping `guarded_catch`
+    /// itself. The pin runs over core errors only, the shape every
+    /// guard pin in this module takes.
+    #[test]
+    fn direct_guard_settles_a_panic_as_the_runtime_panic_error() {
+        let settled: Result<Result<(), CoreError>, _> =
+            guarded_catch(|| panic!("synthetic direct serializer panic for the guard pin"));
+        match settled {
+            Err(payload) => match runtime_panic_error(&*payload) {
+                CoreError::Network { detail, .. } => {
+                    assert!(
+                        detail.contains("synthetic direct serializer panic for the guard pin"),
+                        "{detail}"
+                    );
+                }
+                _ => panic!("a panic payload must settle as the runtime panic error"),
+            },
+            _ => panic!("a conversion panic must come back as its payload"),
+        }
+        // A settled core failure passes through as itself.
+        let failure: Result<Result<(), CoreError>, _> = guarded_catch(|| {
+            Err(CoreError::Decode {
+                detail: "boom".to_string(),
+                status: None,
+                source: None,
+            })
+        });
+        match failure {
+            Ok(Err(CoreError::Decode { detail, .. })) => {
+                assert_eq!(detail, "boom");
+            }
+            _ => panic!("a core failure must pass through as itself"),
+        }
+        // A success passes through as itself.
+        let ok: Result<Result<u32, CoreError>, _> = guarded_catch(|| Ok(7));
+        assert!(matches!(ok, Ok(Ok(7))));
     }
 
     /// The pin for the A50-013 repair. The slot settles exactly
