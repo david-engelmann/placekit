@@ -1049,6 +1049,11 @@ impl From<PyErr> for DirectError {
     }
 }
 
+/// The primitive arms of the direct serializer convert through
+/// pyo3 conversions whose error is Infallible (a bool or an
+/// integer always becomes a Python object), and the `?` in those
+/// arms converts through here. The match is empty because the
+/// error cannot occur.
 impl From<std::convert::Infallible> for DirectError {
     fn from(err: std::convert::Infallible) -> Self {
         match err {}
@@ -1107,6 +1112,20 @@ fn dict_from_entries(
         dict.set_item(key, value)?;
     }
     Ok(dict.unbind().into_any())
+}
+
+/// Build one Python dict from buffered map entries in the byte
+/// sorted order the DOM's map imposes at every level. A repeated
+/// key keeps its sorted position and its last value, the verdict
+/// insertion in sorted order applies. Every map shaped seat of
+/// the direct serializer finishes through here, so the ordering
+/// rule lives in one place.
+fn sorted_dict(
+    py: Python<'_>,
+    mut entries: Vec<(String, Py<PyAny>)>,
+) -> Result<Py<PyAny>, DirectError> {
+    entries.sort_by(|a, b| a.0.as_bytes().cmp(b.0.as_bytes()));
+    dict_from_entries(py, entries)
 }
 
 /// Build a Python list from items in the order given.
@@ -1498,9 +1517,7 @@ struct DirectMap<'py> {
 
 impl DirectMap<'_> {
     fn finish(self) -> Result<Py<PyAny>, DirectError> {
-        let mut entries = self.entries;
-        entries.sort_by(|a, b| a.0.as_bytes().cmp(b.0.as_bytes()));
-        dict_from_entries(self.py, entries)
+        sorted_dict(self.py, self.entries)
     }
 
     fn field<T: serde::Serialize + ?Sized>(
@@ -1653,9 +1670,7 @@ impl serde::ser::SerializeStructVariant for DirectVariantMap<'_> {
     }
 
     fn end(self) -> Result<Self::Ok, Self::Error> {
-        let mut entries = self.entries;
-        entries.sort_by(|a, b| a.0.as_bytes().cmp(b.0.as_bytes()));
-        let inner = dict_from_entries(self.py, entries)?;
+        let inner = sorted_dict(self.py, self.entries)?;
         dict_from_entries(self.py, vec![(self.variant, inner)])
     }
 }
@@ -1877,8 +1892,9 @@ fn direct_to_py_guarded<T: serde::Serialize>(
 }
 
 /// Convert one stored JSON call output into the Python result
-/// tuple. Shared by the sync path through [`result_to_py`] and by
-/// call handle collection, so both paths build the identical tuple.
+/// tuple. Call handle collection is the caller: the stored form
+/// is the async path's alone, and the sync path builds its tuple
+/// through [`result_to_py`] instead.
 fn json_tuple_to_py(
     py: Python<'_>,
     json: &Value,
@@ -1915,7 +1931,7 @@ fn to_value_guarded<T>(value: &T) -> Result<Value, CoreError>
 where
     T: serde::Serialize,
 {
-    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| serde_json::to_value(value))) {
+    match guarded_catch(|| serde_json::to_value(value)) {
         Ok(Ok(json)) => Ok(json),
         Ok(Err(e)) => Err(CoreError::Decode {
             detail: e.to_string(),
