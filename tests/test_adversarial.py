@@ -610,6 +610,10 @@ def test_direct_oversized_integer_in_a_typed_slot_refuses():
     repr(place)
 
 
+@pytest.mark.skipif(
+    not hasattr(sys, "get_int_max_str_digits"),
+    reason="the print limit API arrived in Python 3.10.7",
+)
 def test_print_limit_screen_holds_the_exact_boundary():
     # A50-051: the magnitude screen in _as_int must leave the
     # print-limit refusal at exactly the interpreter's boundary.
@@ -618,8 +622,11 @@ def test_print_limit_screen_holds_the_exact_boundary():
     # and a value one digit under the limit's power converts,
     # for both signs. The expected refusal text is built from
     # the interpreter's own ValueError rendered here, never a
-    # copied string.
+    # copied string. With the limit disabled there is no
+    # boundary to hold, so the pin stands down.
     limit = sys.get_int_max_str_digits()
+    if limit == 0:
+        pytest.skip("the interpreter print limit is disabled")
     at_limit = 10**limit - 1
     one_past = 10**limit
     one_under = 10 ** (limit - 1)
@@ -640,6 +647,11 @@ def test_print_limit_screen_holds_the_exact_boundary():
         assert isinstance(caught.value.__cause__, ValueError)
 
 
+@pytest.mark.skipif(
+    not hasattr(sys, "get_int_max_str_digits")
+    or not hasattr(sys, "set_int_max_str_digits"),
+    reason="the print limit API arrived in Python 3.10.7",
+)
 def test_print_limit_screen_reads_the_live_limit():
     # The screen reads the interpreter's current limit rather
     # than a hard-coded figure: lowering the limit moves the
