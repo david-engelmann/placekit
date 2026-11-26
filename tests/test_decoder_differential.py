@@ -1038,6 +1038,85 @@ def test_number_envelope_refused_by_both_routes(
     assert str(subject_exc.value) == str(oracle_exc.value)
 
 
+# -- slice 3 repair: the dual refusal selection ---------------------------
+#
+# The direct serializer visits a result's values in struct
+# order; the guarded DOM walk it replaced visits them in byte
+# sorted order. A body carrying two integers past the digit
+# limit, one in an envelope extra that sorts ahead of the
+# places and one in a place extra, refuses under either walk,
+# but the walks reach different integers first and the refusal
+# names its integer's digit count. The standing behaviour is
+# the sorted walk's selection: a refused direct conversion
+# falls back to the guarded conversion, whose refusal is the
+# one the caller sees. Both digit assignments are pinned, so
+# the selection cannot pass by digit size.
+
+_DUAL_SMALL = sys.get_int_max_str_digits() + 700
+_DUAL_LARGE = sys.get_int_max_str_digits() + 1700
+
+
+@pytest.mark.parametrize(
+    "envelope_digits,place_digits,expected_digits",
+    [
+        (_DUAL_SMALL, _DUAL_LARGE, _DUAL_SMALL),
+        (_DUAL_LARGE, _DUAL_SMALL, _DUAL_LARGE),
+    ],
+)
+def test_dual_refusal_selects_the_sorted_first(
+    subject_native,
+    raw_response,
+    envelope_digits,
+    place_digits,
+    expected_digits,
+):
+    body = (
+        '{"places": [{"id": "dec3-dual", "zzz": '
+        + "6" * place_digits
+        + '}], "aaa": '
+        + "5" * envelope_digits
+        + "}"
+    ).encode()
+    raw_response(200, body)
+    with pytest.raises(_placekit.PlacesError) as caught:
+        _run_subject(subject_native, "search")
+    assert caught.value.kind == "decode"
+    assert str(caught.value) == (
+        "failed to decode response: an integer in the response "
+        f"carries {expected_digits} digits, beyond the "
+        "interpreter limit for exact conversion"
+    )
+
+
+def test_dual_refusal_selects_the_sorted_first_at_details(
+    subject_native, raw_response
+):
+    # The same selection at the details seat, where the two
+    # integers sit in different containers of one place: an
+    # extra on the place itself, sorting ahead of every typed
+    # field, against an extra inside the typed opening hours.
+    # Struct order reaches the opening hours first; the sorted
+    # walk reaches the place extra first, and its integer is
+    # the one the refusal names.
+    body = (
+        '{"id": "dec3-dual-details", '
+        '"currentOpeningHours": {"zzz": '
+        + "6" * _DUAL_LARGE
+        + '}, "aaa": '
+        + "5" * _DUAL_SMALL
+        + "}"
+    ).encode()
+    raw_response(200, body)
+    with pytest.raises(_placekit.PlacesError) as caught:
+        _run_subject(subject_native, "details")
+    assert caught.value.kind == "decode"
+    assert str(caught.value) == (
+        "failed to decode response: an integer in the response "
+        f"carries {_DUAL_SMALL} digits, beyond the "
+        "interpreter limit for exact conversion"
+    )
+
+
 # -- slice 2: the flatten placement expectations ----------------------------
 #
 # Slice 0 compared the flatten-heavy bodies route against route,

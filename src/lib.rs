@@ -1891,6 +1891,28 @@ fn direct_to_py_guarded<T: serde::Serialize>(
     }
 }
 
+/// The guarded conversion's settled outcome for one typed value,
+/// in the direct conversion's failure shapes. A seat whose direct
+/// conversion refuses falls back to this, so the refusal the
+/// caller sees is the guarded walk's. The two walks visit values
+/// in different orders, the direct serializer in struct order and
+/// the guarded walk in the DOM's byte sorted order, and when more
+/// than one value in a result would refuse, the standing
+/// behaviour is the refusal the sorted walk reaches first: the
+/// digit limit refusal names its integer's digit count, so the
+/// two orders can name different integers. Successful direct
+/// conversions never reach here.
+fn dom_to_py_settled<T: serde::Serialize>(
+    py: Python<'_>,
+    value: &T,
+    status: Option<u16>,
+) -> Result<Py<PyAny>, DirectFailure> {
+    match to_value_guarded(value) {
+        Ok(json) => value_to_py(py, &json, status).map_err(DirectFailure::Python),
+        Err(e) => Err(DirectFailure::Core(e)),
+    }
+}
+
 /// Convert one stored JSON call output into the Python result
 /// tuple. Call handle collection is the caller: the stored form
 /// is the async path's alone, and the sync path builds its tuple
@@ -1959,7 +1981,9 @@ where
 {
     match result {
         Ok((value, body, status)) => {
-            let typed = match direct_to_py_guarded(py, &value, Some(status)) {
+            let typed = match direct_to_py_guarded(py, &value, Some(status))
+                .or_else(|_| dom_to_py_settled(py, &value, Some(status)))
+            {
                 Ok(typed) => typed,
                 Err(DirectFailure::Core(e)) => {
                     return Err(to_pyerr(py, attach_status(e, status)));
@@ -2042,7 +2066,9 @@ fn photo_to_py(
             // the raw source. The core returns the body on this form
             // by construction. An absent body is a conversion failure
             // of this layer, never an empty raw.
-            let typed = match direct_to_py_guarded(py, &media, Some(status)) {
+            let typed = match direct_to_py_guarded(py, &media, Some(status))
+                .or_else(|_| dom_to_py_settled(py, &media, Some(status)))
+            {
                 Ok(typed) => typed,
                 Err(DirectFailure::Core(e)) => {
                     return Err(match e {
