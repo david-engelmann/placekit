@@ -610,6 +610,53 @@ def test_direct_oversized_integer_in_a_typed_slot_refuses():
     repr(place)
 
 
+def test_print_limit_screen_holds_the_exact_boundary():
+    # A50-051: the magnitude screen in _as_int must leave the
+    # print-limit refusal at exactly the interpreter's boundary.
+    # At the limit the value converts, one digit past it the
+    # refusal fires with the interpreter's own message chained,
+    # and a value one digit under the limit's power converts,
+    # for both signs. The expected refusal text is built from
+    # the interpreter's own ValueError rendered here, never a
+    # copied string.
+    limit = sys.get_int_max_str_digits()
+    at_limit = 10**limit - 1
+    one_past = 10**limit
+    one_under = 10 ** (limit - 1)
+    for value in (at_limit, -at_limit, one_under, -one_under):
+        place = Place.from_api({"id": "x", "userRatingCount": value})
+        assert place.user_rating_count == value
+    for value in (one_past, -one_past):
+        try:
+            str(value)
+        except ValueError as exc:
+            expected = (
+                "Place payload key 'userRatingCount' is an integer "
+                f"too large to print: {exc}"
+            )
+        with pytest.raises(DecodeError) as caught:
+            Place.from_api({"id": "x", "userRatingCount": value})
+        assert str(caught.value) == expected
+        assert isinstance(caught.value.__cause__, ValueError)
+
+
+def test_print_limit_screen_reads_the_live_limit():
+    # The screen reads the interpreter's current limit rather
+    # than a hard-coded figure: lowering the limit moves the
+    # refusal to the lowered boundary, with 640 digits
+    # converting and 641 refusing, and restoring the limit
+    # restores the boundary.
+    standing = sys.get_int_max_str_digits()
+    try:
+        sys.set_int_max_str_digits(640)
+        place = Place.from_api({"id": "x", "userRatingCount": 10**640 - 1})
+        assert place.user_rating_count == 10**640 - 1
+        with pytest.raises(DecodeError):
+            Place.from_api({"id": "x", "userRatingCount": 10**640})
+    finally:
+        sys.set_int_max_str_digits(standing)
+
+
 def test_direct_huge_integer_in_a_float_position_refuses():
     # F13, from_api half: a huge integer in a float position raised
     # a bare OverflowError out of the float conversion on the

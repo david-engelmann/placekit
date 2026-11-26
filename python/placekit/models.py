@@ -51,6 +51,7 @@ import copy
 import functools
 import math
 import os
+import sys
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from decimal import Decimal
@@ -262,6 +263,29 @@ def _as_float(value: Any, model: str, key: str) -> float:
     return result
 
 
+def _may_refuse_to_print(value: int) -> bool:
+    """Whether rendering this integer could trip the print limit.
+
+    An integer with bit length b has at most floor(b * log10(2)) + 1
+    decimal digits, and 30103 / 100000 stands strictly above
+    log10(2), so the bound computed here never undercounts. Where
+    the bound fits the interpreter limit the render provably
+    cannot raise and the caller skips it; near the boundary the
+    render itself still decides, so the refusal fires at exactly
+    the same digit count as an unconditional render. A limit of 0
+    disables the interpreter check, and an interpreter without
+    sys.get_int_max_str_digits has no limit to trip; both read as
+    no risk, matching the behaviour there today (A50-051).
+    """
+    get_limit = getattr(sys, "get_int_max_str_digits", None)
+    if get_limit is None:
+        return False
+    limit = get_limit()
+    if limit == 0:
+        return False
+    return (value.bit_length() * 30103) // 100000 + 1 > limit
+
+
 def _as_int(value: Any, model: str, key: str) -> int:
     if isinstance(value, bool):
         raise DecodeError(
@@ -312,18 +336,22 @@ def _as_int(value: Any, model: str, key: str) -> int:
         raise DecodeError(
             f"{model} payload key {key!r} is not an integer: {_safe_repr(value)}"
         ) from exc
-    try:
-        str(result)
-    except ValueError as exc:
-        # An integer past the interpreter string conversion limit
-        # would store successfully and then raise a bare ValueError
-        # the first time the result is printed or logged (R20-F14
-        # residue). The client path refuses the same value at the
-        # bindings, so the direct layer refuses it here instead.
-        raise DecodeError(
-            f"{model} payload key {key!r} is an integer too large "
-            f"to print: {exc}"
-        ) from exc
+    if _may_refuse_to_print(result):
+        try:
+            str(result)
+        except ValueError as exc:
+            # An integer past the interpreter string conversion
+            # limit would store successfully and then raise a bare
+            # ValueError the first time the result is printed or
+            # logged (R20-F14 residue). The client path refuses the
+            # same value at the bindings, so the direct layer
+            # refuses it here instead. The screen above only
+            # decides whether this render is needed at all; the
+            # refusal itself is the render's, unchanged (A50-051).
+            raise DecodeError(
+                f"{model} payload key {key!r} is an integer too large "
+                f"to print: {exc}"
+            ) from exc
     return result
 
 
