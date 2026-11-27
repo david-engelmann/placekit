@@ -34,12 +34,18 @@ TAXONOMY = (
 STATE_VOCABULARY = {
     "recorded in session 1",
     "recorded in session 2",
+    "recorded in session 3",
     "recorded in both",
     "synthesized candidate",
     "hunted and missed in R12",
     "still open",
 }
-RECORDED_STATES = {"recorded in session 1", "recorded in session 2", "recorded in both"}
+RECORDED_STATES = {
+    "recorded in session 1",
+    "recorded in session 2",
+    "recorded in session 3",
+    "recorded in both",
+}
 
 
 def _module_sources(filename: str) -> dict[str, str]:
@@ -5388,13 +5394,14 @@ def test_accounting_state_counts_match_the_program_record():
     assert counts == {
         "recorded in session 1": 2,
         "recorded in session 2": 30,
+        "recorded in session 3": 1,
         "recorded in both": 3,
         "synthesized candidate": 4,
         "hunted and missed in R12": 12,
-        "still open": 4,
+        "still open": 3,
     }
     recorded = sum(1 for case in MANIFEST["cases"] if case["state"] in RECORDED_STATES)
-    assert recorded == 35
+    assert recorded == 36
 
 
 def test_accounting_preamble_carries_the_filename_templates():

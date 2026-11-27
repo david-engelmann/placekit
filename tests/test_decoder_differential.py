@@ -59,7 +59,8 @@ harness pins. The photo seats convert through their own function
 and are named by slice 3; this slice's input sets are the JSON
 endpoint bodies the design record names.
 
-The input sets. The 41 recorded corpus bodies, replayed through
+The input sets. The recorded corpus bodies (41 at the design
+record, 42 since the H4 promotion), replayed through
 the stub exactly as the corpus tests serve them, classified to
 the search or details seat by their top level shape. An
 adversarial number corpus: integers at the u64 and i64
@@ -292,11 +293,12 @@ def _recorded_cases():
 
 
 def test_recorded_corpus_set_is_complete():
-    # The design record names 41 recorded bodies as this set. The
-    # count is pinned so a fixture added or removed outside the
-    # corpus programme cannot silently change what the harness
-    # covers.
-    assert len(list(RECORDED.glob("*.json"))) == 41
+    # The design record names 41 recorded bodies as this set, and
+    # the H4 promotion added one more through the corpus
+    # programme. The count is pinned so a fixture added or
+    # removed outside the corpus programme cannot silently
+    # change what the harness covers.
+    assert len(list(RECORDED.glob("*.json"))) == 42
 
 
 @pytest.mark.parametrize("name,seat", _recorded_cases())

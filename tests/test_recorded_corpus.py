@@ -339,6 +339,23 @@ def test_recorded_h3_overnight_hours(client, raw_response):
     assert (period.close.day, period.close.hour, period.close.minute) == (0, 3, 0)
 
 
+def test_recorded_h4_special_days(client, raw_response):
+    place = details(
+        client,
+        raw_response,
+        "recorded_H4_special_days.json",
+        "ChIJjWm3wdJzToYR8efPhAe5lzY",
+    )
+    current = place.current_opening_hours
+    assert current is not None
+    # Recorded on Thanksgiving Day 2026-11-26, and the one
+    # special day the current hours carry is that day itself.
+    assert len(current.special_days) == 1
+    date = current.special_days[0].date
+    assert date is not None
+    assert (date.year, date.month, date.day) == (2026, 11, 26)
+
+
 def test_recorded_h6_truncated_period_points(client, raw_response):
     result = search(client, raw_response, "recorded_H6_truncated_period_points.json")
     place = result.places[0]
