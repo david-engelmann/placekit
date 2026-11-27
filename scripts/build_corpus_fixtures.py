@@ -1,7 +1,7 @@
 """Build the recorded corpus fixtures from the live smoke cassettes.
 
 The script is the only author of recorded fixture bytes. It reads the
-exchange files in the two live smoke session folders, selects the places
+exchange files in the live smoke session folders, selects the places
 each spec names, applies the named trims and the redaction rule from the
 Round 13 design record as amended by the parent ruling, and writes each
 fixture in the canonical form the legacy fixtures use, meaning sorted
@@ -35,8 +35,8 @@ Usage, from the repo root.
     python3 scripts/build_corpus_fixtures.py --cassettes DIR [--facts FILE]
     python3 scripts/build_corpus_fixtures.py --cassettes DIR --verify [--manifest FILE]
 
-The cassettes directory holds the two session folders named 2026-10-30
-and 2026-10-31-session2. Verify mode rebuilds every fixture in memory
+The cassettes directory holds the session folders named 2026-10-30,
+2026-10-31-session2, and 2026-11-23. Verify mode rebuilds every fixture in memory
 and compares the bytes and the recomputed facts against the shipped
 files and, when a manifest is given, against the manifest entries.
 """
@@ -50,7 +50,7 @@ import re
 import sys
 from pathlib import Path
 
-SESSION_FOLDERS = {"S1": "2026-10-30", "S2": "2026-10-31-session2"}
+SESSION_FOLDERS = {"S1": "2026-10-30", "S2": "2026-10-31-session2", "S3": "2026-11-23"}
 
 # Each spec names one output file, the cassette it is drawn from, and the
 # place ids the excerpt keeps. Details specs keep the whole body, so their
@@ -95,6 +95,7 @@ SPECS = [
     {"file": "recorded_V5_plus_code_global_only.json", "session": "S2", "exchange": "22_exchange.json", "ids": ["ChIJvZ69FaJU6DkRsrqrBvjcdgU"]},
     {"file": "recorded_P2_transit_station.json", "session": "S2", "exchange": "23_exchange.json", "ids": ["ChIJhRwB-yFawokRi0AhGH87UTc"]},
     {"file": "recorded_H7_secondary_hours.json", "session": "S2", "exchange": "24_exchange.json", "ids": ["ChIJjWm3wdJzToYR8efPhAe5lzY"]},
+    {"file": "recorded_H4_special_days.json", "session": "S3", "exchange": "03_exchange.json", "ids": ["ChIJjWm3wdJzToYR8efPhAe5lzY"]},
     {"file": "recorded_H11_description_order_vs_period_anchor.json", "session": "S2", "exchange": "25_exchange.json", "ids": ["ChIJV4k8_9UodTERU5KXbkYpSYs"]},
     {"file": "recorded_OBS1_requested_field_vanishes.json", "session": "S2", "exchange": "26_exchange.json", "ids": ["ChIJx7K17Ji3t4kRr3VvqMTw7cc"]},
     {"file": "recorded_OBS2_pure_service_area_depth_split.json", "session": "S2", "exchange": "20_exchange.json", "ids": ["ChIJkaUn1JPTD4gR7ZWpE9cCuow"]},

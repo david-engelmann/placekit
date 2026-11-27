@@ -743,10 +743,78 @@
     {
       "id": "H4",
       "label": "Special days",
-      "state": "still open",
-      "open_note": "The seasonal recording call was held for a holiday week and never ran, and the specialDays key appears in no body in either session, so nothing hunted this case.",
-      "fixtures": [],
-      "tests": []
+      "state": "recorded in session 3",
+      "note": "The seasonal recording call ran on Thanksgiving Day 2026-11-26 in session 3, and the current opening hours carry specialDays with one entry dated the day itself.",
+      "fixtures": [
+        {
+          "file": "recorded_H4_special_days.json",
+          "session": "S3",
+          "exchange": "03_exchange.json",
+          "endpoint": "placeDetails",
+          "request_mask": "id,name,displayName,formattedAddress,shortFormattedAddress,location,rating,userRatingCount,types,primaryType,priceLevel,businessStatus,photos,nationalPhoneNumber,internationalPhoneNumber,websiteUri,googleMapsUri,regularOpeningHours,currentOpeningHours,currentSecondaryOpeningHours,regularSecondaryOpeningHours,addressComponents,adrFormatAddress,plusCode,postalAddress,primaryTypeDisplayName,viewport,attributions,googleMapsTypeLabel,editorialSummary,iconMaskBaseUri,iconBackgroundColor,openingDate,utcOffsetMinutes,pureServiceAreaBusiness,movedPlace,movedPlaceId,reviews,takeout,delivery,dineIn,curbsidePickup,reservable,servesBreakfast,servesLunch,servesDinner,servesBeer,servesWine,servesBrunch,servesVegetarianFood,outdoorSeating,liveMusic,menuForChildren,servesCocktails,servesDessert,servesCoffee,goodForChildren,allowsDogs,restroom,goodForGroups,goodForWatchingSports,paymentOptions,parkingOptions,accessibilityOptions,timeZone,generativeSummary,reviewSummary,consumerAlert,googleMapsLinks,priceRange,evChargeOptions,addressDescriptor",
+          "selector_place_ids": [
+            "ChIJjWm3wdJzToYR8efPhAe5lzY"
+          ],
+          "source_body_sha256": "ad474c2cd5f6c858667248ae89581a33371c2472a405fbe936a8a25573b7d861",
+          "fixture_sha256": "78d9d5150c5ba46e424c871e9712065fd79ef7e5d60ef30ba8c2d4af02c495d7",
+          "size_bytes": 21369,
+          "size_exception": null,
+          "trims": [
+            {
+              "path": "photos",
+              "kind": "array_cut_to_first",
+              "original_length": 10
+            }
+          ],
+          "redactions": {
+            "paths": [
+              "reviews[0].text.text",
+              "reviews[0].originalText.text",
+              "reviews[0].authorAttribution.displayName",
+              "reviews[0].authorAttribution.uri",
+              "reviews[0].authorAttribution.photoUri",
+              "reviews[1].text.text",
+              "reviews[1].originalText.text",
+              "reviews[1].authorAttribution.displayName",
+              "reviews[1].authorAttribution.uri",
+              "reviews[1].authorAttribution.photoUri",
+              "reviews[2].text.text",
+              "reviews[2].originalText.text",
+              "reviews[2].authorAttribution.displayName",
+              "reviews[2].authorAttribution.uri",
+              "reviews[2].authorAttribution.photoUri",
+              "reviews[3].text.text",
+              "reviews[3].originalText.text",
+              "reviews[3].authorAttribution.displayName",
+              "reviews[3].authorAttribution.uri",
+              "reviews[3].authorAttribution.photoUri",
+              "reviews[4].text.text",
+              "reviews[4].originalText.text",
+              "reviews[4].authorAttribution.displayName",
+              "reviews[4].authorAttribution.uri",
+              "reviews[4].authorAttribution.photoUri",
+              "photos[0].authorAttributions[0].displayName",
+              "photos[0].authorAttributions[0].uri",
+              "photos[0].authorAttributions[0].photoUri"
+            ],
+            "review_text_lengths": {
+              "reviews[0].text.text": 587,
+              "reviews[0].originalText.text": 587,
+              "reviews[1].text.text": 266,
+              "reviews[1].originalText.text": 266,
+              "reviews[2].text.text": 193,
+              "reviews[2].originalText.text": 193,
+              "reviews[3].text.text": 155,
+              "reviews[3].originalText.text": 155,
+              "reviews[4].text.text": 178,
+              "reviews[4].originalText.text": 178
+            }
+          }
+        }
+      ],
+      "tests": [
+        "test_recorded_h4_special_days"
+      ]
     },
     {
       "id": "H5",
