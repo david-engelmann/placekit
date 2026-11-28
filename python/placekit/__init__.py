@@ -78,7 +78,7 @@ try:
 
     __version__ = _metadata_version("placekit")
 except PackageNotFoundError:  # pragma: no cover, only hit in uninstalled source trees
-    __version__ = "0.1.1"
+    __version__ = "0.2.0"
 
 __all__ = [
     "AsyncClient",

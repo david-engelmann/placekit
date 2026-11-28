@@ -4,6 +4,8 @@ All notable changes to placekit are recorded here. The format follows Keep a Cha
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-11-28
+
 ### Added
 
 - Four additions to the Rust core surface. `WireString` and `WireList` gain `is_null` and `is_absent` accessors with the names and semantics `WireFloat` already carried. `NearbySearchRequest` gains a `new` constructor carrying only its location restriction. The core `Error` gains `retry_after_duration`, the stored `Retry-After` value as a `Duration`. The builder's ten second default timeout is now the named public constant `DEFAULT_TIMEOUT` beside `DEFAULT_BASE_URL` and `DEFAULT_MAX_RESPONSE_BYTES`.

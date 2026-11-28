@@ -8,7 +8,7 @@ Modern Google Places API (New) client for Python, powered by a Rust core.
 
 placekit targets the current Places API (New) end to end, with typed request building, field masks as a first-class feature, dataclass response models, and an exception hierarchy that tells you what actually went wrong. Google ships an official client for this API too, the generated google-maps-places package, and it is the right choice when you want the surface exactly as Google generates it. placekit is the hand shaped alternative over the same API, covering the five endpoints in the reference with typed models whose raw attribute is the response body itself, with the one exception of PhotoMedia, the downloaded photo form, which carries no raw.
 
-The current release is 0.1.1, dated 2026-11-15. It changes no library behavior, and the install below is the whole evaluation path.
+The current release is 0.2.0, dated 2026-11-28. It carries the audit programme's accumulated changes, including breaking ones, each recorded in the changelog, and the install below is the whole evaluation path.
 
 [Documentation](docs/README.md) · [Examples](examples/README.md) · [Changelog](CHANGELOG.md) · [Migrating from python-google-places](docs/MIGRATING.md)
 
